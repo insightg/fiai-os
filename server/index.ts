@@ -1,0 +1,47 @@
+import express from 'express'
+import cors from 'cors'
+import cookieParser from 'cookie-parser'
+import authRouter from './auth.js'
+import queryRouter from './query.js'
+import uploadRouter from './upload.js'
+import uploadsStaticRouter from './uploads-static.js'
+import documentiRouter from './documenti.js'
+
+const app = express()
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001
+
+// CORS configured for Vite dev server
+app.use(cors({
+  origin: ['http://localhost:5173', 'http://127.0.0.1:5173'],
+  credentials: true,
+}))
+
+// Body parser
+app.use(express.json({ limit: '10mb' }))
+
+// Cookie parser
+app.use(cookieParser())
+
+// Routes
+app.use('/api/auth', authRouter)
+app.use('/api/query', queryRouter)
+app.use('/api/upload', uploadRouter)
+app.use('/api/uploads', uploadsStaticRouter)
+app.use('/api/documenti', documentiRouter)
+
+// Health check
+app.get('/api/health', (_req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() })
+})
+
+// Error handling middleware
+app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error('Unhandled error:', err)
+  res.status(500).json({ error: { message: 'Errore interno del server', code: 'INTERNAL_ERROR' } })
+})
+
+app.listen(PORT, () => {
+  console.log(`FIAI OS server running on http://localhost:${PORT}`)
+})
+
+export default app

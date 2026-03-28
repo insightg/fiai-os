@@ -1,0 +1,30 @@
+# Stage 1: Build the React application
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm ci --only=production=false
+
+COPY . .
+
+# API URL empty = use relative URLs (proxied by nginx)
+ENV VITE_API_URL="/api"
+ARG VITE_OPENROUTER_API_KEY=""
+ENV VITE_OPENROUTER_API_KEY=${VITE_OPENROUTER_API_KEY}
+
+# Build without tsc (skip type checking for faster builds)
+RUN npx vite build
+
+# Stage 2: Serve with nginx
+FROM nginx:alpine
+
+COPY nginx.conf /etc/nginx/nginx.conf
+COPY --from=builder /app/dist /usr/share/nginx/html
+
+EXPOSE 3000
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD wget --no-verbose --tries=1 --spider http://localhost:3000/ || exit 1
+
+CMD ["nginx", "-g", "daemon off;"]
