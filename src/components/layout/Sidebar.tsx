@@ -1,4 +1,4 @@
-import { NavLink } from 'react-router-dom'
+import { NavLink, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard,
   Users,
@@ -13,13 +13,13 @@ import {
   Landmark,
   Wallet,
   BarChart3,
-  Bot,
   Settings,
   LogOut,
   Calculator,
   Megaphone,
   UserSearch,
   FolderOpen,
+  MessageSquare,
 } from 'lucide-react'
 import { useUiStore, useAuthStore } from '../../store'
 import clsx from 'clsx'
@@ -29,27 +29,30 @@ type SectionItem = { section: string }
 type NavItem = LinkItem | SectionItem
 
 const navItems: NavItem[] = [
-  { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { to: '/leads', label: 'Leads', icon: Users },
-  { to: '/clienti', label: 'Clienti', icon: UserCheck },
-  { to: '/preventivi', label: 'Preventivi', icon: FileText },
-  { to: '/ordini', label: 'Ordini', icon: ShoppingCart },
-  { to: '/progetti', label: 'Progetti', icon: FolderKanban },
-  { to: '/fatture', label: 'Fatture', icon: Receipt },
-  { to: '/fatture/ricorrenti', label: 'Ricorrenti', icon: RotateCcw },
-  { to: '/fatture-passive', label: 'Fatture Passive', icon: FileInput },
-  { to: '/fornitori', label: 'Fornitori', icon: Truck },
-  { to: '/conti', label: 'Conti', icon: Landmark },
-  { to: '/rimborsi', label: 'Rimborsi', icon: Wallet },
+  { section: 'Personale' },
+  { to: '/app/personale', label: 'Board & Calendario', icon: FolderKanban },
+  { section: 'Gestionale' },
+  { to: '/app/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { to: '/app/leads', label: 'Leads', icon: Users },
+  { to: '/app/clienti', label: 'Clienti', icon: UserCheck },
+  { to: '/app/preventivi', label: 'Preventivi', icon: FileText },
+  { to: '/app/ordini', label: 'Ordini', icon: ShoppingCart },
+  { to: '/app/progetti', label: 'Progetti', icon: FolderKanban },
+  { to: '/app/fatture', label: 'Fatture', icon: Receipt },
+  { to: '/app/fatture/ricorrenti', label: 'Ricorrenti', icon: RotateCcw },
+  { to: '/app/fatture-passive', label: 'Fatture Passive', icon: FileInput },
+  { to: '/app/fornitori', label: 'Fornitori', icon: Truck },
+  { to: '/app/conti', label: 'Conti', icon: Landmark },
+  { to: '/app/rimborsi', label: 'Rimborsi', icon: Wallet },
   { section: 'HR' },
-  { to: '/hr/simulatore-costo', label: 'Simulatore Costo', icon: Calculator },
-  { to: '/hr/annunci', label: 'Annunci Lavoro', icon: Megaphone },
-  { to: '/hr/candidati', label: 'Candidati', icon: UserSearch },
+  { to: '/app/hr/simulatore-costo', label: 'Simulatore Costo', icon: Calculator },
+  { to: '/app/hr/annunci', label: 'Annunci Lavoro', icon: Megaphone },
+  { to: '/app/hr/candidati', label: 'Candidati', icon: UserSearch },
   { section: 'Documenti' },
-  { to: '/documenti', label: 'Documenti', icon: FolderOpen },
+  { to: '/app/documenti', label: 'Documenti', icon: FolderOpen },
   { section: 'Sistema' },
-  { to: '/report', label: 'Report', icon: BarChart3 },
-  { to: '/impostazioni', label: 'Impostazioni', icon: Settings },
+  { to: '/app/report', label: 'Report', icon: BarChart3 },
+  { to: '/app/impostazioni', label: 'Impostazioni', icon: Settings },
 ]
 
 function isSection(item: NavItem): item is SectionItem {
@@ -59,6 +62,7 @@ function isSection(item: NavItem): item is SectionItem {
 export default function Sidebar() {
   const sidebarOpen = useUiStore((s) => s.sidebarOpen)
   const logout = useAuthStore((s) => s.logout)
+  const navigate = useNavigate()
 
   return (
     <aside
@@ -71,6 +75,20 @@ export default function Sidebar() {
         <span className="font-display text-gold text-xl font-bold tracking-wide">
           {sidebarOpen ? 'FIAI' : 'F'}
         </span>
+      </div>
+
+      {/* Torna alla Chat */}
+      <div className="px-2 pt-3 pb-1">
+        <button
+          onClick={() => navigate('/')}
+          className={clsx(
+            'flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors w-full',
+            'text-gold bg-gold/10 hover:bg-gold/20 font-medium'
+          )}
+        >
+          <MessageSquare size={18} className="shrink-0" />
+          {sidebarOpen && <span>Torna alla Chat</span>}
+        </button>
       </div>
 
       <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-0.5">

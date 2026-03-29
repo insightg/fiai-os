@@ -17,7 +17,7 @@ export default function Login() {
     await login(account, password)
     const session = useAuthStore.getState().session
     if (session) {
-      navigate('/dashboard')
+      navigate('/')
     }
   }
 

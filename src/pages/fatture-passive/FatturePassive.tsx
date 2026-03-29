@@ -147,6 +147,7 @@ export default function FatturePassive() {
       totale: form.totale,
       pagata_il: form.pagata_il || null,
       note: form.note || null,
+      file_url: null,
     }
     if (editingId) {
       await update(editingId, payload)

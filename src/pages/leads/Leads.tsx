@@ -184,7 +184,7 @@ export default function Leads() {
       // Update lead stato to "convertito"
       await useLeadsStore.getState().update(lead.id, { stato: 'convertito' })
       toast.success('Lead convertito in preventivo')
-      navigate('/preventivi')
+      navigate('/app/preventivi')
     } else {
       toast.error('Errore nella conversione del lead')
     }

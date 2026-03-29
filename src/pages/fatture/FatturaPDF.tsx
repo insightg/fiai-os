@@ -96,7 +96,7 @@ export default function FatturaPDF() {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
           <button
-            onClick={() => navigate('/fatture')}
+            onClick={() => navigate('/app/fatture')}
             className="p-2 rounded-lg text-text3 hover:text-text hover:bg-bg3 transition-colors"
           >
             <ArrowLeft size={20} />

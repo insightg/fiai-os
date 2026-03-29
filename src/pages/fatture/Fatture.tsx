@@ -259,7 +259,7 @@ export default function Fatture() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-display font-bold text-text">Fatture</h1>
-        <Button variant="primary" onClick={() => navigate('/fatture/nuova')}>
+        <Button variant="primary" onClick={() => navigate('/app/fatture/nuova')}>
           <Plus size={16} />
           Nuova Fattura
         </Button>

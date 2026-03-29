@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express'
 import jwt from 'jsonwebtoken'
-import pool from './db.js'
+import db from './db.js'
 
 const JWT_SECRET = process.env.JWT_SECRET || 'fiai-dev-secret'
 
@@ -27,12 +27,9 @@ export function authMiddleware(required = true) {
       req.userId = decoded.userId
 
       // Fetch azienda_id from user_profiles
-      const profileResult = await pool.query(
-        'SELECT azienda_id FROM user_profiles WHERE id = $1',
-        [decoded.userId]
-      )
-      if (profileResult.rows.length > 0) {
-        req.aziendaId = profileResult.rows[0].azienda_id
+      const profile = db.prepare('SELECT azienda_id FROM user_profiles WHERE id = ?').get(decoded.userId) as { azienda_id: string } | undefined
+      if (profile) {
+        req.aziendaId = profile.azienda_id
       }
 
       next()

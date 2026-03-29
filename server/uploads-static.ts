@@ -4,7 +4,7 @@ import fs from 'fs'
 import { AuthRequest, authMiddleware } from './middleware.js'
 
 const router = Router()
-const UPLOADS_DIR = process.env.UPLOADS_DIR || '/app/uploads'
+const UPLOADS_DIR = process.env.UPLOADS_DIR || '/app/data/uploads'
 
 const MIME_TYPES: Record<string, string> = {
   '.pdf': 'application/pdf',

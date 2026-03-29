@@ -1,7 +1,6 @@
 import { Outlet } from 'react-router-dom'
 import Sidebar from './Sidebar'
 import Topbar from './Topbar'
-import ChatWidget from '../ChatWidget'
 import { useUiStore } from '../../store'
 import clsx from 'clsx'
 
@@ -22,7 +21,6 @@ export default function Layout() {
           <Outlet />
         </main>
       </div>
-      <ChatWidget />
     </div>
   )
 }

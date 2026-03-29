@@ -1,4 +1,4 @@
-import { Download, FileText, Image, X } from 'lucide-react'
+import { Download, FileText } from 'lucide-react'
 import Modal from '../../components/ui/Modal'
 import Badge from '../../components/ui/Badge'
 import Button from '../../components/ui/Button'

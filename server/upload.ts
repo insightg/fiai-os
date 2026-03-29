@@ -8,7 +8,7 @@ import { analyzeInvoice, analyzeDocument } from './ai.js'
 
 const router = Router()
 
-const UPLOADS_DIR = process.env.UPLOADS_DIR || '/app/uploads'
+const UPLOADS_DIR = process.env.UPLOADS_DIR || '/app/data/uploads'
 
 // Multer storage config
 const storage = multer.diskStorage({
@@ -54,10 +54,11 @@ router.post('/', authMiddleware(true), upload.single('file'), async (req: AuthRe
     }
 
     const aziendaId = req.aziendaId || 'unknown'
-    const destDir = path.join(UPLOADS_DIR, aziendaId, 'general')
+    const userId = req.userId || 'unknown'
+    const destDir = path.join(UPLOADS_DIR, aziendaId, userId, 'general')
     moveFile(req.file.path, destDir, req.file.filename)
 
-    const fileUrl = `/api/uploads/${aziendaId}/general/${req.file.filename}`
+    const fileUrl = `/api/uploads/${aziendaId}/${userId}/general/${req.file.filename}`
     res.json({
       url: fileUrl,
       originalName: req.file.originalname,
@@ -80,9 +81,10 @@ router.post('/fattura-passiva', authMiddleware(true), upload.single('file'), asy
     }
 
     const aziendaId = req.aziendaId || 'unknown'
-    const destDir = path.join(UPLOADS_DIR, aziendaId, 'fatture-passive')
+    const userId = req.userId || 'unknown'
+    const destDir = path.join(UPLOADS_DIR, aziendaId, userId, 'fatture-passive')
     moveFile(req.file.path, destDir, req.file.filename)
-    const fileUrl = `/api/uploads/${aziendaId}/fatture-passive/${req.file.filename}`
+    const fileUrl = `/api/uploads/${aziendaId}/${userId}/fatture-passive/${req.file.filename}`
 
     // Extract content for AI analysis
     const ext = path.extname(req.file.originalname).toLowerCase()
@@ -122,9 +124,10 @@ router.post('/documento', authMiddleware(true), upload.single('file'), async (re
     }
 
     const aziendaId = req.aziendaId || 'unknown'
-    const destDir = path.join(UPLOADS_DIR, aziendaId, 'documenti')
+    const userId = req.userId || 'unknown'
+    const destDir = path.join(UPLOADS_DIR, aziendaId, userId, 'documenti')
     moveFile(req.file.path, destDir, req.file.filename)
-    const fileUrl = `/api/uploads/${aziendaId}/documenti/${req.file.filename}`
+    const fileUrl = `/api/uploads/${aziendaId}/${userId}/documenti/${req.file.filename}`
 
     // Extract text for AI analysis
     const ext = path.extname(req.file.originalname).toLowerCase()

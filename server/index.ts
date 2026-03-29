@@ -1,11 +1,26 @@
 import express from 'express'
 import cors from 'cors'
 import cookieParser from 'cookie-parser'
+import fs from 'fs'
+import path from 'path'
+import db from './db.js'
 import authRouter from './auth.js'
 import queryRouter from './query.js'
 import uploadRouter from './upload.js'
 import uploadsStaticRouter from './uploads-static.js'
 import documentiRouter from './documenti.js'
+import contextRouter from './context.js'
+import filesRouter from './files.js'
+import ttsRouter from './tts.js'
+import signalsRouter from './signals.js'
+
+// Run migrations on startup
+const migrationPath = path.join(import.meta.dirname || '.', 'migrations', 'init-sqlite.sql')
+if (fs.existsSync(migrationPath)) {
+  const sql = fs.readFileSync(migrationPath, 'utf-8')
+  db.exec(sql)
+  console.log('SQLite migrations applied.')
+}
 
 const app = express()
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001
@@ -28,6 +43,10 @@ app.use('/api/query', queryRouter)
 app.use('/api/upload', uploadRouter)
 app.use('/api/uploads', uploadsStaticRouter)
 app.use('/api/documenti', documentiRouter)
+app.use('/api/context', contextRouter)
+app.use('/api/files', filesRouter)
+app.use('/api/tts', ttsRouter)
+app.use('/api/signals', signalsRouter)
 
 // Health check
 app.get('/api/health', (_req, res) => {

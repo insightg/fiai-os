@@ -15,6 +15,7 @@ import {
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import Badge from './ui/Badge'
+import { renderToolResult, toolNameMapExtended } from './ChatToolRenderers'
 import {
   sendMessage,
   createChatSession,
@@ -51,15 +52,8 @@ const quickCommands = [
   { label: 'Crea lead', message: 'Crea un nuovo lead per ', icon: UserPlus },
 ]
 
-// ── Tool Name Map ───────────────────────────────────────
-const toolNameMap: Record<string, string> = {
-  get_financial_summary: 'Riepilogo finanziario',
-  get_overdue_invoices: 'Fatture scadute',
-  get_pipeline: 'Pipeline commerciale',
-  get_projects: 'Progetti',
-  create_lead: 'Creazione lead',
-  approve_expense: 'Approvazione rimborso',
-}
+// Use extended tool name map from renderers
+const toolNameMap = toolNameMapExtended
 
 // ── Markdown-like Renderer ──────────────────────────────
 function formatInline(text: string): (string | JSX.Element)[] {
@@ -186,19 +180,6 @@ function MessageBubble({ message }: { message: DisplayMessage }) {
             : 'bg-bg2 border-l-2 border-gold/30 border border-border rounded-tl-sm'
         }`}
       >
-        {!isUser && message.toolCalls && message.toolCalls.length > 0 && (
-          <div className="flex gap-1 flex-wrap mb-1.5">
-            {message.toolCalls.map((tc, idx) => (
-              <Badge key={idx} color="amber">
-                <span className="flex items-center gap-1 text-[10px]">
-                  <Wrench className="w-2.5 h-2.5" />
-                  {toolNameMap[(tc as { tool: string }).tool] ?? (tc as { tool: string }).tool}
-                </span>
-              </Badge>
-            ))}
-          </div>
-        )}
-
         <div className={`text-xs ${isUser ? 'text-text' : 'text-text2'}`}>
           {isUser ? (
             <p className="whitespace-pre-wrap">{message.content}</p>
@@ -206,6 +187,26 @@ function MessageBubble({ message }: { message: DisplayMessage }) {
             <div className="space-y-0.5">{renderMarkdown(message.content)}</div>
           )}
         </div>
+
+        {/* Rich tool result renderers */}
+        {!isUser && message.toolCalls && message.toolCalls.length > 0 && (
+          <div className="mt-1.5 space-y-1.5">
+            {message.toolCalls.map((tc, idx) => {
+              const toolName = (tc as { tool: string }).tool
+              const toolResult = (tc as { result?: unknown }).result
+              const rendered = toolResult ? renderToolResult(toolName, toolResult) : null
+              if (rendered) return <div key={idx}>{rendered}</div>
+              return (
+                <Badge key={idx} color="amber">
+                  <span className="flex items-center gap-1 text-[10px]">
+                    <Wrench className="w-2.5 h-2.5" />
+                    {toolNameMap[toolName] ?? toolName}
+                  </span>
+                </Badge>
+              )
+            })}
+          </div>
+        )}
 
         <p className={`text-[9px] mt-1 ${isUser ? 'text-text3 text-right' : 'text-text3'}`}>
           {new Date(message.timestamp).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })}

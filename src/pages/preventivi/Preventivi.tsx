@@ -124,7 +124,7 @@ export default function Preventivi() {
     if (ordine) {
       await updatePreventivo(preventivo.id, { stato: 'accettato' })
       toast.success('Preventivo convertito in ordine')
-      navigate('/ordini')
+      navigate('/app/ordini')
     } else {
       toast.error('Errore nella conversione in ordine')
     }

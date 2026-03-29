@@ -239,7 +239,7 @@ export default function ProgettoDetail() {
           setProgetto(data)
         } else {
           toast.error('Progetto non trovato')
-          navigate('/progetti')
+          navigate('/app/progetti')
         }
       })
     }
@@ -281,7 +281,7 @@ export default function ProgettoDetail() {
   const handleDelete = async () => {
     await removeProgetto(progetto.id)
     toast.success('Progetto eliminato')
-    navigate('/progetti')
+    navigate('/app/progetti')
   }
 
   const handleSALUpdate = async (e: FormEvent) => {
@@ -329,7 +329,7 @@ export default function ProgettoDetail() {
       {/* Back + Actions */}
       <div className="flex items-center justify-between">
         <button
-          onClick={() => navigate('/progetti')}
+          onClick={() => navigate('/app/progetti')}
           className="flex items-center gap-2 text-text3 hover:text-text transition-colors"
         >
           <ArrowLeft size={18} />
@@ -570,7 +570,7 @@ export default function ProgettoDetail() {
                 </div>
               )}
               <Link
-                to="/fatture"
+                to="/app/fatture"
                 className="flex items-center gap-3 bg-bg3 rounded-lg p-3 hover:bg-bg4 transition-colors group"
               >
                 <div className="w-8 h-8 rounded-lg bg-green/10 flex items-center justify-center">

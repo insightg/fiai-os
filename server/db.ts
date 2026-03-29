@@ -1,8 +1,14 @@
-import pg from 'pg'
-const { Pool } = pg
+import Database from 'better-sqlite3'
+import path from 'path'
+import fs from 'fs'
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/fiai_os'
-})
+const DB_PATH = process.env.DB_PATH || '/app/data/fiai.db'
 
-export default pool
+// Ensure directory exists
+fs.mkdirSync(path.dirname(DB_PATH), { recursive: true })
+
+const db = new Database(DB_PATH)
+db.pragma('journal_mode = WAL')
+db.pragma('foreign_keys = ON')
+
+export default db

@@ -1,7 +1,8 @@
 import { Router, Request, Response } from 'express'
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
-import pool from './db.js'
+import crypto from 'crypto'
+import db from './db.js'
 
 const router = Router()
 const JWT_SECRET = process.env.JWT_SECRET || 'fiai-dev-secret'
@@ -20,13 +21,12 @@ router.post('/login', async (req: Request, res: Response) => {
       return
     }
 
-    const result = await pool.query('SELECT id, email, password_hash FROM users WHERE email = $1', [email])
-    if (result.rows.length === 0) {
+    const user = db.prepare('SELECT id, email, password_hash FROM users WHERE email = ?').get(email) as { id: string; email: string; password_hash: string } | undefined
+    if (!user) {
       res.status(400).json({ user: null, session: null, error: { message: 'Credenziali non valide' } })
       return
     }
 
-    const user = result.rows[0]
     const passwordMatch = await bcrypt.compare(password, user.password_hash)
     if (!passwordMatch) {
       res.status(400).json({ user: null, session: null, error: { message: 'Credenziali non valide' } })
@@ -57,56 +57,46 @@ router.post('/signup', async (req: Request, res: Response) => {
     }
 
     // Check if user already exists
-    const existing = await pool.query('SELECT id FROM users WHERE email = $1', [email])
-    if (existing.rows.length > 0) {
+    const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(email)
+    if (existing) {
       res.status(400).json({ user: null, session: null, error: { message: 'Utente già esistente' } })
       return
     }
 
     const passwordHash = await bcrypt.hash(password, 10)
 
-    const client = await pool.connect()
-    try {
-      await client.query('BEGIN')
+    const signupTx = db.transaction(() => {
+      const userId = crypto.randomUUID()
 
-      const userResult = await client.query(
-        'INSERT INTO users (email, password_hash) VALUES ($1, $2) RETURNING id, email',
-        [email, passwordHash]
-      )
-      const user = userResult.rows[0]
+      db.prepare('INSERT INTO users (id, email, password_hash) VALUES (?, ?, ?)').run(userId, email, passwordHash)
 
       // Use the provided azienda_id, or find the first one
       let profileAziendaId = azienda_id
       if (!profileAziendaId) {
-        const aziendaResult = await client.query('SELECT id FROM aziende LIMIT 1')
-        if (aziendaResult.rows.length > 0) {
-          profileAziendaId = aziendaResult.rows[0].id
+        const azienda = db.prepare('SELECT id FROM aziende LIMIT 1').get() as { id: string } | undefined
+        if (azienda) {
+          profileAziendaId = azienda.id
         }
       }
 
       if (profileAziendaId) {
-        await client.query(
+        db.prepare(
           `INSERT INTO user_profiles (id, azienda_id, email, nome, cognome, ruolo)
-           VALUES ($1, $2, $3, $4, $5, $6)`,
-          [user.id, profileAziendaId, email, nome || '', cognome || '', ruolo || 'collaboratore']
-        )
+           VALUES (?, ?, ?, ?, ?, ?)`
+        ).run(userId, profileAziendaId, email, nome || '', cognome || '', ruolo || 'collaboratore')
       }
 
-      await client.query('COMMIT')
+      return { id: userId, email }
+    })
 
-      const token = generateToken(user.id, user.email)
+    const user = signupTx()
+    const token = generateToken(user.id, user.email)
 
-      res.json({
-        user: { id: user.id, email: user.email },
-        session: { access_token: token },
-        error: null,
-      })
-    } catch (err) {
-      await client.query('ROLLBACK')
-      throw err
-    } finally {
-      client.release()
-    }
+    res.json({
+      user: { id: user.id, email: user.email },
+      session: { access_token: token },
+      error: null,
+    })
   } catch (err) {
     console.error('Signup error:', err)
     res.status(500).json({ user: null, session: null, error: { message: 'Errore interno del server' } })

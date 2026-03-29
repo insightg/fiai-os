@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { useAuthStore } from './store'
 import Layout from './components/layout/Layout'
+import ChatLayout from './components/layout/ChatLayout'
 import Login from './pages/auth/Login'
 import Impostazioni from './pages/impostazioni/Impostazioni'
 import Progetti from './pages/progetti/Progetti'
@@ -24,6 +25,7 @@ import CostoSimulatore from './pages/hr/CostoSimulatore'
 import AnnunciLavoro from './pages/hr/AnnunciLavoro'
 import Candidati from './pages/hr/Candidati'
 import Documenti from './pages/documenti/Documenti'
+import Personale from './pages/personale/Personale'
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
   const session = useAuthStore((s) => s.session)
@@ -58,7 +60,7 @@ function GuestGuard({ children }: { children: React.ReactNode }) {
   }
 
   if (session) {
-    return <Navigate to="/dashboard" replace />
+    return <Navigate to="/" replace />
   }
 
   return <>{children}</>
@@ -82,15 +84,26 @@ export default function App() {
         }
       />
 
+      {/* Chat Layout — default home */}
       <Route
         path="/"
+        element={
+          <AuthGuard>
+            <ChatLayout />
+          </AuthGuard>
+        }
+      />
+
+      {/* App Layout — gestionale pages */}
+      <Route
+        path="/app"
         element={
           <AuthGuard>
             <Layout />
           </AuthGuard>
         }
       >
-        <Route index element={<Navigate to="/dashboard" replace />} />
+        <Route index element={<Navigate to="/app/dashboard" replace />} />
         <Route path="dashboard" element={<Dashboard />} />
         <Route path="leads" element={<Leads />} />
         <Route path="clienti" element={<Clienti />} />
@@ -111,6 +124,7 @@ export default function App() {
         <Route path="hr/annunci" element={<AnnunciLavoro />} />
         <Route path="hr/candidati" element={<Candidati />} />
         <Route path="documenti" element={<Documenti />} />
+        <Route path="personale" element={<Personale />} />
         <Route path="report" element={<Report />} />
         <Route path="impostazioni" element={<Impostazioni />} />
       </Route>

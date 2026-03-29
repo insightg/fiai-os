@@ -392,6 +392,58 @@ export interface InvoiceRecognitionResult {
   fornitore_piva: string | null
 }
 
+// ── Personal Workspace ──────────────────────────────────
+export interface NoteBoard {
+  id: string
+  user_id: string
+  nome: string
+  created_at: string
+  updated_at: string
+  columns?: NoteColumn[]
+}
+
+export interface NoteColumn {
+  id: string
+  board_id: string
+  nome: string
+  ordine: number
+  colore: string | null
+  created_at: string
+  cards?: NoteCard[]
+}
+
+export type CardPriorita = 'bassa' | 'media' | 'alta' | 'urgente'
+
+export interface NoteCard {
+  id: string
+  column_id: string
+  titolo: string
+  contenuto: string | null
+  colore: string | null
+  priorita: CardPriorita
+  scadenza: string | null
+  completata: boolean
+  ordine: number
+  created_at: string
+  updated_at: string
+}
+
+export type EventoTipo = 'evento' | 'riunione' | 'scadenza' | 'promemoria'
+
+export interface Evento {
+  id: string
+  user_id: string
+  titolo: string
+  descrizione: string | null
+  data_inizio: string
+  data_fine: string | null
+  tutto_il_giorno: boolean
+  colore: string | null
+  tipo: EventoTipo
+  created_at: string
+  updated_at: string
+}
+
 // ── AI Chat ──────────────────────────────────────────────
 export interface ChatSession {
   id: string

@@ -1,5 +1,6 @@
 import { Router, Response } from 'express'
-import pool from './db.js'
+import crypto from 'crypto'
+import db from './db.js'
 import { AuthRequest, authMiddleware } from './middleware.js'
 
 const router = Router()
@@ -38,12 +39,11 @@ const ALLOWED_TABLES = new Set([
   'ordini', 'progetti', 'fatture', 'fattura_righe', 'ricorrenti', 'fornitori',
   'fatture_passive', 'conti', 'movimenti', 'rimborsi', 'chat_sessions', 'chat_messages',
   'users', 'candidati', 'annunci_lavoro', 'documenti',
+  'note_boards', 'note_columns', 'note_cards', 'eventi',
+  'prompt_history',
 ])
 
 // ── Known FK mappings for joins ─────────────────────────────
-// Maps: { "fromTable:alias" => { foreignTable, fkColumn, fkTarget, type } }
-// type: 'many-to-one' = the FK is on fromTable pointing to foreignTable
-// type: 'one-to-many' = the FK is on foreignTable pointing to fromTable
 
 interface FKMapping {
   foreignTable: string
@@ -53,7 +53,6 @@ interface FKMapping {
 }
 
 function resolveForeignKey(mainTable: string, alias: string, foreignTable: string): FKMapping {
-  // One-to-many patterns: righe on child table pointing back to parent
   const oneToManyPatterns: Record<string, Record<string, { fkColumn: string }>> = {
     fatture: {
       righe: { fkColumn: 'fattura_id' },
@@ -73,7 +72,6 @@ function resolveForeignKey(mainTable: string, alias: string, foreignTable: strin
     }
   }
 
-  // Many-to-one: the main table has a FK column like `{alias}_id` pointing to foreignTable.id
   return {
     foreignTable,
     fkColumn: `${alias}_id`,
@@ -92,12 +90,10 @@ function parseSelect(selectStr: string): { columns: string[]; relations: ParsedR
   const columns: string[] = []
   const relations: ParsedRelation[] = []
 
-  // We need to split on commas that are NOT inside parentheses
   const parts = splitTopLevel(selectStr)
 
   for (const part of parts) {
     const trimmed = part.trim()
-    // Check if it's a relation pattern: alias:foreign_table(columns)
     const relationMatch = trimmed.match(/^(\w+):(\w+)\(([^)]*)\)$/)
     if (relationMatch) {
       relations.push({
@@ -143,7 +139,6 @@ function splitTopLevel(str: string): string[] {
 
 function buildWhereClause(
   filters: QueryFilter[],
-  paramOffset: number,
   tableAlias?: string
 ): { clause: string; values: unknown[] } {
   if (!filters || filters.length === 0) {
@@ -152,7 +147,6 @@ function buildWhereClause(
 
   const conditions: string[] = []
   const values: unknown[] = []
-  let paramIndex = paramOffset
 
   for (const filter of filters) {
     const col = tableAlias ? `${tableAlias}."${filter.column}"` : `"${filter.column}"`
@@ -162,8 +156,7 @@ function buildWhereClause(
         if (filter.value === null) {
           conditions.push(`${col} IS NULL`)
         } else {
-          paramIndex++
-          conditions.push(`${col} = $${paramIndex}`)
+          conditions.push(`${col} = ?`)
           values.push(filter.value)
         }
         break
@@ -173,46 +166,38 @@ function buildWhereClause(
         if (filter.value === null) {
           conditions.push(`${col} IS NOT NULL`)
         } else {
-          paramIndex++
-          conditions.push(`${col} != $${paramIndex}`)
+          conditions.push(`${col} != ?`)
           values.push(filter.value)
         }
         break
 
       case 'gt':
-        paramIndex++
-        conditions.push(`${col} > $${paramIndex}`)
+        conditions.push(`${col} > ?`)
         values.push(filter.value)
         break
 
       case 'gte':
-        paramIndex++
-        conditions.push(`${col} >= $${paramIndex}`)
+        conditions.push(`${col} >= ?`)
         values.push(filter.value)
         break
 
       case 'lt':
-        paramIndex++
-        conditions.push(`${col} < $${paramIndex}`)
+        conditions.push(`${col} < ?`)
         values.push(filter.value)
         break
 
       case 'lte':
-        paramIndex++
-        conditions.push(`${col} <= $${paramIndex}`)
+        conditions.push(`${col} <= ?`)
         values.push(filter.value)
         break
 
       case 'in': {
         const arr = Array.isArray(filter.value) ? filter.value : parseInValue(filter.value)
         if (arr.length === 0) {
-          conditions.push('FALSE')
+          conditions.push('0') // FALSE equivalent
         } else {
-          const placeholders = arr.map(() => {
-            paramIndex++
-            return `$${paramIndex}`
-          })
-          conditions.push(`${col} IN (${placeholders.join(', ')})`)
+          const placeholders = arr.map(() => '?').join(', ')
+          conditions.push(`${col} IN (${placeholders})`)
           values.push(...arr)
         }
         break
@@ -223,25 +208,20 @@ function buildWhereClause(
         if (arr.length === 0) {
           // NOT IN empty set is always true, skip condition
         } else {
-          const placeholders = arr.map(() => {
-            paramIndex++
-            return `$${paramIndex}`
-          })
-          conditions.push(`${col} NOT IN (${placeholders.join(', ')})`)
+          const placeholders = arr.map(() => '?').join(', ')
+          conditions.push(`${col} NOT IN (${placeholders})`)
           values.push(...arr)
         }
         break
       }
 
       case 'like':
-        paramIndex++
-        conditions.push(`${col} LIKE $${paramIndex}`)
+        conditions.push(`${col} LIKE ?`)
         values.push(filter.value)
         break
 
       case 'ilike':
-        paramIndex++
-        conditions.push(`${col} ILIKE $${paramIndex}`)
+        conditions.push(`${col} LIKE ? COLLATE NOCASE`)
         values.push(filter.value)
         break
     }
@@ -257,7 +237,6 @@ function buildWhereClause(
 function parseInValue(value: unknown): unknown[] {
   if (Array.isArray(value)) return value
   if (typeof value === 'string') {
-    // Handle format: ("val1","val2") or (val1,val2)
     const match = value.match(/^\((.*)\)$/)
     if (match) {
       return match[1].split(',').map(v => v.trim().replace(/^"|"$/g, ''))
@@ -267,20 +246,27 @@ function parseInValue(value: unknown): unknown[] {
   return [value]
 }
 
+// ── Helper: get all columns of a table for json_object building ──
+
+function getTableColumns(tableName: string): string[] {
+  const stmt = db.prepare(`PRAGMA table_info("${tableName}")`)
+  const rows = stmt.all() as { name: string }[]
+  return rows.map(r => r.name)
+}
+
 // ── SELECT handler ──────────────────────────────────────────
 
-async function handleSelect(body: QueryRequest): Promise<{ data: unknown; error: unknown; count?: number }> {
+function handleSelect(body: QueryRequest): { data: unknown; error: unknown; count?: number } {
   const { table, select: selectStr, filters, order, limit, single, count, head } = body
 
   const { columns, relations } = parseSelect(selectStr || '*')
 
   // If head + count mode: just return count
   if (head && count === 'exact') {
-    const { clause, values } = buildWhereClause(filters || [], 0)
+    const { clause, values } = buildWhereClause(filters || [])
     const sql = `SELECT COUNT(*) as count FROM "${table}"${clause}`
-    const result = await pool.query(sql, values)
-    const totalCount = parseInt(result.rows[0].count, 10)
-    return { data: null, error: null, count: totalCount }
+    const result = db.prepare(sql).get(...values) as { count: number }
+    return { data: null, error: null, count: result.count }
   }
 
   // Separate many-to-one relations (JOIN) from one-to-many relations (separate query)
@@ -307,24 +293,25 @@ async function handleSelect(body: QueryRequest): Promise<{ data: unknown; error:
     selectColumns = columns.map(c => `${mainAlias}."${c}"`).join(', ')
   }
 
-  // Add many-to-one relation columns using row_to_json for nesting
+  // Add many-to-one relation columns using json_object for nesting
   const joinClauses: string[] = []
   for (const rel of manyToOneRelations) {
     const relAlias = `_${rel.alias}`
     joinClauses.push(
       `LEFT JOIN "${rel.foreignTable}" AS ${relAlias} ON ${mainAlias}."${rel.fkColumn}" = ${relAlias}."${rel.fkTarget}"`
     )
+    let relCols: string[]
     if (rel.columns === '*') {
-      selectColumns += `, row_to_json(${relAlias}) AS "${rel.alias}"`
+      relCols = getTableColumns(rel.foreignTable)
     } else {
-      const relCols = rel.columns.split(',').map(c => c.trim())
-      const jsonParts = relCols.map(c => `'${c}', ${relAlias}."${c}"`).join(', ')
-      selectColumns += `, json_build_object(${jsonParts}) AS "${rel.alias}"`
+      relCols = rel.columns.split(',').map(c => c.trim())
     }
+    const jsonParts = relCols.map(c => `'${c}', ${relAlias}."${c}"`).join(', ')
+    selectColumns += `, json_object(${jsonParts}) AS "${rel.alias}"`
   }
 
   // Build the full query
-  const { clause: whereClause, values: whereValues } = buildWhereClause(filters || [], 0, mainAlias)
+  const { clause: whereClause, values: whereValues } = buildWhereClause(filters || [], mainAlias)
 
   let sql = `SELECT ${selectColumns} FROM "${table}" AS ${mainAlias}`
   if (joinClauses.length > 0) {
@@ -340,20 +327,53 @@ async function handleSelect(body: QueryRequest): Promise<{ data: unknown; error:
     sql += ` LIMIT ${parseInt(String(limit), 10)}`
   }
 
-  const result = await pool.query(sql, whereValues)
-  let data = result.rows
+  let data = db.prepare(sql).all(...whereValues) as Record<string, unknown>[]
+
+  // Parse JSON strings from json_object() back into objects
+  if (manyToOneRelations.length > 0) {
+    data = data.map(row => {
+      const newRow = { ...row }
+      for (const rel of manyToOneRelations) {
+        const val = newRow[rel.alias]
+        if (typeof val === 'string') {
+          try {
+            const parsed = JSON.parse(val)
+            // If all values are null, the LEFT JOIN didn't match — return null
+            const allNull = Object.values(parsed).every(v => v === null)
+            newRow[rel.alias] = allNull ? null : parsed
+          } catch {
+            // keep as-is
+          }
+        }
+      }
+      return newRow
+    })
+  }
+
+  // Parse JSON string fields back to objects (tool_calls, tags, metadata, etc.)
+  const JSON_FIELDS = new Set(['tool_calls', 'tags', 'metadata'])
+  data = data.map(row => {
+    const newRow = { ...row }
+    for (const key of Object.keys(newRow)) {
+      if (JSON_FIELDS.has(key) && typeof newRow[key] === 'string') {
+        try { newRow[key] = JSON.parse(newRow[key] as string) } catch { /* keep as-is */ }
+      }
+    }
+    return newRow
+  })
 
   // Handle count
   let totalCount: number | undefined
   if (count === 'exact') {
-    const countSql = `SELECT COUNT(*) as count FROM "${table}" AS ${mainAlias}${joinClauses.join(' ')}${whereClause}`
-    const countResult = await pool.query(countSql, whereValues)
-    totalCount = parseInt(countResult.rows[0].count, 10)
+    const joinStr = joinClauses.length > 0 ? ' ' + joinClauses.join(' ') : ''
+    const countSql = `SELECT COUNT(*) as count FROM "${table}" AS ${mainAlias}${joinStr}${whereClause}`
+    const countResult = db.prepare(countSql).get(...whereValues) as { count: number }
+    totalCount = countResult.count
   }
 
   // Handle one-to-many relations (separate queries for each)
   if (oneToManyRelations.length > 0 && data.length > 0) {
-    const parentIds = data.map(row => (row as Record<string, unknown>).id)
+    const parentIds = data.map(row => row.id)
 
     for (const rel of oneToManyRelations) {
       let relSelect: string
@@ -361,48 +381,36 @@ async function handleSelect(body: QueryRequest): Promise<{ data: unknown; error:
         relSelect = '*'
       } else {
         relSelect = rel.columns.split(',').map(c => `"${c.trim()}"`).join(', ')
-        // Always include the FK column for matching
         if (!relSelect.includes(rel.fkColumn)) {
           relSelect += `, "${rel.fkColumn}"`
         }
       }
 
-      const placeholders = parentIds.map((_, i) => `$${i + 1}`).join(', ')
-      const relSql = `SELECT ${relSelect} FROM "${rel.foreignTable}" WHERE "${rel.fkColumn}" IN (${placeholders}) ORDER BY "ordine" ASC`
+      const placeholders = parentIds.map(() => '?').join(', ')
+      let relRows: Record<string, unknown>[]
 
       try {
-        const relResult = await pool.query(relSql, parentIds)
-
-        // Group by FK
-        const grouped: Record<string, unknown[]> = {}
-        for (const row of relResult.rows) {
-          const fkValue = String((row as Record<string, unknown>)[rel.fkColumn])
-          if (!grouped[fkValue]) grouped[fkValue] = []
-          grouped[fkValue].push(row)
-        }
-
-        // Nest into parent rows
-        data = data.map(row => ({
-          ...(row as Record<string, unknown>),
-          [rel.alias]: grouped[String((row as Record<string, unknown>).id)] || [],
-        })) as typeof data
+        const relSql = `SELECT ${relSelect} FROM "${rel.foreignTable}" WHERE "${rel.fkColumn}" IN (${placeholders}) ORDER BY "ordine" ASC`
+        relRows = db.prepare(relSql).all(...parentIds) as Record<string, unknown>[]
       } catch {
         // If ordering by "ordine" fails (column doesn't exist), try without it
         const relSqlFallback = `SELECT ${relSelect} FROM "${rel.foreignTable}" WHERE "${rel.fkColumn}" IN (${placeholders})`
-        const relResult = await pool.query(relSqlFallback, parentIds)
-
-        const grouped: Record<string, unknown[]> = {}
-        for (const row of relResult.rows) {
-          const fkValue = String((row as Record<string, unknown>)[rel.fkColumn])
-          if (!grouped[fkValue]) grouped[fkValue] = []
-          grouped[fkValue].push(row)
-        }
-
-        data = data.map(row => ({
-          ...(row as Record<string, unknown>),
-          [rel.alias]: grouped[String((row as Record<string, unknown>).id)] || [],
-        })) as typeof data
+        relRows = db.prepare(relSqlFallback).all(...parentIds) as Record<string, unknown>[]
       }
+
+      // Group by FK
+      const grouped: Record<string, unknown[]> = {}
+      for (const row of relRows) {
+        const fkValue = String(row[rel.fkColumn])
+        if (!grouped[fkValue]) grouped[fkValue] = []
+        grouped[fkValue].push(row)
+      }
+
+      // Nest into parent rows
+      data = data.map(row => ({
+        ...row,
+        [rel.alias]: grouped[String(row.id)] || [],
+      }))
     }
   }
 
@@ -419,7 +427,7 @@ async function handleSelect(body: QueryRequest): Promise<{ data: unknown; error:
 
 // ── INSERT handler ──────────────────────────────────────────
 
-async function handleInsert(body: QueryRequest): Promise<{ data: unknown; error: unknown }> {
+function handleInsert(body: QueryRequest): { data: unknown; error: unknown } {
   const { table, data: insertData, select: selectStr, single } = body
 
   if (!insertData) {
@@ -430,13 +438,25 @@ async function handleInsert(body: QueryRequest): Promise<{ data: unknown; error:
   const insertedRows: Record<string, unknown>[] = []
 
   for (const row of rows) {
-    const keys = Object.keys(row)
-    const values = Object.values(row)
-    const placeholders = keys.map((_, i) => `$${i + 1}`)
+    // Generate UUID if not provided
+    if (!row.id) {
+      row.id = crypto.randomUUID()
+    }
 
-    const sql = `INSERT INTO "${table}" (${keys.map(k => `"${k}"`).join(', ')}) VALUES (${placeholders.join(', ')}) RETURNING *`
-    const result = await pool.query(sql, values)
-    insertedRows.push(result.rows[0])
+    const keys = Object.keys(row)
+    const values = Object.values(row).map(v => {
+      // SQLite can't store objects/arrays — serialize as JSON string
+      if (v !== null && typeof v === 'object') return JSON.stringify(v)
+      return v
+    })
+    const placeholders = keys.map(() => '?')
+
+    const sql = `INSERT INTO "${table}" (${keys.map(k => `"${k}"`).join(', ')}) VALUES (${placeholders.join(', ')})`
+    db.prepare(sql).run(...values)
+
+    // Fetch the inserted row
+    const inserted = db.prepare(`SELECT * FROM "${table}" WHERE "id" = ?`).get(row.id) as Record<string, unknown>
+    insertedRows.push(inserted)
   }
 
   // If select includes relations, re-fetch with joins
@@ -449,7 +469,7 @@ async function handleInsert(body: QueryRequest): Promise<{ data: unknown; error:
       select: selectStr,
       filters: [{ column: 'id', operator: 'in', value: ids }],
     }
-    const refetchResult = await handleSelect(refetchBody)
+    const refetchResult = handleSelect(refetchBody)
     if (!refetchResult.error) {
       finalData = refetchResult.data as unknown[]
     }
@@ -464,7 +484,7 @@ async function handleInsert(body: QueryRequest): Promise<{ data: unknown; error:
 
 // ── UPDATE handler ──────────────────────────────────────────
 
-async function handleUpdate(body: QueryRequest): Promise<{ data: unknown; error: unknown }> {
+function handleUpdate(body: QueryRequest): { data: unknown; error: unknown } {
   const { table, data: updateData, filters, select: selectStr, single } = body
 
   if (!updateData || Array.isArray(updateData)) {
@@ -472,27 +492,41 @@ async function handleUpdate(body: QueryRequest): Promise<{ data: unknown; error:
   }
 
   const keys = Object.keys(updateData)
-  const values = Object.values(updateData)
+  const values = Object.values(updateData).map(v => {
+    if (v !== null && typeof v === 'object') return JSON.stringify(v)
+    return v
+  })
 
-  const setClauses = keys.map((k, i) => `"${k}" = $${i + 1}`)
+  const setClauses = keys.map(k => `"${k}" = ?`)
 
-  const { clause: whereClause, values: whereValues } = buildWhereClause(filters || [], keys.length)
+  const { clause: whereClause, values: whereValues } = buildWhereClause(filters || [])
 
-  const sql = `UPDATE "${table}" SET ${setClauses.join(', ')}${whereClause} RETURNING *`
+  // First get the IDs of rows that will be updated
+  const selectSql = `SELECT "id" FROM "${table}"${whereClause}`
+  const idsToUpdate = (db.prepare(selectSql).all(...whereValues) as { id: string }[]).map(r => r.id)
+
+  // Perform the update
+  const sql = `UPDATE "${table}" SET ${setClauses.join(', ')}${whereClause}`
   const allValues = [...values, ...whereValues]
+  db.prepare(sql).run(...allValues)
 
-  const result = await pool.query(sql, allValues)
+  // Fetch the updated rows
+  let updatedRows: Record<string, unknown>[] = []
+  if (idsToUpdate.length > 0) {
+    const placeholders = idsToUpdate.map(() => '?').join(', ')
+    updatedRows = db.prepare(`SELECT * FROM "${table}" WHERE "id" IN (${placeholders})`).all(...idsToUpdate) as Record<string, unknown>[]
+  }
 
-  let finalData: unknown = result.rows
-  if (selectStr && selectStr.includes(':') && result.rows.length > 0) {
-    const ids = result.rows.map(r => (r as Record<string, unknown>).id)
+  let finalData: unknown = updatedRows
+  if (selectStr && selectStr.includes(':') && updatedRows.length > 0) {
+    const ids = updatedRows.map(r => r.id)
     const refetchBody: QueryRequest = {
       table,
       operation: 'select',
       select: selectStr,
       filters: [{ column: 'id', operator: 'in', value: ids }],
     }
-    const refetchResult = await handleSelect(refetchBody)
+    const refetchResult = handleSelect(refetchBody)
     if (!refetchResult.error) {
       finalData = refetchResult.data
     }
@@ -508,15 +542,19 @@ async function handleUpdate(body: QueryRequest): Promise<{ data: unknown; error:
 
 // ── DELETE handler ──────────────────────────────────────────
 
-async function handleDelete(body: QueryRequest): Promise<{ data: unknown; error: unknown }> {
+function handleDelete(body: QueryRequest): { data: unknown; error: unknown } {
   const { table, filters } = body
 
-  const { clause: whereClause, values: whereValues } = buildWhereClause(filters || [], 0)
+  const { clause: whereClause, values: whereValues } = buildWhereClause(filters || [])
 
-  const sql = `DELETE FROM "${table}"${whereClause} RETURNING *`
-  const result = await pool.query(sql, whereValues)
+  // Fetch rows before deleting
+  const selectSql = `SELECT * FROM "${table}"${whereClause}`
+  const rowsToDelete = db.prepare(selectSql).all(...whereValues)
 
-  return { data: result.rows, error: null }
+  const sql = `DELETE FROM "${table}"${whereClause}`
+  db.prepare(sql).run(...whereValues)
+
+  return { data: rowsToDelete, error: null }
 }
 
 // ── Route ───────────────────────────────────────────────────
@@ -539,16 +577,16 @@ router.post('/', authMiddleware(false), async (req: AuthRequest, res: Response) 
 
     switch (body.operation) {
       case 'select':
-        result = await handleSelect(body)
+        result = handleSelect(body)
         break
       case 'insert':
-        result = await handleInsert(body)
+        result = handleInsert(body)
         break
       case 'update':
-        result = await handleUpdate(body)
+        result = handleUpdate(body)
         break
       case 'delete':
-        result = await handleDelete(body)
+        result = handleDelete(body)
         break
       default:
         res.status(400).json({ data: null, error: { message: `Operazione non supportata: ${body.operation}`, code: 'INVALID_OPERATION' } })

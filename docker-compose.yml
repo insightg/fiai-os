@@ -8,8 +8,7 @@ services:
         - VITE_OPENROUTER_API_KEY=${VITE_OPENROUTER_API_KEY:-}
     restart: unless-stopped
     depends_on:
-      fiai-backend:
-        condition: service_healthy
+      - fiai-backend
     networks:
       - npm-network
       - fiai-internal
@@ -21,35 +20,22 @@ services:
       dockerfile: Dockerfile.backend
     restart: unless-stopped
     environment:
-      - DATABASE_URL=postgresql://postgres:postgres@fiai-postgres:5432/fiai_os
+      - DB_PATH=/app/data/fiai.db
       - JWT_SECRET=${JWT_SECRET:-fiai-os-dev-secret-key-2026}
       - PORT=3001
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - UPLOADS_DIR=/app/data/uploads
+      - CONTEXT_DIR=/app/data/context
     volumes:
-      - fiai-uploads:/app/uploads
-    depends_on:
-      fiai-postgres:
-        condition: service_healthy
-    networks:
-      - npm-network
-      - fiai-internal
-
-  fiai-postgres:
-    container_name: fiai-postgres
-    image: postgres:16-alpine
-    restart: unless-stopped
-    environment:
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-      - POSTGRES_DB=fiai_os
-    volumes:
-      - fiai-pgdata:/var/lib/postgresql/data
+      - fiai-data:/app/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3001/api/health"]
       interval: 10s
       timeout: 3s
       retries: 5
+      start_period: 10s
     networks:
+      - npm-network
       - fiai-internal
 
 networks:
@@ -59,5 +45,4 @@ networks:
     driver: bridge
 
 volumes:
-  fiai-pgdata:
-  fiai-uploads:
+  fiai-data:
