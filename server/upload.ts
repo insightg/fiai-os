@@ -5,6 +5,7 @@ import fs from 'fs'
 import crypto from 'crypto'
 import { AuthRequest, authMiddleware } from './middleware.js'
 import { analyzeInvoice, analyzeDocument } from './ai.js'
+import db from './db.js'
 
 const router = Router()
 
@@ -59,11 +60,44 @@ router.post('/', authMiddleware(true), upload.single('file'), async (req: AuthRe
     moveFile(req.file.path, destDir, req.file.filename)
 
     const fileUrl = `/api/uploads/${aziendaId}/${userId}/general/${req.file.filename}`
+
+    // Try to extract text and categorize for document archiving
+    const ext = path.extname(req.file.originalname).toLowerCase()
+    const filePath = path.join(destDir, req.file.filename)
+    let extractedText = ''
+    let aiSuggestions: { categoria?: string; tags?: string[]; descrizione?: string } | null = null
+
+    try {
+      if (ext === '.pdf') {
+        const { PDFParse: pdfParse } = await import('pdf-parse')
+        const pdfBuffer = fs.readFileSync(filePath)
+        const pdfData = await pdfParse(pdfBuffer)
+        extractedText = pdfData.text
+      } else if (ext === '.txt') {
+        extractedText = fs.readFileSync(filePath, 'utf-8')
+      } else if (['.doc', '.docx'].includes(ext)) {
+        extractedText = `[Documento: ${req.file.originalname}]`
+      }
+
+      if (extractedText) {
+        aiSuggestions = await analyzeDocument(extractedText, req.file.originalname)
+      } else if (['.png', '.jpg', '.jpeg', '.webp'].includes(ext)) {
+        // Images: categorize based on context
+        aiSuggestions = { categoria: 'altro', tags: [], descrizione: `Immagine: ${req.file.originalname}` }
+      }
+    } catch (aiErr) {
+      console.error('AI categorization error (generic upload):', aiErr)
+    }
+
     res.json({
       url: fileUrl,
       originalName: req.file.originalname,
       size: req.file.size,
       mimeType: req.file.mimetype,
+      extractedText: extractedText ? extractedText.substring(0, 50000) : '',
+      suggestedCategoria: aiSuggestions?.categoria || 'altro',
+      suggestedTags: aiSuggestions?.tags || [],
+      suggestedDescrizione: aiSuggestions?.descrizione || '',
     })
   } catch (err) {
     console.error('Upload error:', err)
@@ -93,7 +127,7 @@ router.post('/fattura-passiva', authMiddleware(true), upload.single('file'), asy
 
     try {
       if (ext === '.pdf') {
-        const pdfParse = (await import('pdf-parse')).default
+        const { PDFParse: pdfParse } = await import('pdf-parse')
         const pdfBuffer = fs.readFileSync(filePath)
         const pdfData = await pdfParse(pdfBuffer)
         recognizedData = await analyzeInvoice(pdfData.text, false)
@@ -107,7 +141,19 @@ router.post('/fattura-passiva', authMiddleware(true), upload.single('file'), asy
       // Non-fatal: return file URL without recognized data
     }
 
-    res.json({ fileUrl, recognizedData })
+    res.json({
+      fileUrl,
+      recognizedData,
+      originalName: req.file.originalname,
+      size: req.file.size,
+      mimeType: req.file.mimetype,
+      extractedText: '',
+      suggestedCategoria: 'amministrazione',
+      suggestedTags: ['fattura', 'passiva'],
+      suggestedDescrizione: recognizedData
+        ? `Fattura ${recognizedData.numero_fattura || ''} - ${recognizedData.fornitore_ragione_sociale || ''}`
+        : `Fattura: ${req.file.originalname}`,
+    })
   } catch (err) {
     console.error('Invoice upload error:', err)
     res.status(500).json({ error: { message: (err as Error).message } })
@@ -137,7 +183,7 @@ router.post('/documento', authMiddleware(true), upload.single('file'), async (re
 
     try {
       if (ext === '.pdf') {
-        const pdfParse = (await import('pdf-parse')).default
+        const { PDFParse: pdfParse } = await import('pdf-parse')
         const pdfBuffer = fs.readFileSync(filePath)
         const pdfData = await pdfParse(pdfBuffer)
         extractedText = pdfData.text
@@ -172,6 +218,61 @@ router.post('/documento', authMiddleware(true), upload.single('file'), async (re
     })
   } catch (err) {
     console.error('Document upload error:', err)
+    res.status(500).json({ error: { message: (err as Error).message } })
+  }
+})
+
+// ── Extract Text from Existing Document ──────────────────
+
+router.post('/extract-text', authMiddleware(true), async (req: AuthRequest, res: Response) => {
+  try {
+    const { documentId } = req.body
+
+    if (!documentId) {
+      res.status(400).json({ error: { message: 'documentId richiesto' } })
+      return
+    }
+
+    const doc = db.prepare('SELECT id, file_url, tipo_file FROM documenti WHERE id = ?').get(documentId) as Record<string, unknown> | undefined
+    if (!doc) {
+      res.status(404).json({ error: { message: 'Documento non trovato' } })
+      return
+    }
+
+    const fileUrl = doc.file_url as string
+    if (!fileUrl) {
+      res.json({ success: false, textLength: 0, error: 'Nessun file associato' })
+      return
+    }
+
+    // Resolve file path from URL
+    const relativePath = fileUrl.replace(/^\/api\/uploads\//, '')
+    const filePath = path.join(UPLOADS_DIR, relativePath)
+
+    if (!fs.existsSync(filePath)) {
+      res.json({ success: false, textLength: 0, error: 'File non trovato su disco' })
+      return
+    }
+
+    const ext = path.extname(filePath).toLowerCase()
+    let extractedText = ''
+
+    if (ext === '.pdf') {
+      const { PDFParse: pdfParse } = await import('pdf-parse')
+      const pdfBuffer = fs.readFileSync(filePath)
+      const pdfData = await pdfParse(pdfBuffer)
+      extractedText = pdfData.text
+    } else if (ext === '.txt') {
+      extractedText = fs.readFileSync(filePath, 'utf-8')
+    }
+
+    if (extractedText) {
+      db.prepare('UPDATE documenti SET contenuto_testo = ? WHERE id = ?').run(extractedText, documentId)
+    }
+
+    res.json({ success: true, textLength: extractedText.length })
+  } catch (err) {
+    console.error('Extract text error:', err)
     res.status(500).json({ error: { message: (err as Error).message } })
   }
 })

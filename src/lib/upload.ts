@@ -1,6 +1,19 @@
 import { getAuthToken } from './supabase'
 
-export async function uploadFile(file: File, endpoint: string): Promise<Record<string, unknown>> {
+export interface UploadResult {
+  url?: string
+  fileUrl?: string
+  originalName: string
+  size: number
+  mimeType: string
+  extractedText: string
+  suggestedCategoria: string
+  suggestedTags: string[]
+  suggestedDescrizione: string
+  recognizedData?: Record<string, unknown>
+}
+
+export async function uploadFile(file: File, endpoint: string): Promise<UploadResult> {
   const formData = new FormData()
   formData.append('file', file)
 

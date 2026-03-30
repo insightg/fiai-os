@@ -20,7 +20,8 @@ const MIME_TYPES: Record<string, string> = {
 // Serve uploaded files with auth check
 router.get('/:aziendaId/{*subPath}', authMiddleware(true), (req: AuthRequest, res: Response) => {
   const aziendaId = req.params.aziendaId as string
-  const subPath = req.params.subPath as string
+  const rawSubPath = req.params.subPath
+  const subPath = (Array.isArray(rawSubPath) ? rawSubPath.join('/') : rawSubPath) as string
 
   // Security: user can only access files from their own azienda
   if (req.aziendaId && req.aziendaId !== aziendaId) {

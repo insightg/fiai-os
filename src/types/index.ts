@@ -27,6 +27,8 @@ export interface UserProfile {
   cognome: string
   ruolo: 'admin' | 'collaboratore' | 'viewer'
   avatar_url: string | null
+  whatsapp_phone: string | null
+  whatsapp_active: boolean
   created_at: string
 }
 
@@ -362,7 +364,7 @@ export interface CostoSimulazioneResult {
 }
 
 // ── Documenti ───────────────────────────────────────────
-export type DocumentoCategoria = 'legale' | 'pubblicita' | 'documentazione_tecnica' | 'normative' | 'atti' | 'contratti' | 'altro'
+export type DocumentoCategoria = 'legale' | 'pubblicita' | 'documentazione_tecnica' | 'normative' | 'atti' | 'contratti' | 'altro' | 'amministrazione' | 'hr'
 
 export interface Documento {
   id: string

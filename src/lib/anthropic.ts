@@ -26,9 +26,10 @@ export async function sendMessage(
   sessionId: string,
   onToolUse?: (event: ToolUseEvent) => void,
   onTextChunk?: (chunk: string) => void,
-  attachedImageBase64?: string
+  attachedImageBase64?: string,
+  attachedAudioBase64?: string
 ): Promise<{ text: string; toolCalls: Record<string, unknown>[]; agentName?: string; agentDomain?: string; agentColor?: string; suggestions?: string[] }> {
-  const result = await orchestrate(messages, sessionId, onToolUse, onTextChunk, attachedImageBase64)
+  const result = await orchestrate(messages, sessionId, onToolUse, onTextChunk, attachedImageBase64, attachedAudioBase64)
 
   // Save messages to DB
   try {

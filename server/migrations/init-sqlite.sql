@@ -38,8 +38,10 @@ CREATE TABLE IF NOT EXISTS user_profiles (
   nome        TEXT NOT NULL,
   cognome     TEXT NOT NULL,
   ruolo       TEXT NOT NULL DEFAULT 'collaboratore' CHECK (ruolo IN ('admin','collaboratore','viewer')),
-  avatar_url  TEXT,
-  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  avatar_url       TEXT,
+  whatsapp_phone   TEXT,
+  whatsapp_active  INTEGER DEFAULT 0,
+  created_at       TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- ── Clienti ──────────────────────────────────────────────
@@ -463,3 +465,13 @@ CREATE TABLE IF NOT EXISTS prompt_history (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_prompt_history_user ON prompt_history(user_id);
+
+-- ── WhatsApp Users ──────────────────────────────────────
+CREATE TABLE IF NOT EXISTS whatsapp_users (
+  id TEXT PRIMARY KEY,
+  phone TEXT NOT NULL UNIQUE,
+  user_id TEXT REFERENCES user_profiles(id),
+  active INTEGER DEFAULT 1,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_whatsapp_users_phone ON whatsapp_users(phone);

@@ -1,4 +1,4 @@
-export type AgentDomain = 'crm' | 'finance' | 'sales' | 'hr' | 'documents' | 'analytics' | 'general' | 'image' | 'tts'
+export type AgentDomain = 'pulse' | 'commerciale' | 'produzione' | 'marketing' | 'amministrazione' | 'hr' | 'legal' | 'documents' | 'infra' | 'image' | 'tts' | 'general'
 
 export interface AgentToolDefinition {
   domain: AgentDomain
@@ -20,6 +20,8 @@ export interface AgentResult {
   agentName: string
   agentDomain: AgentDomain
   agentColor: string
+  totalCost?: number
+  totalTokens?: number
 }
 
 export interface ClassificationResult {

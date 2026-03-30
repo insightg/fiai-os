@@ -99,7 +99,7 @@ export interface DocumentAnalysisResult {
 export async function analyzeDocument(text: string, fileName: string): Promise<DocumentAnalysisResult> {
   const systemPrompt = `Analizza il seguente documento e restituisci SOLO un oggetto JSON con:
 {
-  "categoria": una tra "legale", "pubblicita", "documentazione_tecnica", "normative", "atti", "contratti", "altro",
+  "categoria": una tra "legale", "pubblicita", "documentazione_tecnica", "normative", "atti", "contratti", "amministrazione", "hr", "altro",
   "tags": array di 3-5 parole chiave rilevanti,
   "descrizione": breve descrizione del contenuto (max 200 caratteri)
 }
@@ -144,4 +144,121 @@ Se nessun documento corrisponde, restituisci un array vuoto [].`
   const jsonMatch = response.match(/\[[\s\S]*\]/)
   if (!jsonMatch) return []
   return JSON.parse(jsonMatch[0])
+}
+
+// ── Generate Search Query Variants ──────────────────────
+
+export async function generateSearchQueries(originalQuery: string): Promise<string[]> {
+  const systemPrompt = `Genera 3 varianti di query di ricerca full-text (FTS5) per la seguente richiesta utente.
+Le query devono essere ottimizzate per SQLite FTS5. Restituisci SOLO un array JSON di 3 stringhe.
+Esempio: ["contratto fornitura", "accordo fornitore servizi", "contratti approvvigionamento"]
+Non usare operatori speciali FTS5, solo parole chiave semplici.`
+
+  const messages: OpenRouterMessage[] = [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: originalQuery },
+  ]
+
+  try {
+    const response = await callLLM(messages)
+    const jsonMatch = response.match(/\[[\s\S]*\]/)
+    if (!jsonMatch) return [originalQuery]
+    const queries = JSON.parse(jsonMatch[0]) as string[]
+    return queries.length > 0 ? queries.slice(0, 3) : [originalQuery]
+  } catch {
+    return [originalQuery]
+  }
+}
+
+// ── Synthesize Answer from Documents ────────────────────
+
+export async function synthesizeFromDocuments(query: string, docs: { nome?: string; descrizione?: string; contenuto_testo?: string; categoria?: string }[]): Promise<string> {
+  if (docs.length === 0) return 'Nessun documento trovato per la ricerca.'
+
+  const docSummaries = docs.slice(0, 5).map((d, i) => {
+    const content = d.contenuto_testo ? d.contenuto_testo.substring(0, 2000) : ''
+    return `--- Documento ${i + 1}: ${d.nome || 'Senza nome'} (${d.categoria || 'n/d'}) ---\nDescrizione: ${d.descrizione || 'N/D'}\nContenuto: ${content || 'Non disponibile'}`
+  }).join('\n\n')
+
+  const systemPrompt = `Sei un assistente documentale aziendale. Data una query e i documenti trovati, fornisci una sintesi chiara e utile.
+Rispondi in italiano. Cita i nomi dei documenti quando fai riferimento a contenuti specifici.
+Se i documenti non contengono informazioni rilevanti per la query, dillo chiaramente.`
+
+  const messages: OpenRouterMessage[] = [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: `Query: "${query}"\n\nDocumenti trovati:\n${docSummaries}` },
+  ]
+
+  try {
+    return await callLLM(messages)
+  } catch {
+    return 'Impossibile generare la sintesi dei documenti.'
+  }
+}
+
+// ── Summarize Document Text ─────────────────────────────
+
+export async function summarizeText(text: string, docName: string): Promise<{ summary: string; keyInfo: Record<string, string> }> {
+  const systemPrompt = `Sei un esperto nell'analisi documentale. Dato il testo di un documento, genera:
+1. Un riassunto chiaro e conciso (max 500 parole)
+2. Le informazioni chiave estratte
+
+Restituisci SOLO un oggetto JSON con questa struttura:
+{
+  "summary": "riassunto del documento",
+  "keyInfo": {
+    "date": "date rilevanti trovate",
+    "parti": "parti coinvolte",
+    "importi": "importi e valori monetari",
+    "obblighi": "obblighi e scadenze principali",
+    "oggetto": "oggetto/tema principale"
+  }
+}
+Ometti i campi keyInfo che non sono presenti nel documento. Rispondi in italiano.`
+
+  const messages: OpenRouterMessage[] = [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: `Documento: "${docName}"\n\nTesto:\n${text.substring(0, 12000)}` },
+  ]
+
+  try {
+    const response = await callLLM(messages)
+    const jsonMatch = response.match(/\{[\s\S]*\}/)
+    if (!jsonMatch) return { summary: 'Impossibile generare il riassunto.', keyInfo: {} }
+    return JSON.parse(jsonMatch[0])
+  } catch {
+    return { summary: 'Errore nella generazione del riassunto.', keyInfo: {} }
+  }
+}
+
+// ── Compare Two Documents ───────────────────────────────
+
+export async function compareDocuments(
+  doc1: { nome: string; contenuto_testo: string },
+  doc2: { nome: string; contenuto_testo: string }
+): Promise<{ similarities: string[]; differences: string[]; summary: string }> {
+  const systemPrompt = `Sei un esperto nell'analisi comparativa di documenti. Confronta i due documenti e restituisci SOLO un oggetto JSON:
+{
+  "similarities": ["elenco somiglianze principali"],
+  "differences": ["elenco differenze principali"],
+  "summary": "sintesi del confronto in 2-3 frasi"
+}
+Rispondi in italiano.`
+
+  const messages: OpenRouterMessage[] = [
+    { role: 'system', content: systemPrompt },
+    {
+      role: 'user',
+      content: `Documento 1: "${doc1.nome}"\n${doc1.contenuto_testo.substring(0, 6000)}\n\n---\n\nDocumento 2: "${doc2.nome}"\n${doc2.contenuto_testo.substring(0, 6000)}`,
+    },
+  ]
+
+  try {
+    const response = await callLLM(messages)
+    const jsonMatch = response.match(/\{[\s\S]*\}/)
+    if (!jsonMatch) return { similarities: [], differences: [], summary: 'Impossibile confrontare i documenti.' }
+    return JSON.parse(jsonMatch[0])
+  } catch {
+    return { similarities: [], differences: [], summary: 'Errore nel confronto documenti.' }
+  }
 }

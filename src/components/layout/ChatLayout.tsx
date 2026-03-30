@@ -39,6 +39,7 @@ import {
   FolderOpen,
   Settings,
   Paperclip,
+  Mic,
   Copy,
   Download,
   X,
@@ -46,8 +47,10 @@ import {
   ThumbsDown,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
+import AudioRecorder from '../AudioRecorder'
 import Badge from '../ui/Badge'
 import { renderToolResult, toolNameMapExtended } from '../ChatToolRenderers'
+import InlineCrudForm, { type FormField } from '../InlineCrudForm'
 import {
   sendMessage,
   createChatSession,
@@ -59,10 +62,12 @@ import {
 } from '../../lib/anthropic'
 import { supabase } from '../../lib/supabase'
 import type { ChatMessage } from '../../types'
-import { useAuthStore } from '../../store'
+import { useAuthStore, useClientiStore, useLeadsStore, useProgettiStore, useCandidatiStore, useRimborsiStore, useDocumentiStore, useFattureStore } from '../../store'
 import { uploadGeneric } from '../../lib/upload'
 import { rateMessage } from '../../lib/agents/context-client'
 import UserFilesModal from '../UserFilesModal'
+import PanelRouter from '../panels/PanelRouter'
+import DocumentArchiveModal from '../DocumentArchiveModal'
 
 // ── Types ───────────────────────────────────────────────
 interface SessionItem {
@@ -244,7 +249,7 @@ function renderMarkdown(text: string): JSX.Element[] {
 }
 
 // ── Message Bubble ──────────────────────────────────────
-function MessageBubble({ message, activeSessionId }: { message: DisplayMessage; activeSessionId: string | null }) {
+function MessageBubble({ message, activeSessionId, onAction }: { message: DisplayMessage; activeSessionId: string | null; onAction?: (messageId: string, toolName: string, action: string, payload: any) => void }) {
   const isUser = message.role === 'user'
 
   const copyToClipboard = useCallback(() => {
@@ -302,7 +307,9 @@ function MessageBubble({ message, activeSessionId }: { message: DisplayMessage; 
               {message.toolCalls.map((tc, idx) => {
                 const toolName = (tc as { tool: string }).tool
                 const toolResult = (tc as { result?: unknown }).result
-                const rendered = toolResult ? renderToolResult(toolName, toolResult) : null
+                const rendered = toolResult ? renderToolResult(toolName, toolResult, {
+                  onAction: onAction ? (action: string, payload: any) => onAction(message.id, toolName, action, payload) : undefined
+                }) : null
                 if (rendered) return <div key={idx}>{rendered}</div>
                 return (
                   <Badge key={idx} color="amber">
@@ -436,8 +443,22 @@ export default function ChatLayout() {
   // Sidebar state
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [rightSidebarOpen, setRightSidebarOpen] = useState(false)
+  const [activePanel, setActivePanel] = useState<string | null>(null)
   const [filesModalOpen, setFilesModalOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
+
+  // Agent panel buttons config
+  const agentButtons = [
+    { domain: 'pulse', label: 'Pulse', initial: 'P', color: '#C41E3A' },
+    { domain: 'commerciale', label: 'Commerciale', initial: 'C', color: '#1976D2' },
+    { domain: 'produzione', label: 'Produzione', initial: 'Pr', color: '#E68A00' },
+    { domain: 'marketing', label: 'Marketing', initial: 'M', color: '#9C27B0' },
+    { domain: 'amministrazione', label: 'Amministrazione', initial: 'A', color: '#2D8B56' },
+    { domain: 'hr', label: 'HR', initial: 'HR', color: '#7B1FA2' },
+    { domain: 'legal', label: 'Legal', initial: 'L', color: '#D32F2F' },
+    { domain: 'infra', label: 'IT/Infra', initial: 'IT', color: '#455A64' },
+    { domain: 'personal', label: 'Personale', initial: 'Pe', color: '#6B7280' },
+  ]
 
   // Session state
   const [sessions, setSessions] = useState<SessionItem[]>([])
@@ -464,6 +485,27 @@ export default function ChatLayout() {
   // File attachment state
   const [attachedFile, setAttachedFile] = useState<File | null>(null)
   const [attachedPreview, setAttachedPreview] = useState<string | null>(null)
+  const [isRecording, setIsRecording] = useState(false)
+
+  // Inline CRUD form state
+  const [inlineForm, setInlineForm] = useState<{
+    messageId: string
+    toolName: string
+    data: Record<string, any>
+    mode: 'create' | 'edit'
+  } | null>(null)
+
+  // Document archive modal state
+  const [archiveModal, setArchiveModal] = useState<{
+    open: boolean
+    fileUrl: string
+    fileName: string
+    fileSize: number
+    suggestedCategoria: string
+    suggestedTags: string[]
+    suggestedDescrizione: string
+    extractedText: string
+  } | null>(null)
 
   // Refs
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -473,6 +515,129 @@ export default function ChatLayout() {
   const initials = profile
     ? `${profile.nome.charAt(0)}${profile.cognome.charAt(0)}`.toUpperCase()
     : '??'
+
+  // ── Inline CRUD ─────────────────────────────────────
+  const TOOL_FORM_FIELDS: Record<string, FormField[]> = useMemo(() => ({
+    get_clients: [
+      { name: 'tipo', label: 'Tipo', type: 'select', options: [{ value: 'privato', label: 'Privato' }, { value: 'azienda', label: 'Azienda' }] },
+      { name: 'nome', label: 'Nome', type: 'text', required: true },
+      { name: 'cognome', label: 'Cognome', type: 'text' },
+      { name: 'ragione_sociale', label: 'Ragione Sociale', type: 'text' },
+      { name: 'email', label: 'Email', type: 'email' },
+      { name: 'telefono', label: 'Telefono', type: 'text' },
+      { name: 'piva', label: 'P.IVA', type: 'text' },
+    ],
+    get_candidates: [
+      { name: 'nome', label: 'Nome', type: 'text', required: true },
+      { name: 'cognome', label: 'Cognome', type: 'text', required: true },
+      { name: 'email', label: 'Email', type: 'email' },
+      { name: 'ruolo_candidato', label: 'Ruolo', type: 'text' },
+      { name: 'stato', label: 'Stato', type: 'select', options: [
+        { value: 'nuovo', label: 'Nuovo' }, { value: 'screening', label: 'Screening' },
+        { value: 'colloquio', label: 'Colloquio' }, { value: 'offerta', label: 'Offerta' },
+        { value: 'assunto', label: 'Assunto' }, { value: 'scartato', label: 'Scartato' },
+      ] },
+    ],
+    get_pipeline: [
+      { name: 'nome', label: 'Nome', type: 'text', required: true },
+      { name: 'cognome', label: 'Cognome', type: 'text' },
+      { name: 'email', label: 'Email', type: 'email' },
+      { name: 'telefono', label: 'Telefono', type: 'text' },
+      { name: 'stato', label: 'Stato', type: 'select', options: [
+        { value: 'nuovo', label: 'Nuovo' }, { value: 'contattato', label: 'Contattato' },
+        { value: 'qualificato', label: 'Qualificato' }, { value: 'proposta', label: 'Proposta' },
+      ] },
+      { name: 'valore_stimato', label: 'Valore', type: 'number' },
+    ],
+    get_projects: [
+      { name: 'nome', label: 'Nome', type: 'text', required: true },
+      { name: 'descrizione', label: 'Descrizione', type: 'textarea' },
+      { name: 'stato', label: 'Stato', type: 'select', options: [
+        { value: 'pianificato', label: 'Pianificato' }, { value: 'in_corso', label: 'In corso' },
+        { value: 'in_pausa', label: 'In pausa' }, { value: 'completato', label: 'Completato' },
+      ] },
+    ],
+  }), [])
+
+  const executeDirectAction = useCallback(async (toolName: string, action: string, data: any) => {
+    switch (toolName) {
+      case 'get_clients': {
+        const store = useClientiStore.getState()
+        if (action === 'delete') await store.remove(data.id)
+        if (action === 'edit') { const { id, ...rest } = data; await store.update(id, rest) }
+        if (action === 'create') await store.create(data)
+        break
+      }
+      case 'get_pipeline': {
+        const store = useLeadsStore.getState()
+        if (action === 'delete') await store.remove(data.id)
+        if (action === 'edit') { const { id, ...rest } = data; await store.update(id, rest) }
+        if (action === 'create') await store.create(data)
+        break
+      }
+      case 'get_projects': {
+        const store = useProgettiStore.getState()
+        if (action === 'edit') { const { id, ...rest } = data; await store.update(id, rest) }
+        break
+      }
+      case 'get_candidates': {
+        const store = useCandidatiStore.getState()
+        if (action === 'delete') await store.remove(data.id)
+        if (action === 'edit') { const { id, ...rest } = data; await store.update(id, rest) }
+        if (action === 'create') await store.create(data)
+        break
+      }
+      case 'get_expenses': {
+        const store = useRimborsiStore.getState()
+        const userId = useAuthStore.getState().user?.id || ''
+        if (action === 'approve') await store.approve(data.id, userId)
+        if (action === 'reject') await store.reject(data.id, userId, '')
+        break
+      }
+      case 'get_documents':
+      case 'search_documents': {
+        const store = useDocumentiStore.getState()
+        if (action === 'delete') await store.remove(data.id)
+        break
+      }
+      case 'get_overdue_invoices': {
+        if (action === 'mark_paid') {
+          const store = useFattureStore.getState()
+          await store.update(data.id, { stato: 'pagata', pagata_il: new Date().toISOString().split('T')[0] })
+        }
+        break
+      }
+    }
+  }, [])
+
+  const handleInlineAction = useCallback(async (messageId: string, toolName: string, action: string, payload: any) => {
+    if (action === 'edit') {
+      setInlineForm({ messageId, toolName, data: payload, mode: 'edit' })
+    } else if (action === 'create') {
+      setInlineForm({ messageId, toolName: payload.tool || toolName, data: {}, mode: 'create' })
+    } else if (action === 'delete') {
+      if (!confirm('Sei sicuro di voler eliminare?')) return
+      try {
+        await executeDirectAction(toolName, 'delete', payload)
+        toast.success('Eliminato')
+      } catch { toast.error('Errore durante l\'eliminazione') }
+    } else if (action === 'approve') {
+      try {
+        await executeDirectAction(toolName, 'approve', payload)
+        toast.success('Approvato')
+      } catch { toast.error('Errore durante l\'approvazione') }
+    } else if (action === 'reject') {
+      try {
+        await executeDirectAction(toolName, 'reject', payload)
+        toast.success('Rifiutato')
+      } catch { toast.error('Errore durante il rifiuto') }
+    } else if (action === 'mark_paid') {
+      try {
+        await executeDirectAction(toolName, 'mark_paid', payload)
+        toast.success('Segnata come pagata')
+      } catch { toast.error('Errore nell\'aggiornamento') }
+    }
+  }, [executeDirectAction])
 
   // ── Load Sessions ────────────────────────────────────
   const loadSessions = useCallback(async () => {
@@ -662,20 +827,86 @@ export default function ChatLayout() {
 
       // Handle file upload
       let imageBase64ForAnalysis: string | undefined
+      let audioBase64ForCloning: string | undefined
       if (fileToUpload) {
         try {
           const isImage = fileToUpload.type.startsWith('image/')
+          const isAudio = fileToUpload.type.startsWith('audio/')
 
           if (isImage && attachedPreview) {
             // For images: pass the base64 directly to the image agent for analysis
             imageBase64ForAnalysis = attachedPreview
             if (!content) content = `Analizza questa immagine: ${fileToUpload.name}`
+          } else if (isAudio) {
+            // For audio: read as base64 for TTS voice cloning
+            const audioBase64 = (fileToUpload as any).__audioBase64 as string | undefined
+            if (audioBase64) {
+              audioBase64ForCloning = audioBase64
+            } else {
+              // Read from file if not already available (e.g. file picker)
+              audioBase64ForCloning = await new Promise<string>((resolve, reject) => {
+                const reader = new FileReader()
+                reader.onload = () => resolve(reader.result as string)
+                reader.onerror = () => reject(new Error('Errore lettura file audio'))
+                reader.readAsDataURL(fileToUpload)
+              })
+            }
+            if (!content) content = `Audio registrato per clonazione voce`
+            const attachmentInfo = `[Audio allegato: ${fileToUpload.name}]`
+            content = content.includes('[Audio allegato') ? content : `${content}\n${attachmentInfo}`
           } else {
-            // For documents: upload and reference
-            const result = await uploadGeneric(fileToUpload)
-            const url = (result as any).url || (result as any).file_url || ''
-            const attachmentInfo = `[Documento allegato: ${fileToUpload.name} - ${url}]`
-            content = content ? `${content}\n${attachmentInfo}` : attachmentInfo
+            // For documents (PDF, DOC, TXT, etc.): upload with AI categorization
+            const isPdf = fileToUpload.name.toLowerCase().endsWith('.pdf')
+            const isTxt = fileToUpload.name.toLowerCase().endsWith('.txt')
+            const isDoc = /\.(doc|docx)$/i.test(fileToUpload.name)
+
+            if (isPdf || isTxt || isDoc) {
+              // Use document upload endpoint (extracts text + AI categorization)
+              const { uploadDocumento } = await import('../../lib/upload')
+              const result = await uploadDocumento(fileToUpload)
+              const url = result.fileUrl || ''
+              const categoria = result.suggestedCategoria || 'altro'
+              const tags = (result.suggestedTags || []).join(', ')
+              const descrizione = result.suggestedDescrizione || ''
+              const extractedText = result.extractedText || ''
+
+              content = content || `Archivia questo documento: ${fileToUpload.name}`
+              content += `\n[Documento caricato: ${fileToUpload.name}]`
+              content += `\n[URL: ${url}]`
+              content += `\n[Categoria suggerita: ${categoria}]`
+              content += `\n[Tags suggeriti: ${tags}]`
+              content += `\n[Descrizione: ${descrizione}]`
+              if (extractedText) content += `\n[Testo estratto: ${extractedText.substring(0, 500)}...]`
+
+              // Show archive modal for document archiving
+              setArchiveModal({
+                open: true,
+                fileUrl: url,
+                fileName: fileToUpload.name,
+                fileSize: fileToUpload.size,
+                suggestedCategoria: categoria,
+                suggestedTags: result.suggestedTags || [],
+                suggestedDescrizione: descrizione,
+                extractedText,
+              })
+            } else {
+              // Generic file upload
+              const result = await uploadGeneric(fileToUpload)
+              const url = result.url || ''
+              content = content ? `${content}\n[File allegato: ${fileToUpload.name} - ${url}]` : `[File allegato: ${fileToUpload.name} - ${url}]`
+
+              // Show archive modal for generic uploads too
+              setArchiveModal({
+                open: true,
+                fileUrl: url,
+                fileName: fileToUpload.name,
+                fileSize: fileToUpload.size,
+                suggestedCategoria: result.suggestedCategoria || 'altro',
+                suggestedTags: result.suggestedTags || [],
+                suggestedDescrizione: result.suggestedDescrizione || '',
+                extractedText: result.extractedText || '',
+              })
+            }
           }
         } catch {
           toast.error('Errore nel caricamento del file')
@@ -742,15 +973,20 @@ export default function ChatLayout() {
       setActiveTools([])
 
       try {
-        // Create a streaming assistant message placeholder
         const assistantMsgId = `assistant-${Date.now()}`
-        const streamingMsg: DisplayMessage = {
-          id: assistantMsgId,
-          role: 'assistant',
-          content: '',
-          timestamp: new Date().toISOString(),
+        let streamingMsgAdded = false
+
+        const ensureStreamingMsg = () => {
+          if (!streamingMsgAdded) {
+            streamingMsgAdded = true
+            setMessages((prev) => [...prev, {
+              id: assistantMsgId,
+              role: 'assistant' as const,
+              content: '',
+              timestamp: new Date().toISOString(),
+            }])
+          }
         }
-        setMessages((prev) => [...prev, streamingMsg])
 
         const result = await sendMessage(
           newHistory,
@@ -767,8 +1003,9 @@ export default function ChatLayout() {
               return [...prev, event]
             })
           },
-          // onTextChunk callback — update streaming message progressively
+          // onTextChunk callback — create message on first chunk, then append
           (chunk) => {
+            ensureStreamingMsg()
             setMessages((prev) =>
               prev.map((m) =>
                 m.id === assistantMsgId
@@ -778,24 +1015,40 @@ export default function ChatLayout() {
             )
           },
           // attached image base64 for vision analysis
-          imageBase64ForAnalysis
+          imageBase64ForAnalysis,
+          // attached audio base64 for TTS voice cloning
+          audioBase64ForCloning
         )
 
-        // Finalize: replace streaming message with complete result (includes toolCalls, agent metadata)
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantMsgId
-              ? {
-                  ...m,
-                  content: result.text,
-                  toolCalls: result.toolCalls.length > 0 ? result.toolCalls : undefined,
-                  agentName: result.agentName,
-                  agentDomain: result.agentDomain,
-                  agentColor: result.agentColor,
-                }
-              : m
+        // Finalize: add or replace with complete result
+        if (streamingMsgAdded) {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantMsgId
+                ? {
+                    ...m,
+                    content: result.text,
+                    toolCalls: result.toolCalls.length > 0 ? result.toolCalls : undefined,
+                    agentName: result.agentName,
+                    agentDomain: result.agentDomain,
+                    agentColor: result.agentColor,
+                  }
+                : m
+            )
           )
-        )
+        } else {
+          // No streaming happened — add the complete message directly
+          setMessages((prev) => [...prev, {
+            id: assistantMsgId,
+            role: 'assistant' as const,
+            content: result.text,
+            toolCalls: result.toolCalls.length > 0 ? result.toolCalls : undefined,
+            timestamp: new Date().toISOString(),
+            agentName: result.agentName,
+            agentDomain: result.agentDomain,
+            agentColor: result.agentColor,
+          }])
+        }
         const updatedHistory = [
           ...newHistory,
           { role: 'assistant' as const, content: result.text },
@@ -927,15 +1180,15 @@ export default function ChatLayout() {
         </div>
 
         <div className="flex items-center gap-2">
-          <button
-            onClick={() => setRightSidebarOpen((p) => !p)}
-            className={`p-1.5 rounded-lg transition-colors ${
-              rightSidebarOpen ? 'bg-gold/10 text-gold' : 'text-text2 hover:bg-bg3 hover:text-text'
-            }`}
-            title="Gestionale"
-          >
-            {rightSidebarOpen ? <PanelRightClose size={20} /> : <PanelRight size={20} />}
-          </button>
+          {activePanel && (
+            <button
+              onClick={() => setActivePanel(null)}
+              className="p-1.5 rounded-lg bg-gold/10 text-gold transition-colors"
+              title="Chiudi panel"
+            >
+              <PanelRightClose size={20} />
+            </button>
+          )}
           <button
             onClick={() => setFilesModalOpen(true)}
             className="p-1.5 rounded-lg text-text2 hover:bg-bg3 hover:text-text transition-colors"
@@ -1067,21 +1320,9 @@ export default function ChatLayout() {
             ))}
           </nav>
 
-          {/* Bottom: Gestionale toggle */}
-          <div className="border-t border-border p-3 shrink-0">
-            <button
-              onClick={() => setRightSidebarOpen((p) => !p)}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${
-                rightSidebarOpen ? 'bg-gold/10 text-gold' : 'text-text2 hover:text-text hover:bg-bg3'
-              }`}
-            >
-              <LayoutGrid size={18} className="shrink-0" />
-              <span>Gestionale</span>
-            </button>
-          </div>
         </aside>
 
-        {/* Chat Area */}
+        {/* Chat Area - shrinks when panel is open */}
         <div className="flex-1 flex flex-col min-w-0">
           {messages.length === 0 && !isLoading ? (
             <EmptyState onQuickCommand={handleQuickCommand} />
@@ -1091,7 +1332,35 @@ export default function ChatLayout() {
               <div className="flex-1 overflow-y-auto px-4 py-6">
                 <div className="space-y-6">
                   {messages.map((msg) => (
-                    <MessageBubble key={msg.id} message={msg} activeSessionId={activeSessionId} />
+                    <div key={msg.id}>
+                      <MessageBubble message={msg} activeSessionId={activeSessionId} onAction={handleInlineAction} />
+                      {inlineForm && inlineForm.messageId === msg.id && TOOL_FORM_FIELDS[inlineForm.toolName] && (
+                        <div className="max-w-3xl mx-auto ml-12 mt-2">
+                          <InlineCrudForm
+                            fields={TOOL_FORM_FIELDS[inlineForm.toolName]}
+                            data={inlineForm.data}
+                            onSubmit={async (formData) => {
+                              try {
+                                const aziendaId = useAuthStore.getState().profile?.azienda_id
+                                const fullData = { ...formData, azienda_id: aziendaId }
+                                if (inlineForm.mode === 'edit') {
+                                  await executeDirectAction(inlineForm.toolName, 'edit', { ...fullData, id: inlineForm.data.id })
+                                  toast.success('Aggiornato')
+                                } else {
+                                  await executeDirectAction(inlineForm.toolName, 'create', fullData)
+                                  toast.success('Creato')
+                                }
+                                setInlineForm(null)
+                              } catch {
+                                toast.error('Errore durante il salvataggio')
+                              }
+                            }}
+                            onCancel={() => setInlineForm(null)}
+                            submitLabel={inlineForm.mode === 'edit' ? 'Aggiorna' : 'Crea'}
+                          />
+                        </div>
+                      )}
+                    </div>
                   ))}
 
                   {/* Tool use indicators */}
@@ -1163,6 +1432,19 @@ export default function ChatLayout() {
                 }}
                 className="relative"
               >
+                {isRecording && (
+                  <AudioRecorder
+                    onRecordingComplete={(blob, base64) => {
+                      setIsRecording(false)
+                      const file = new File([blob], `recording-${Date.now()}.webm`, { type: 'audio/webm' })
+                      setAttachedFile(file)
+                      setAttachedPreview(null)
+                      // Store base64 in a data attribute on the file for TTS cloning
+                      ;(file as any).__audioBase64 = base64
+                    }}
+                    onCancel={() => setIsRecording(false)}
+                  />
+                )}
                 <div className="bg-bg2 border border-border rounded-2xl shadow-sm focus-within:border-gold/40 focus-within:shadow-md transition-all">
                   {/* Attachment Preview */}
                   {attachedFile && (
@@ -1170,6 +1452,8 @@ export default function ChatLayout() {
                       <div className="inline-flex items-center gap-2 bg-bg3 rounded-lg px-3 py-2 max-w-xs">
                         {attachedPreview ? (
                           <img src={attachedPreview} alt="Anteprima" className="h-12 w-12 object-cover rounded" />
+                        ) : attachedFile.type.startsWith('audio/') ? (
+                          <Mic className="w-5 h-5 text-gold shrink-0" />
                         ) : (
                           <FileText className="w-5 h-5 text-gold shrink-0" />
                         )}
@@ -1198,10 +1482,19 @@ export default function ChatLayout() {
                     >
                       <Paperclip className="w-4 h-4" />
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsRecording(true)}
+                      disabled={isLoading || isRecording}
+                      className="shrink-0 w-9 h-9 mb-3 flex items-center justify-center text-text3 hover:text-gold transition-colors disabled:opacity-30"
+                      title="Registra audio"
+                    >
+                      <Mic className="w-4 h-4" />
+                    </button>
                     <input
                       ref={fileInputRef}
                       type="file"
-                      accept=".pdf,.png,.jpg,.jpeg,.webp,.txt,.doc,.docx"
+                      accept=".pdf,.png,.jpg,.jpeg,.webp,.txt,.doc,.docx,.mp3,.wav,.webm,.ogg,.m4a"
                       className="hidden"
                       onChange={handleFileSelect}
                     />
@@ -1244,51 +1537,74 @@ export default function ChatLayout() {
           </div>
         </div>
 
-        {/* Right Sidebar — Gestionale */}
+        {/* Right Sidebar — Agent navigation + panel */}
         <aside
           className={`bg-bg2 border-l border-border flex flex-col shrink-0 transition-all duration-200 overflow-hidden ${
-            rightSidebarOpen ? 'w-[220px]' : 'w-0'
+            activePanel ? 'w-[45%]' : 'w-[220px]'
           }`}
         >
-          <div className="px-4 py-3 border-b border-border shrink-0">
-            <span className="text-xs font-semibold text-text3 uppercase tracking-wider">Gestionale</span>
-          </div>
-
-          <nav className="flex-1 overflow-y-auto py-2 px-2 space-y-0.5">
-            <GestionaleSection label="Personale" />
-            <GestionaleLink to="/app/personale" icon={FolderKanban} label="Board & Calendario" />
-
-            <GestionaleSection label="CRM" />
-            <GestionaleLink to="/app/dashboard" icon={LayoutGrid} label="Dashboard" />
-            <GestionaleLink to="/app/leads" icon={Users} label="Leads" />
-            <GestionaleLink to="/app/clienti" icon={UserCheck} label="Clienti" />
-            <GestionaleLink to="/app/preventivi" icon={FileText} label="Preventivi" />
-            <GestionaleLink to="/app/ordini" icon={ShoppingCart} label="Ordini" />
-            <GestionaleLink to="/app/progetti" icon={FolderKanban} label="Progetti" />
-
-            <GestionaleSection label="Fatturazione" />
-            <GestionaleLink to="/app/fatture" icon={Receipt} label="Fatture" />
-            <GestionaleLink to="/app/fatture/ricorrenti" icon={RotateCcw} label="Ricorrenti" />
-            <GestionaleLink to="/app/fatture-passive" icon={FileInput} label="Fatture Passive" />
-            <GestionaleLink to="/app/fornitori" icon={Truck} label="Fornitori" />
-            <GestionaleLink to="/app/conti" icon={Landmark} label="Conti" />
-            <GestionaleLink to="/app/rimborsi" icon={Wallet} label="Rimborsi" />
-
-            <GestionaleSection label="HR" />
-            <GestionaleLink to="/app/hr/simulatore-costo" icon={Calculator} label="Simulatore Costo" />
-            <GestionaleLink to="/app/hr/annunci" icon={Megaphone} label="Annunci Lavoro" />
-            <GestionaleLink to="/app/hr/candidati" icon={UserSearch} label="Candidati" />
-
-            <GestionaleSection label="Documenti" />
-            <GestionaleLink to="/app/documenti" icon={FolderOpen} label="Documenti" />
-
-            <GestionaleSection label="Sistema" />
-            <GestionaleLink to="/app/report" icon={BarChart3} label="Report" />
-            <GestionaleLink to="/app/impostazioni" icon={Settings} label="Impostazioni" />
-          </nav>
+          {activePanel ? (
+            /* Agent Panel expanded */
+            <PanelRouter domain={activePanel} onClose={() => setActivePanel(null)} />
+          ) : (
+            /* Agent navigation list */
+            <>
+              <div className="px-4 py-3 border-b border-border shrink-0">
+                <span className="text-xs font-semibold text-text3 uppercase tracking-wider">Agenti</span>
+              </div>
+              <nav className="flex-1 overflow-y-auto py-2 px-2 space-y-0.5">
+                {agentButtons.map((btn) => (
+                  <button
+                    key={btn.domain}
+                    onClick={() => setActivePanel(btn.domain)}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs text-text2 hover:text-text hover:bg-bg3 transition-colors"
+                  >
+                    <div
+                      className="w-6 h-6 rounded flex items-center justify-center text-[9px] font-bold text-white shrink-0"
+                      style={{ backgroundColor: btn.color }}
+                    >
+                      {btn.initial}
+                    </div>
+                    <span className="truncate">{btn.label}</span>
+                  </button>
+                ))}
+              </nav>
+            </>
+          )}
         </aside>
       </div>
       <UserFilesModal open={filesModalOpen} onClose={() => setFilesModalOpen(false)} />
+      {archiveModal && (
+        <DocumentArchiveModal
+          open={archiveModal.open}
+          onClose={() => setArchiveModal(null)}
+          fileUrl={archiveModal.fileUrl}
+          fileName={archiveModal.fileName}
+          fileSize={archiveModal.fileSize}
+          suggestedCategoria={archiveModal.suggestedCategoria}
+          suggestedTags={archiveModal.suggestedTags}
+          suggestedDescrizione={archiveModal.suggestedDescrizione}
+          extractedText={archiveModal.extractedText}
+          onConfirm={async (data) => {
+            const aziendaId = profile?.azienda_id
+            const userId = user?.id
+            if (!aziendaId || !userId) return
+            const ext = archiveModal.fileName.split('.').pop()?.toLowerCase() || ''
+            await useDocumentiStore.getState().create({
+              azienda_id: aziendaId,
+              nome: data.nome,
+              tipo_file: ext,
+              categoria: data.categoria as any,
+              descrizione: data.descrizione || null,
+              file_url: archiveModal.fileUrl,
+              file_size: archiveModal.fileSize,
+              tags: data.tags.length > 0 ? data.tags : null,
+              contenuto_testo: data.contenuto_testo || null,
+              uploaded_by: userId,
+            })
+          }}
+        />
+      )}
     </div>
   )
 }

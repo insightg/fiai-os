@@ -127,6 +127,27 @@ router.get('/preferences', authMiddleware(true), (req: AuthRequest, res: Respons
   res.json({ content })
 })
 
+// ── GET /api/context/tts-preferences — TTS preferences ──
+router.get('/tts-preferences', authMiddleware(true), (req: AuthRequest, res: Response) => {
+  const aziendaId = req.aziendaId
+  const userId = req.userId
+  if (!aziendaId || !userId) { res.json({ content: '' }); return }
+  const filePath = safePath('aziende', aziendaId, 'users', userId, 'tts-preferences.md')
+  res.json({ content: readContextFile(filePath) })
+})
+
+// ── PUT /api/context/tts-preferences — Save TTS preferences ──
+router.put('/tts-preferences', authMiddleware(true), (req: AuthRequest, res: Response) => {
+  const aziendaId = req.aziendaId
+  const userId = req.userId
+  if (!aziendaId || !userId) { res.status(400).json({ error: 'Dati utente mancanti' }); return }
+  const { content } = req.body
+  if (typeof content !== 'string') { res.status(400).json({ error: 'Contenuto mancante' }); return }
+  const filePath = safePath('aziende', aziendaId, 'users', userId, 'tts-preferences.md')
+  const ok = writeContextFile(filePath, content)
+  res.json({ success: ok })
+})
+
 // ── POST /api/context/refresh — regenerate all contexts ─────
 router.post('/refresh', authMiddleware(true), async (req: AuthRequest, res: Response) => {
   const aziendaId = req.aziendaId

@@ -13,6 +13,9 @@ import contextRouter from './context.js'
 import filesRouter from './files.js'
 import ttsRouter from './tts.js'
 import signalsRouter from './signals.js'
+import pdfRouter from './pdf.js'
+import { startWhatsApp, whatsappRouter } from './whatsapp.js'
+import chatApiRouter from './chat-api.js'
 
 // Run migrations on startup
 const migrationPath = path.join(import.meta.dirname || '.', 'migrations', 'init-sqlite.sql')
@@ -47,6 +50,9 @@ app.use('/api/context', contextRouter)
 app.use('/api/files', filesRouter)
 app.use('/api/tts', ttsRouter)
 app.use('/api/signals', signalsRouter)
+app.use('/api/pdf', pdfRouter)
+app.use('/api/whatsapp', whatsappRouter)
+app.use('/api/chat', chatApiRouter)
 
 // Health check
 app.get('/api/health', (_req, res) => {
@@ -61,6 +67,7 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
 
 app.listen(PORT, () => {
   console.log(`FIAI OS server running on http://localhost:${PORT}`)
+  startWhatsApp().catch(err => console.error('WhatsApp startup error:', err))
 })
 
 export default app

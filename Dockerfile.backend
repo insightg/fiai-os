@@ -10,6 +10,11 @@ COPY . .
 ENV NODE_ENV=production
 ENV PORT=3001
 
+# Install Typst + ffmpeg for PDF generation and audio conversion
+RUN apk add --no-cache curl ffmpeg && \
+    curl -sSL https://github.com/typst/typst/releases/latest/download/typst-x86_64-unknown-linux-musl.tar.xz | tar xJ --strip-components=1 -C /usr/local/bin/ && \
+    typst --version
+
 RUN mkdir -p /app/data/uploads /app/data/context
 
 EXPOSE 3001

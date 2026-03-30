@@ -3,7 +3,7 @@ import { getToolDefinitions, executeTool } from './tool-registry'
 
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions'
 const OPENROUTER_API_KEY = import.meta.env.VITE_OPENROUTER_API_KEY ?? ''
-const MODEL = 'z-ai/glm-5'
+const MODEL = 'anthropic/claude-haiku-4.5'
 
 interface OpenRouterMessage {
   role: 'system' | 'user' | 'assistant' | 'tool'
@@ -143,7 +143,8 @@ export class BaseAgent {
     const tools = getToolDefinitions(this.config.toolNames)
 
     // Build system prompt with optional context injection
-    let systemPrompt = this.config.systemPrompt
+    let systemPrompt = this.config.systemPrompt +
+      '\n\nREGOLA IMPORTANTE: Quando usi un tool che restituisce dati (tabelle, liste, numeri), NON ripetere gli stessi dati in formato tabella markdown nella tua risposta testuale. I dati del tool vengono già visualizzati automaticamente. Nella tua risposta aggiungi solo commenti, analisi, suggerimenti o prossimi passi — mai duplicare i dati.'
     if (context) {
       systemPrompt += '\n\n' + context
     }
@@ -158,6 +159,8 @@ export class BaseAgent {
 
     let response = await callOpenRouter(apiMessages, tools)
     const allToolCalls: Record<string, unknown>[] = []
+    let totalCost = response.usage?.cost ?? 0
+    let totalTokens = response.usage?.total_tokens ?? 0
 
     // Handle tool use loop (non-streaming — need full response for tool_calls)
     while (
@@ -205,8 +208,10 @@ export class BaseAgent {
         onToolUse?.({ toolName: fnName, status: 'done' })
       }
 
-      // Next call: if we have a streaming callback, check if this might be the final call
+      // Next call
       response = await callOpenRouter(apiMessages, tools)
+      totalCost += response.usage?.cost ?? 0
+      totalTokens += response.usage?.total_tokens ?? 0
     }
 
     // Extract final text — if there are no tool calls and we got a non-streaming response, use it
@@ -235,6 +240,8 @@ export class BaseAgent {
       agentName: this.config.name,
       agentDomain: this.config.domain,
       agentColor: this.config.color,
+      totalCost,
+      totalTokens,
     }
   }
 }

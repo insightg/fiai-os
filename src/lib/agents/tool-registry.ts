@@ -5,7 +5,7 @@ import type { AgentToolDefinition, AgentDomain } from './types'
 
 const toolDefinitions: { domain: AgentDomain; definition: AgentToolDefinition['definition'] }[] = [
   {
-    domain: 'finance',
+    domain: 'amministrazione',
     definition: {
       type: 'function' as const,
       function: {
@@ -16,7 +16,7 @@ const toolDefinitions: { domain: AgentDomain; definition: AgentToolDefinition['d
     },
   },
   {
-    domain: 'finance',
+    domain: 'amministrazione',
     definition: {
       type: 'function' as const,
       function: {
@@ -27,7 +27,7 @@ const toolDefinitions: { domain: AgentDomain; definition: AgentToolDefinition['d
     },
   },
   {
-    domain: 'crm',
+    domain: 'commerciale',
     definition: {
       type: 'function' as const,
       function: {
@@ -38,7 +38,7 @@ const toolDefinitions: { domain: AgentDomain; definition: AgentToolDefinition['d
     },
   },
   {
-    domain: 'sales',
+    domain: 'produzione',
     definition: {
       type: 'function' as const,
       function: {
@@ -49,7 +49,7 @@ const toolDefinitions: { domain: AgentDomain; definition: AgentToolDefinition['d
     },
   },
   {
-    domain: 'crm',
+    domain: 'commerciale',
     definition: {
       type: 'function' as const,
       function: {
@@ -70,7 +70,7 @@ const toolDefinitions: { domain: AgentDomain; definition: AgentToolDefinition['d
     },
   },
   {
-    domain: 'finance',
+    domain: 'amministrazione',
     definition: {
       type: 'function' as const,
       function: {
@@ -85,7 +85,7 @@ const toolDefinitions: { domain: AgentDomain; definition: AgentToolDefinition['d
     },
   },
   {
-    domain: 'crm',
+    domain: 'commerciale',
     definition: {
       type: 'function' as const,
       function: {
@@ -96,7 +96,7 @@ const toolDefinitions: { domain: AgentDomain; definition: AgentToolDefinition['d
     },
   },
   {
-    domain: 'analytics',
+    domain: 'amministrazione',
     definition: {
       type: 'function' as const,
       function: {
@@ -107,7 +107,7 @@ const toolDefinitions: { domain: AgentDomain; definition: AgentToolDefinition['d
     },
   },
   {
-    domain: 'finance',
+    domain: 'amministrazione',
     definition: {
       type: 'function' as const,
       function: {
@@ -118,7 +118,7 @@ const toolDefinitions: { domain: AgentDomain; definition: AgentToolDefinition['d
     },
   },
   {
-    domain: 'sales',
+    domain: 'produzione',
     definition: {
       type: 'function' as const,
       function: {
@@ -129,7 +129,7 @@ const toolDefinitions: { domain: AgentDomain; definition: AgentToolDefinition['d
     },
   },
   {
-    domain: 'sales',
+    domain: 'produzione',
     definition: {
       type: 'function' as const,
       function: {
@@ -140,7 +140,7 @@ const toolDefinitions: { domain: AgentDomain; definition: AgentToolDefinition['d
     },
   },
   {
-    domain: 'finance',
+    domain: 'amministrazione',
     definition: {
       type: 'function' as const,
       function: {
@@ -151,7 +151,7 @@ const toolDefinitions: { domain: AgentDomain; definition: AgentToolDefinition['d
     },
   },
   {
-    domain: 'finance',
+    domain: 'amministrazione',
     definition: {
       type: 'function' as const,
       function: {
@@ -184,7 +184,7 @@ const toolDefinitions: { domain: AgentDomain; definition: AgentToolDefinition['d
     },
   },
   {
-    domain: 'documents',
+    domain: 'legal',
     definition: {
       type: 'function' as const,
       function: {
@@ -195,7 +195,7 @@ const toolDefinitions: { domain: AgentDomain; definition: AgentToolDefinition['d
     },
   },
   {
-    domain: 'crm',
+    domain: 'commerciale',
     definition: {
       type: 'function' as const,
       function: {
@@ -241,7 +241,7 @@ const toolDefinitions: { domain: AgentDomain; definition: AgentToolDefinition['d
     },
   },
   {
-    domain: 'documents',
+    domain: 'legal',
     definition: {
       type: 'function' as const,
       function: {
@@ -258,13 +258,204 @@ const toolDefinitions: { domain: AgentDomain; definition: AgentToolDefinition['d
     },
   },
   {
-    domain: 'analytics',
+    domain: 'documents',
+    definition: {
+      type: 'function' as const,
+      function: {
+        name: 'search_documents_deep',
+        description: 'Ricerca approfondita documenti con varianti di query e sintesi RAG',
+        parameters: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: 'Testo da cercare in profondità nei documenti' },
+          },
+          required: ['query'],
+        },
+      },
+    },
+  },
+  {
+    domain: 'documents',
+    definition: {
+      type: 'function' as const,
+      function: {
+        name: 'summarize_document',
+        description: 'Riassume un documento estraendo informazioni chiave (date, parti, importi, obblighi)',
+        parameters: {
+          type: 'object',
+          properties: {
+            documentId: { type: 'string', description: 'ID del documento da riassumere' },
+          },
+          required: ['documentId'],
+        },
+      },
+    },
+  },
+  {
+    domain: 'documents',
+    definition: {
+      type: 'function' as const,
+      function: {
+        name: 'get_document_content',
+        description: 'Legge il contenuto testuale di un documento',
+        parameters: {
+          type: 'object',
+          properties: {
+            documentId: { type: 'string', description: 'ID del documento di cui leggere il contenuto' },
+          },
+          required: ['documentId'],
+        },
+      },
+    },
+  },
+  {
+    domain: 'documents',
+    definition: {
+      type: 'function' as const,
+      function: {
+        name: 'compare_documents',
+        description: 'Confronta due documenti evidenziando somiglianze e differenze',
+        parameters: {
+          type: 'object',
+          properties: {
+            docId1: { type: 'string', description: 'ID del primo documento' },
+            docId2: { type: 'string', description: 'ID del secondo documento' },
+          },
+          required: ['docId1', 'docId2'],
+        },
+      },
+    },
+  },
+  {
+    domain: 'pulse',
     definition: {
       type: 'function' as const,
       function: {
         name: 'get_dashboard_summary',
         description: 'Overview completa: conteggio clienti, leads, fatture, progetti attivi, fatture passive da pagare, candidati',
         parameters: { type: 'object', properties: {} },
+      },
+    },
+  },
+  {
+    domain: 'infra',
+    definition: {
+      type: 'function' as const,
+      function: {
+        name: 'get_api_costs',
+        description: 'Costi API OpenRouter: credito utilizzato totale, giornaliero, settimanale, mensile',
+        parameters: { type: 'object', properties: {} },
+      },
+    },
+  },
+  {
+    domain: 'infra',
+    definition: {
+      type: 'function' as const,
+      function: {
+        name: 'get_signal_analytics',
+        description: 'Statistiche interazioni agenti: conteggio per agente, latenza media, costi per dominio, errori',
+        parameters: { type: 'object', properties: {} },
+      },
+    },
+  },
+  {
+    domain: 'pulse',
+    definition: {
+      type: 'function' as const,
+      function: {
+        name: 'generate_pdf',
+        description: 'Genera un documento PDF professionale. Templates: report_finanziario, lista_clienti, stato_progetti, pipeline_commerciale, report_hr, report_generico',
+        parameters: {
+          type: 'object',
+          properties: {
+            template: { type: 'string', description: 'ID template: report_finanziario, lista_clienti, stato_progetti, pipeline_commerciale, report_hr, report_generico' },
+            data: { type: 'object', description: 'Dati da inserire nel report' },
+            filename: { type: 'string', description: 'Nome del file (senza .pdf)' },
+          },
+          required: ['template', 'data'],
+        },
+      },
+    },
+  },
+  {
+    domain: 'infra',
+    definition: {
+      type: 'function' as const,
+      function: {
+        name: 'get_whatsapp_status',
+        description: 'Stato connessione WhatsApp: connesso/disconnesso, QR code disponibile, sessione attiva',
+        parameters: { type: 'object', properties: {} },
+      },
+    },
+  },
+  {
+    domain: 'infra',
+    definition: {
+      type: 'function' as const,
+      function: {
+        name: 'get_whatsapp_users',
+        description: 'Lista utenti collegati a WhatsApp con numero telefono e account FIAI',
+        parameters: { type: 'object', properties: {} },
+      },
+    },
+  },
+  {
+    domain: 'documents',
+    definition: {
+      type: 'function' as const,
+      function: {
+        name: 'archive_document',
+        description: 'Archivia un documento nel sistema con categoria, tags, descrizione e testo estratto per renderlo ricercabile',
+        parameters: {
+          type: 'object',
+          properties: {
+            nome: { type: 'string', description: 'Nome del documento' },
+            file_url: { type: 'string', description: 'URL del file caricato' },
+            categoria: { type: 'string', description: 'Categoria: legale, pubblicita, documentazione_tecnica, normative, atti, contratti, altro' },
+            tags: { type: 'string', description: 'Tags separati da virgola' },
+            descrizione: { type: 'string', description: 'Descrizione del documento' },
+            contenuto_testo: { type: 'string', description: 'Testo estratto dal documento per la ricerca full-text' },
+          },
+          required: ['nome', 'file_url', 'categoria'],
+        },
+      },
+    },
+  },
+  {
+    domain: 'infra',
+    definition: {
+      type: 'function' as const,
+      function: {
+        name: 'send_whatsapp_voice',
+        description: 'Invia un messaggio vocale WhatsApp a un utente. Genera audio TTS e lo invia come voice note.',
+        parameters: {
+          type: 'object',
+          properties: {
+            phone: { type: 'string', description: 'Numero telefono destinatario' },
+            text: { type: 'string', description: 'Testo da pronunciare nel vocale' },
+            voice: { type: 'string', description: 'Voce TTS (Vivian, Ryan, Serena)' },
+          },
+          required: ['phone', 'text'],
+        },
+      },
+    },
+  },
+  {
+    domain: 'infra',
+    definition: {
+      type: 'function' as const,
+      function: {
+        name: 'send_whatsapp_message',
+        description: 'Invia un messaggio di testo WhatsApp a un utente',
+        parameters: {
+          type: 'object',
+          properties: {
+            phone: { type: 'string', description: 'Numero telefono destinatario' },
+            text: { type: 'string', description: 'Testo del messaggio' },
+          },
+          required: ['phone', 'text'],
+        },
       },
     },
   },
@@ -704,6 +895,123 @@ async function createCandidate(input: CreateCandidateInput): Promise<CreateLeadR
   }
 }
 
+async function searchDocumentsDeep(query: string) {
+  try {
+    const { getAuthToken } = await import('../supabase')
+    const token = getAuthToken() ?? ''
+
+    const res = await fetch('/api/documenti/search-deep', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ query }),
+    })
+
+    if (!res.ok) {
+      return { errore: `Errore nella ricerca approfondita: ${res.status}` }
+    }
+
+    return await res.json()
+  } catch (err) {
+    return { errore: err instanceof Error ? err.message : 'Errore nella ricerca approfondita' }
+  }
+}
+
+async function summarizeDocument(documentId: string) {
+  try {
+    const { getAuthToken } = await import('../supabase')
+    const token = getAuthToken() ?? ''
+
+    const res = await fetch('/api/documenti/summarize', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ documentId }),
+    })
+
+    if (!res.ok) {
+      return { errore: `Errore nel riassunto: ${res.status}` }
+    }
+
+    return await res.json()
+  } catch (err) {
+    return { errore: err instanceof Error ? err.message : 'Errore nel riassunto documento' }
+  }
+}
+
+async function getDocumentContent(documentId: string) {
+  try {
+    const { getAuthToken } = await import('../supabase')
+    const token = getAuthToken() ?? ''
+
+    const res = await fetch(`/api/documenti/content/${documentId}`, {
+      headers: {
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+      },
+    })
+
+    if (!res.ok) {
+      return { errore: `Errore nel recupero contenuto: ${res.status}` }
+    }
+
+    return await res.json()
+  } catch (err) {
+    return { errore: err instanceof Error ? err.message : 'Errore nel recupero contenuto documento' }
+  }
+}
+
+async function compareDocuments(docId1: string, docId2: string) {
+  try {
+    const { getAuthToken } = await import('../supabase')
+    const token = getAuthToken() ?? ''
+
+    // Fetch both documents' content
+    const [res1, res2] = await Promise.all([
+      fetch(`/api/documenti/content/${docId1}`, {
+        headers: { ...(token ? { 'Authorization': `Bearer ${token}` } : {}) },
+      }),
+      fetch(`/api/documenti/content/${docId2}`, {
+        headers: { ...(token ? { 'Authorization': `Bearer ${token}` } : {}) },
+      }),
+    ])
+
+    if (!res1.ok || !res2.ok) {
+      return { errore: 'Impossibile recuperare uno o entrambi i documenti' }
+    }
+
+    const doc1 = await res1.json()
+    const doc2 = await res2.json()
+
+    if (!doc1.contenuto_testo || !doc2.contenuto_testo) {
+      return { errore: 'Uno o entrambi i documenti non hanno contenuto testuale estraibile' }
+    }
+
+    // Call the backend compare endpoint (we'll use summarize-style LLM call via a dedicated endpoint)
+    // For simplicity, we build the comparison request client-side and call a generic LLM endpoint
+    // Actually, let's call the backend to do the comparison
+    const compareRes = await fetch('/api/documenti/compare', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ docId1, docId2 }),
+    })
+
+    if (!compareRes.ok) {
+      return { errore: `Errore nel confronto: ${compareRes.status}` }
+    }
+
+    return await compareRes.json()
+  } catch (err) {
+    return { errore: err instanceof Error ? err.message : 'Errore nel confronto documenti' }
+  }
+}
+
 async function searchDocuments(query: string) {
   try {
     const { getAuthToken } = await import('../supabase')
@@ -779,6 +1087,188 @@ async function getDashboardSummary(): Promise<DashboardSummary> {
   }
 }
 
+// ── API Costs (OpenRouter) ────────────────────────────────
+
+async function getApiCosts() {
+  try {
+    const apiKey = import.meta.env.VITE_OPENROUTER_API_KEY ?? ''
+    const res = await fetch('https://openrouter.ai/api/v1/auth/key', {
+      headers: { 'Authorization': `Bearer ${apiKey}` },
+    })
+    if (!res.ok) return { errore: 'Impossibile recuperare i costi API' }
+    const data = await res.json()
+    const d = data.data ?? {}
+    return {
+      credito_utilizzato_totale: `$${(d.usage ?? 0).toFixed(4)}`,
+      costo_oggi: `$${(d.usage_daily ?? 0).toFixed(4)}`,
+      costo_settimana: `$${(d.usage_weekly ?? 0).toFixed(4)}`,
+      costo_mese: `$${(d.usage_monthly ?? 0).toFixed(4)}`,
+      limite: d.limit ? `$${d.limit}` : 'Nessun limite',
+      limite_residuo: d.limit_remaining ? `$${d.limit_remaining}` : 'N/D',
+      piano: d.is_free_tier ? 'Free' : 'A pagamento',
+    }
+  } catch (err) {
+    return { errore: (err as Error).message }
+  }
+}
+
+// ── Signal Analytics ─────────────────────────────────────
+
+async function getSignalAnalytics() {
+  try {
+    const { getAuthToken } = await import('../supabase')
+    const token = getAuthToken() ?? ''
+    // Read signals from context files via backend
+    const res = await fetch('/api/signals/analytics', {
+      headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+    })
+    if (!res.ok) {
+      // Fallback: return basic info
+      return {
+        note: 'Analytics dettagliate non disponibili. Usa il pannello Infra per visualizzare i dati.',
+      }
+    }
+    return await res.json()
+  } catch {
+    return { note: 'Servizio analytics non raggiungibile' }
+  }
+}
+
+// ── PDF Generation ───────────────────────────────────────────
+
+async function generatePdf(input: { template: string; data: any; filename?: string }) {
+  try {
+    const { getAuthToken } = await import('../supabase')
+    const token = getAuthToken() ?? ''
+
+    const res = await fetch('/api/pdf/generate', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(input),
+    })
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Errore generazione PDF' }))
+      return { successo: false, messaggio: err.error || 'Errore generazione PDF' }
+    }
+
+    const result = await res.json()
+    return { successo: true, url: result.url, filename: result.filename, messaggio: 'PDF generato con successo' }
+  } catch (err) {
+    return { successo: false, messaggio: (err as Error).message }
+  }
+}
+
+// ── WhatsApp Status ──────────────────────────────────────────
+
+async function getWhatsAppStatus() {
+  try {
+    const { getAuthToken } = await import('../supabase')
+    const token = getAuthToken() ?? ''
+    const res = await fetch('/api/whatsapp/status', {
+      headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+    })
+    if (!res.ok) return { errore: 'Impossibile recuperare lo stato WhatsApp' }
+    const data = await res.json()
+    return {
+      stato: data.status === 'connected' ? '🟢 Connesso' : data.status === 'connecting' ? '🟡 In connessione' : '🔴 Disconnesso',
+      qr_disponibile: data.qrCode ? 'Sì' : 'No',
+      sessione_salvata: data.hasAuth ? 'Sì' : 'No',
+      qrImage: data.qrImage || null,
+    }
+  } catch {
+    return { errore: 'Servizio WhatsApp non raggiungibile' }
+  }
+}
+
+async function getWhatsAppUsers() {
+  try {
+    const { getAuthToken } = await import('../supabase')
+    const token = getAuthToken() ?? ''
+    const res = await fetch('/api/whatsapp/users', {
+      headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+    })
+    if (!res.ok) return { errore: 'Impossibile recuperare utenti WhatsApp' }
+    const data = await res.json()
+    return data.users || []
+  } catch {
+    return { errore: 'Servizio WhatsApp non raggiungibile' }
+  }
+}
+
+// ── Archive Document ─────────────────────────────────────────
+
+async function archiveDocument(input: { nome: string; file_url: string; categoria: string; tags: string; descrizione: string; contenuto_testo: string }) {
+  try {
+    const { getAuthToken } = await import('../supabase')
+    const { supabase } = await import('../supabase')
+
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return { successo: false, messaggio: 'Utente non autenticato' }
+
+    const { data: profile } = await supabase.from('user_profiles').select('azienda_id').eq('id', user.id).single()
+    if (!profile) return { successo: false, messaggio: 'Profilo non trovato' }
+
+    const tagsArray = input.tags ? input.tags.split(',').map((t: string) => t.trim()).filter(Boolean) : []
+
+    const { data, error } = await supabase.from('documenti').insert({
+      azienda_id: (profile as any).azienda_id,
+      nome: input.nome,
+      tipo_file: input.file_url.split('.').pop() || 'pdf',
+      categoria: input.categoria || 'altro',
+      descrizione: input.descrizione || null,
+      file_url: input.file_url,
+      tags: tagsArray,
+      contenuto_testo: input.contenuto_testo || null,
+      uploaded_by: user.id,
+    }).select('id').single()
+
+    if (error) return { successo: false, messaggio: error.message }
+    return { successo: true, id: (data as any).id, messaggio: `Documento "${input.nome}" archiviato come ${input.categoria}` }
+  } catch (err) {
+    return { successo: false, messaggio: (err as Error).message }
+  }
+}
+
+// ── WhatsApp Send ────────────────────────────────────────────
+
+async function sendWhatsAppVoice(input: { phone: string; text: string; voice?: string }) {
+  try {
+    const { getAuthToken } = await import('../supabase')
+    const token = getAuthToken() ?? ''
+    const res = await fetch('/api/chat/message', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(token ? { 'Authorization': `Bearer ${token}` } : {}) },
+      body: JSON.stringify({ message: `__internal_tool__:send_whatsapp_voice:${JSON.stringify(input)}` }),
+    })
+    // Actually call the server-side tool directly
+    const res2 = await fetch('/api/whatsapp/send-voice', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(token ? { 'Authorization': `Bearer ${token}` } : {}) },
+      body: JSON.stringify(input),
+    })
+    if (!res2.ok) return { successo: false, messaggio: 'Errore invio vocale' }
+    return await res2.json()
+  } catch (err) { return { successo: false, messaggio: (err as Error).message } }
+}
+
+async function sendWhatsAppMessage(input: { phone: string; text: string }) {
+  try {
+    const { getAuthToken } = await import('../supabase')
+    const token = getAuthToken() ?? ''
+    const res = await fetch('/api/whatsapp/send-message', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(token ? { 'Authorization': `Bearer ${token}` } : {}) },
+      body: JSON.stringify(input),
+    })
+    if (!res.ok) return { successo: false, messaggio: 'Errore invio messaggio' }
+    return await res.json()
+  } catch (err) { return { successo: false, messaggio: (err as Error).message } }
+}
+
 // ── Tool Executor ───────────────────────────────────────────
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type ToolResult = any
@@ -803,7 +1293,19 @@ const executorMap: Record<string, (input: Record<string, unknown>) => Promise<To
   create_client: (input) => createClient(input as unknown as CreateClientInput),
   create_candidate: (input) => createCandidate(input as unknown as CreateCandidateInput),
   search_documents: (input) => searchDocuments((input as { query: string }).query),
+  search_documents_deep: (input) => searchDocumentsDeep((input as { query: string }).query),
+  summarize_document: (input) => summarizeDocument((input as { documentId: string }).documentId),
+  get_document_content: (input) => getDocumentContent((input as { documentId: string }).documentId),
+  compare_documents: (input) => compareDocuments((input as { docId1: string; docId2: string }).docId1, (input as { docId1: string; docId2: string }).docId2),
   get_dashboard_summary: () => getDashboardSummary(),
+  get_api_costs: () => getApiCosts(),
+  get_signal_analytics: () => getSignalAnalytics(),
+  generate_pdf: (input) => generatePdf(input as { template: string; data: any; filename?: string }),
+  get_whatsapp_status: () => getWhatsAppStatus(),
+  get_whatsapp_users: () => getWhatsAppUsers(),
+  send_whatsapp_voice: (input) => sendWhatsAppVoice(input as { phone: string; text: string; voice?: string }),
+  send_whatsapp_message: (input) => sendWhatsAppMessage(input as { phone: string; text: string }),
+  archive_document: (input) => archiveDocument(input as { nome: string; file_url: string; categoria: string; tags: string; descrizione: string; contenuto_testo: string }),
 }
 
 // ── Build Registry ──────────────────────────────────────────

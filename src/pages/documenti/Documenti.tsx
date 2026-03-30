@@ -20,6 +20,8 @@ const categoriaColors: Record<DocumentoCategoria, 'blue' | 'amber' | 'purple' | 
   atti: 'gold',
   contratti: 'green',
   altro: 'gray',
+  amministrazione: 'blue',
+  hr: 'purple',
 }
 
 const categoriaLabels: Record<DocumentoCategoria, string> = {
@@ -30,6 +32,8 @@ const categoriaLabels: Record<DocumentoCategoria, string> = {
   atti: 'Atti',
   contratti: 'Contratti',
   altro: 'Altro',
+  amministrazione: 'Amministrazione',
+  hr: 'HR',
 }
 
 const categoriaOptions: { value: string; label: string }[] = [
@@ -41,6 +45,8 @@ const categoriaOptions: { value: string; label: string }[] = [
   { value: 'atti', label: 'Atti' },
   { value: 'contratti', label: 'Contratti' },
   { value: 'altro', label: 'Altro' },
+  { value: 'amministrazione', label: 'Amministrazione' },
+  { value: 'hr', label: 'HR' },
 ]
 
 function formatFileSize(bytes: number | null): string {

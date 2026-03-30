@@ -1,4 +1,4 @@
-import type { JSX } from 'react'
+import { useState, useEffect, useRef, type JSX } from 'react'
 import Badge from './ui/Badge'
 import {
   TrendingUp,
@@ -18,7 +18,15 @@ import {
   Image,
   Download,
   Volume2,
+  Pencil,
+  Trash2,
+  Plus,
+  X,
 } from 'lucide-react'
+
+export interface ActionContext {
+  onAction?: (action: string, payload: any) => void
+}
 
 function fmt(n: number): string {
   return new Intl.NumberFormat('it-IT', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(n)
@@ -90,14 +98,14 @@ function downloadTableAsCSV(headers: string[], rows: (string | JSX.Element)[][],
   URL.revokeObjectURL(url)
 }
 
-function MiniTable({ headers, rows }: { headers: string[]; rows: (string | JSX.Element)[][] }) {
+function MiniTable({ headers, rows }: { headers: string[]; rows: (string | JSX.Element | null)[][] }) {
   return (
     <div className="overflow-x-auto rounded-lg border border-border mt-1">
       <div className="flex items-center justify-between bg-bg3 px-2 py-1">
         <span className="text-[9px] text-text3">{rows.length} righe</span>
         <button
           title="Esporta CSV"
-          onClick={() => downloadTableAsCSV(headers, rows, `fiai-tabella-${Date.now()}.csv`)}
+          onClick={() => downloadTableAsCSV(headers, rows as (string | JSX.Element)[][], `fiai-tabella-${Date.now()}.csv`)}
           className="p-1 rounded text-text3 hover:text-gold transition-colors"
         >
           <Download size={12} />
@@ -113,7 +121,7 @@ function MiniTable({ headers, rows }: { headers: string[]; rows: (string | JSX.E
         </thead>
         <tbody>
           {rows.map((row, i) => (
-            <tr key={i} className="border-t border-border/50">
+            <tr key={i} className="border-t border-border/50 group/row">
               {row.map((cell, j) => (
                 <td key={j} className="px-2 py-1.5 text-text2">{cell}</td>
               ))}
@@ -128,7 +136,45 @@ function MiniTable({ headers, rows }: { headers: string[]; rows: (string | JSX.E
   )
 }
 
-// ── Renderers per tool ────────────────────────────────
+// ── Action button helpers ─────────────────────────────────
+
+function ActionBtn({ icon: Icon, title, onClick, color = 'text-text3 hover:text-gold' }: {
+  icon: React.ComponentType<{ size?: number }>
+  title: string
+  onClick: (e: React.MouseEvent) => void
+  color?: string
+}) {
+  return (
+    <button
+      title={title}
+      onClick={(e) => { e.stopPropagation(); onClick(e) }}
+      className={`p-0.5 ${color} transition-colors`}
+    >
+      <Icon size={11} />
+    </button>
+  )
+}
+
+function RowActions({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="flex gap-1 opacity-0 group-hover/row:opacity-100 transition-opacity">
+      {children}
+    </div>
+  )
+}
+
+function CreateButton({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="mt-1 text-[10px] text-gold hover:underline flex items-center gap-1"
+    >
+      <Plus size={10} /> {label}
+    </button>
+  )
+}
+
+// ── Renderers per tool ────────────────────────────────────
 
 function renderFinancialSummary(data: any): JSX.Element {
   return (
@@ -145,18 +191,23 @@ function renderFinancialSummary(data: any): JSX.Element {
   )
 }
 
-function renderOverdueInvoices(data: any[]): JSX.Element {
+function renderOverdueInvoices(data: any[], context?: ActionContext): JSX.Element {
   if (!Array.isArray(data) || data.length === 0) {
     return <div className="text-[10px] text-green flex items-center gap-1 mt-1"><CheckCircle2 className="w-3 h-3" /> Nessuna fattura scaduta</div>
   }
   return (
     <MiniTable
-      headers={['N.', 'Cliente', 'Totale', 'Scaduta da']}
+      headers={['N.', 'Cliente', 'Totale', 'Scaduta da', ...(context?.onAction ? [''] : [])]}
       rows={data.slice(0, 8).map(f => [
         f.numero,
         <span className="truncate max-w-[80px] block">{f.cliente_nome}</span>,
         <span className="font-mono">{fmt(f.totale)}</span>,
         <span className="text-red">{f.giorni_scaduta}gg</span>,
+        ...(context?.onAction ? [
+          <RowActions>
+            <ActionBtn icon={CheckCircle2} title="Segna come pagata" color="text-text3 hover:text-green" onClick={() => context.onAction!('mark_paid', { id: f.id })} />
+          </RowActions>
+        ] : []),
       ])}
     />
   )
@@ -177,31 +228,47 @@ function renderPipeline(data: any[]): JSX.Element {
   )
 }
 
-function renderProjects(data: any[]): JSX.Element {
+function renderProjects(data: any[], context?: ActionContext): JSX.Element {
   if (!Array.isArray(data)) return <></>
   return (
     <MiniTable
-      headers={['Progetto', 'Cliente', 'Stato']}
+      headers={['Progetto', 'Cliente', 'Stato', ...(context?.onAction ? [''] : [])]}
       rows={data.slice(0, 8).map(p => [
         <span className="font-medium truncate max-w-[100px] block">{p.nome}</span>,
         <span className="truncate max-w-[80px] block">{p.cliente_nome}</span>,
         <Badge color={statoColors[p.stato] || 'gray'}>{p.stato}</Badge>,
+        ...(context?.onAction ? [
+          <RowActions>
+            <ActionBtn icon={Pencil} title="Modifica" onClick={() => context.onAction!('edit', p)} />
+          </RowActions>
+        ] : []),
       ])}
     />
   )
 }
 
-function renderClients(data: any[]): JSX.Element {
+function renderClients(data: any[], context?: ActionContext): JSX.Element {
   if (!Array.isArray(data)) return <></>
   return (
-    <MiniTable
-      headers={['Nome', 'Tipo', 'Email']}
-      rows={data.slice(0, 10).map(c => [
-        <span className="font-medium">{c.ragione_sociale || `${c.nome} ${c.cognome || ''}`}</span>,
-        <Badge color={c.tipo === 'azienda' ? 'blue' : 'purple'}>{c.tipo}</Badge>,
-        <span className="truncate max-w-[100px] block text-text3">{c.email || '-'}</span>,
-      ])}
-    />
+    <>
+      <MiniTable
+        headers={['Nome', 'Tipo', 'Email', ...(context?.onAction ? [''] : [])]}
+        rows={data.slice(0, 10).map(c => [
+          <span className="font-medium">{c.ragione_sociale || `${c.nome} ${c.cognome || ''}`}</span>,
+          <Badge color={c.tipo === 'azienda' ? 'blue' : 'purple'}>{c.tipo}</Badge>,
+          <span className="truncate max-w-[100px] block text-text3">{c.email || '-'}</span>,
+          ...(context?.onAction ? [
+            <RowActions>
+              <ActionBtn icon={Pencil} title="Modifica" onClick={() => context.onAction!('edit', c)} />
+              <ActionBtn icon={Trash2} title="Elimina" color="text-text3 hover:text-red" onClick={() => context.onAction!('delete', { id: c.id })} />
+            </RowActions>
+          ] : []),
+        ])}
+      />
+      {context?.onAction && (
+        <CreateButton label="Nuovo Cliente" onClick={() => context.onAction!('create', { tool: 'get_clients' })} />
+      )}
+    </>
   )
 }
 
@@ -256,32 +323,49 @@ function renderBankAccounts(data: any[]): JSX.Element {
   )
 }
 
-function renderExpenses(data: any[]): JSX.Element {
+function renderExpenses(data: any[], context?: ActionContext): JSX.Element {
   if (!Array.isArray(data)) return <></>
   return (
     <MiniTable
-      headers={['Descrizione', 'Importo', 'Stato']}
+      headers={['Descrizione', 'Importo', 'Stato', ...(context?.onAction ? [''] : [])]}
       rows={data.slice(0, 8).map(r => [
         <span className="truncate max-w-[120px] block">{r.descrizione}</span>,
         <span className="font-mono">{fmt(r.importo)}</span>,
         <Badge color={statoColors[r.stato] || 'gray'}>{r.stato}</Badge>,
+        ...(context?.onAction && r.stato === 'richiesto' ? [
+          <RowActions>
+            <ActionBtn icon={CheckCircle2} title="Approva" color="text-text3 hover:text-green" onClick={() => context.onAction!('approve', { id: r.id })} />
+            <ActionBtn icon={X} title="Rifiuta" color="text-text3 hover:text-red" onClick={() => context.onAction!('reject', { id: r.id })} />
+          </RowActions>
+        ] : context?.onAction ? [null] : []),
       ])}
     />
   )
 }
 
-function renderCandidates(data: any[]): JSX.Element {
+function renderCandidates(data: any[], context?: ActionContext): JSX.Element {
   if (!Array.isArray(data)) return <></>
   return (
-    <MiniTable
-      headers={['Nome', 'Ruolo', 'Stato', 'Val.']}
-      rows={data.slice(0, 8).map(c => [
-        <span className="font-medium">{c.nome} {c.cognome}</span>,
-        <span className="truncate max-w-[60px] block text-text3">{c.ruolo_candidato || '-'}</span>,
-        <Badge color={statoColors[c.stato] || 'gray'}>{c.stato}</Badge>,
-        c.valutazione ? <span className="text-amber">{'★'.repeat(c.valutazione)}</span> : <span className="text-text3">-</span>,
-      ])}
-    />
+    <>
+      <MiniTable
+        headers={['Nome', 'Ruolo', 'Stato', 'Val.', ...(context?.onAction ? [''] : [])]}
+        rows={data.slice(0, 8).map(c => [
+          <span className="font-medium">{c.nome} {c.cognome}</span>,
+          <span className="truncate max-w-[60px] block text-text3">{c.ruolo_candidato || '-'}</span>,
+          <Badge color={statoColors[c.stato] || 'gray'}>{c.stato}</Badge>,
+          c.valutazione ? <span className="text-amber">{'★'.repeat(c.valutazione)}</span> : <span className="text-text3">-</span>,
+          ...(context?.onAction ? [
+            <RowActions>
+              <ActionBtn icon={Pencil} title="Modifica" onClick={() => context.onAction!('edit', c)} />
+              <ActionBtn icon={Trash2} title="Elimina" color="text-text3 hover:text-red" onClick={() => context.onAction!('delete', { id: c.id })} />
+            </RowActions>
+          ] : []),
+        ])}
+      />
+      {context?.onAction && (
+        <CreateButton label="Nuovo Candidato" onClick={() => context.onAction!('create', { tool: 'get_candidates' })} />
+      )}
+    </>
   )
 }
 
@@ -300,17 +384,171 @@ function renderJobPostings(data: any[]): JSX.Element {
   )
 }
 
-function renderDocuments(data: any[]): JSX.Element {
+function renderDocuments(data: any[], context?: ActionContext): JSX.Element {
   if (!Array.isArray(data)) return <></>
   return (
     <MiniTable
-      headers={['Nome', 'Categoria', 'Tags']}
+      headers={['Nome', 'Categoria', 'Tags', ...(context?.onAction ? [''] : [])]}
       rows={data.slice(0, 8).map(d => [
         <span className="truncate max-w-[100px] block font-medium">{d.nome}</span>,
         <Badge color={statoColors[d.categoria] || 'gray'}>{d.categoria}</Badge>,
         <div className="flex gap-0.5 flex-wrap">{(d.tags || []).slice(0, 2).map((t: string, i: number) => <Badge key={i} color="gray">{t}</Badge>)}</div>,
+        ...(context?.onAction ? [
+          <RowActions>
+            <ActionBtn icon={Trash2} title="Elimina" color="text-text3 hover:text-red" onClick={() => context.onAction!('delete', { id: d.id })} />
+          </RowActions>
+        ] : []),
       ])}
     />
+  )
+}
+
+function renderDeepSearch(result: any, context?: ActionContext): JSX.Element {
+  if (!result) return <></>
+  const data = result.data || result
+  const summary = result.summary || ''
+  const queryVariants = result.queryVariants || []
+
+  return (
+    <div className="space-y-2 mt-1">
+      {queryVariants.length > 0 && (
+        <div className="flex gap-1 flex-wrap">
+          <span className="text-[9px] text-text3">Query:</span>
+          {queryVariants.map((q: string, i: number) => (
+            <Badge key={i} color="gray">{q}</Badge>
+          ))}
+        </div>
+      )}
+      {Array.isArray(data) && data.length > 0 && (
+        <MiniTable
+          headers={['Nome', 'Categoria', 'Descrizione', ...(context?.onAction ? [''] : [])]}
+          rows={data.slice(0, 10).map((d: any) => [
+            <span className="truncate max-w-[120px] block font-medium">{d.nome}</span>,
+            <Badge color={statoColors[d.categoria] || 'gray'}>{d.categoria}</Badge>,
+            <span className="text-[9px] text-text3 truncate max-w-[150px] block">{d.descrizione || '-'}</span>,
+            ...(context?.onAction ? [
+              <RowActions>
+                <ActionBtn icon={FileText} title="Riassumi" color="text-text3 hover:text-gold" onClick={() => context.onAction!('summarize', { documentId: d.id })} />
+              </RowActions>
+            ] : []),
+          ])}
+        />
+      )}
+      {summary && (
+        <div className="bg-bg3 rounded-lg p-2 border border-border">
+          <div className="text-[9px] text-text3 uppercase tracking-wider mb-1 font-medium">Sintesi</div>
+          <div className="text-[10px] text-text leading-relaxed whitespace-pre-wrap">{summary}</div>
+        </div>
+      )}
+      {Array.isArray(data) && data.length === 0 && (
+        <div className="text-[10px] text-text3">Nessun documento trovato.</div>
+      )}
+    </div>
+  )
+}
+
+function renderDocumentSummary(result: any): JSX.Element {
+  if (!result) return <></>
+  if (result.errore) return <div className="text-[10px] text-red mt-1">{result.errore}</div>
+
+  const summary = result.summary || ''
+  const keyInfo = result.keyInfo || {}
+
+  return (
+    <div className="space-y-2 mt-1">
+      {Object.keys(keyInfo).length > 0 && (
+        <div className="grid grid-cols-2 gap-1.5">
+          {Object.entries(keyInfo).map(([key, value]) => (
+            <div key={key} className="bg-bg3 rounded-lg p-1.5 border border-border">
+              <div className="text-[8px] text-text3 uppercase tracking-wider">{key}</div>
+              <div className="text-[10px] text-text font-medium truncate">{String(value)}</div>
+            </div>
+          ))}
+        </div>
+      )}
+      {summary && (
+        <div className="bg-bg3 rounded-lg p-2 border border-border">
+          <div className="text-[10px] text-text leading-relaxed whitespace-pre-wrap">{summary}</div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function RenderDocumentContent({ result }: { result: any }) {
+  const [expanded, setExpanded] = useState(false)
+  if (!result) return <></>
+  if (result.errore) return <div className="text-[10px] text-red mt-1">{result.errore}</div>
+
+  const text = result.contenuto_testo || ''
+  const nome = result.nome || 'Documento'
+  const preview = text.substring(0, 500)
+  const hasMore = text.length > 500
+
+  return (
+    <div className="space-y-1 mt-1">
+      <div className="text-[10px] text-text3 font-medium">{nome}</div>
+      <div className="bg-bg3 rounded-lg p-2 border border-border font-mono text-[9px] text-text leading-relaxed whitespace-pre-wrap max-h-[300px] overflow-y-auto">
+        {expanded ? text : preview}
+        {hasMore && !expanded && '...'}
+      </div>
+      {hasMore && (
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="text-[9px] text-gold hover:underline"
+        >
+          {expanded ? 'Mostra meno' : 'Mostra tutto'}
+        </button>
+      )}
+    </div>
+  )
+}
+
+function renderCompareDocuments(result: any): JSX.Element {
+  if (!result) return <></>
+  if (result.errore) return <div className="text-[10px] text-red mt-1">{result.errore}</div>
+
+  const { similarities = [], differences = [], summary = '', doc1, doc2 } = result
+
+  return (
+    <div className="space-y-2 mt-1">
+      {doc1 && doc2 && (
+        <div className="flex gap-2 text-[9px] text-text3">
+          <Badge color="blue">{doc1.nome}</Badge>
+          <span>vs</span>
+          <Badge color="purple">{doc2.nome}</Badge>
+        </div>
+      )}
+      {similarities.length > 0 && (
+        <div className="bg-bg3 rounded-lg p-2 border border-border">
+          <div className="text-[9px] text-green uppercase tracking-wider mb-1 font-medium">Somiglianze</div>
+          <ul className="space-y-0.5">
+            {similarities.map((s: string, i: number) => (
+              <li key={i} className="text-[10px] text-text flex items-start gap-1">
+                <CheckCircle2 className="w-3 h-3 text-green shrink-0 mt-0.5" />
+                {s}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {differences.length > 0 && (
+        <div className="bg-bg3 rounded-lg p-2 border border-border">
+          <div className="text-[9px] text-amber uppercase tracking-wider mb-1 font-medium">Differenze</div>
+          <ul className="space-y-0.5">
+            {differences.map((d: string, i: number) => (
+              <li key={i} className="text-[10px] text-text flex items-start gap-1">
+                <AlertTriangle className="w-3 h-3 text-amber shrink-0 mt-0.5" />
+                {d}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {summary && (
+        <div className="text-[10px] text-text3 italic">{summary}</div>
+      )}
+    </div>
   )
 }
 
@@ -336,18 +574,244 @@ function renderCreateResult(data: any): JSX.Element {
   return <div className="text-[10px] text-green flex items-center gap-1 mt-1"><CheckCircle2 className="w-3 h-3" />{data.messaggio || 'Creato con successo'}</div>
 }
 
-function renderGeneratedSpeech(data: any): JSX.Element {
-  if (!data?.audioUrl) return <></>
+function AudioPlayer({ url, streaming, streamUrl, streamBody }: { url?: string; streaming?: boolean; streamUrl?: string; streamBody?: Record<string, unknown> }) {
+  const [blobUrl, setBlobUrl] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [isPlaying, setIsPlaying] = useState(false)
+  const [progress, setProgress] = useState(0)
+  const audioRef = useRef<HTMLAudioElement>(null)
+
+  // Streaming mode: POST to streamUrl, read chunks, build blob, auto-play
+  useEffect(() => {
+    if (!streamUrl) return
+
+    let cancelled = false
+    ;(async () => {
+      try {
+        const { getAuthToken } = await import('../lib/supabase')
+        const token = getAuthToken() ?? ''
+        const res = await fetch(streamUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify(streamBody || {}),
+        })
+
+        if (!res.ok || !res.body) {
+          if (!cancelled) setLoading(false)
+          return
+        }
+
+        const reader = res.body.getReader()
+        const chunks: Uint8Array[] = []
+
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done || cancelled) break
+          if (value) {
+            chunks.push(value)
+            if (!cancelled) setProgress(chunks.length)
+          }
+        }
+
+        if (cancelled) return
+
+        const blob = new Blob(chunks, { type: 'audio/mpeg' })
+        const burl = URL.createObjectURL(blob)
+        setBlobUrl(burl)
+        setLoading(false)
+
+        // Auto-play
+        setTimeout(() => {
+          audioRef.current?.play().catch(() => {})
+          setIsPlaying(true)
+        }, 100)
+      } catch {
+        if (!cancelled) setLoading(false)
+      }
+    })()
+
+    return () => { cancelled = true }
+  }, [streamUrl])
+
+  // Non-streaming: fetch blob with auth or use existing URL
+  useEffect(() => {
+    if (streamUrl) return // handled above
+    if (!url) { setLoading(false); return }
+
+    let cancelled = false
+    if (url.startsWith('blob:')) {
+      setBlobUrl(url)
+      setLoading(false)
+      setTimeout(() => { audioRef.current?.play().catch(() => {}); setIsPlaying(true) }, 100)
+      return
+    }
+    ;(async () => {
+      try {
+        const burl = await fetchAuthBlob(url)
+        if (!cancelled) { setBlobUrl(burl); setLoading(false) }
+      } catch {
+        if (!cancelled) setLoading(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [url])
+
+  if (loading) {
+    return (
+      <div className="mt-2 flex items-center gap-2">
+        <div className="w-4 h-4 border-2 border-gold border-t-transparent rounded-full animate-spin" />
+        <span className="text-[10px] text-text3">
+          {progress > 0 ? `Ricezione audio... (${progress} chunks)` : 'Generazione audio in corso...'}
+        </span>
+      </div>
+    )
+  }
+  if (!blobUrl) return <div className="text-[10px] text-red mt-2">Errore caricamento audio</div>
+
   return (
     <div className="mt-2">
-      <audio controls src={data.audioUrl} className="w-full max-w-md" />
-      <a
-        href={data.audioUrl}
-        download={`fiai-speech-${Date.now()}.mp3`}
+      <audio
+        ref={audioRef}
+        controls
+        src={blobUrl}
+        className="w-full max-w-md"
+        onPlay={() => setIsPlaying(true)}
+        onPause={() => setIsPlaying(false)}
+        onEnded={() => setIsPlaying(false)}
+      />
+      <button
+        onClick={() => {
+          const a = document.createElement('a')
+          a.href = blobUrl
+          a.download = `fiai-speech-${Date.now()}.mp3`
+          a.click()
+        }}
         className="inline-flex items-center gap-1.5 mt-2 px-3 py-1.5 text-xs rounded-lg bg-bg3 border border-border text-text3 hover:text-gold hover:border-gold/40 transition-colors"
       >
         <Download size={14} /> Scarica Audio
-      </a>
+      </button>
+    </div>
+  )
+}
+
+function renderGeneratedSpeech(data: any): JSX.Element {
+  if (!data?.audioUrl && !data?.streamUrl) return <></>
+  return <AudioPlayer
+    url={data.audioUrl}
+    streaming={data.streaming}
+    streamUrl={data.streamUrl}
+    streamBody={data.streamBody}
+  />
+}
+
+async function fetchAuthBlob(url: string): Promise<string> {
+  const { getAuthToken } = await import('../lib/supabase')
+  const token = getAuthToken?.() ?? ''
+  const res = await fetch(url, {
+    headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+  })
+  const blob = await res.blob()
+  return URL.createObjectURL(blob)
+}
+
+function PdfActions({ url, filename }: { url: string; filename: string }) {
+  const handleOpen = async () => {
+    try {
+      const blobUrl = await fetchAuthBlob(url)
+      window.open(blobUrl, '_blank')
+    } catch {
+      window.open(url, '_blank')
+    }
+  }
+  const handleDownload = async () => {
+    try {
+      const blobUrl = await fetchAuthBlob(url)
+      const a = document.createElement('a')
+      a.href = blobUrl
+      a.download = filename
+      a.click()
+      URL.revokeObjectURL(blobUrl)
+    } catch {
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename
+      a.click()
+    }
+  }
+  return (
+    <div className="flex gap-2">
+      <button
+        onClick={handleOpen}
+        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-gold text-white hover:bg-gold-l transition-colors"
+      >
+        <FolderOpen size={14} /> Apri PDF
+      </button>
+      <button
+        onClick={handleDownload}
+        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-bg border border-border text-text3 hover:text-gold hover:border-gold/40 transition-colors"
+      >
+        <Download size={14} /> Scarica
+      </button>
+    </div>
+  )
+}
+
+function renderWhatsAppStatus(data: any): JSX.Element {
+  if (!data || data.errore) {
+    return <div className="text-[10px] text-red mt-1">{data?.errore || 'Errore WhatsApp'}</div>
+  }
+  return (
+    <div className="mt-2 bg-bg3 rounded-xl p-3 border border-border">
+      <div className="flex items-center gap-2 mb-2">
+        <span className="text-lg">{data.stato?.includes('Connesso') ? '🟢' : data.stato?.includes('connessione') ? '🟡' : '🔴'}</span>
+        <span className="text-sm font-medium text-text">{data.stato}</span>
+      </div>
+      <div className="text-[10px] text-text3 space-y-0.5">
+        <div>QR disponibile: {data.qr_disponibile}</div>
+        <div>Sessione salvata: {data.sessione_salvata}</div>
+      </div>
+      {data.qr_disponibile === 'Sì' && (
+        <div className="mt-3 flex flex-col items-center">
+          <div className="text-xs text-text2 mb-2 font-medium">Scansiona con WhatsApp:</div>
+          {data.qrImage && (
+            <img
+              src={data.qrImage}
+              alt="WhatsApp QR Code"
+              className="w-48 h-48 rounded-lg border border-border bg-white p-1 mb-2"
+            />
+          )}
+          <a
+            href="/api/whatsapp/qr-page"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-green text-white hover:opacity-90 transition-colors"
+          >
+            Apri QR Code Live (si aggiorna automaticamente)
+          </a>
+          <div className="text-[9px] text-text3 mt-2">Apri WhatsApp → Dispositivi collegati → Collega dispositivo</div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function renderGeneratedPdf(data: any): JSX.Element {
+  if (!data?.url) {
+    if (data?.successo === false) {
+      return <div className="text-[10px] text-red mt-1">{data.messaggio}</div>
+    }
+    return <></>
+  }
+  return (
+    <div className="mt-2 bg-bg3 rounded-xl p-3 border border-border">
+      <div className="flex items-center gap-2 mb-2">
+        <FileText className="w-5 h-5 text-gold" />
+        <span className="text-sm font-medium text-text">{data.filename || 'documento.pdf'}</span>
+      </div>
+      <PdfActions url={data.url} filename={data.filename || 'documento.pdf'} />
     </div>
   )
 }
@@ -395,6 +859,10 @@ const toolIcons: Record<string, React.ComponentType<any>> = {
   create_client: Users,
   create_candidate: UserSearch,
   search_documents: FolderOpen,
+  search_documents_deep: FolderOpen,
+  summarize_document: FileText,
+  get_document_content: FileText,
+  compare_documents: FileText,
   generate_image: Image,
   generate_speech: Volume2,
 }
@@ -420,12 +888,24 @@ export const toolNameMapExtended: Record<string, string> = {
   create_candidate: 'Nuovo candidato',
   approve_expense: 'Approvazione rimborso',
   search_documents: 'Ricerca documenti',
+  search_documents_deep: 'Ricerca Approfondita',
+  summarize_document: 'Riassunto Documento',
+  get_document_content: 'Contenuto Documento',
+  compare_documents: 'Confronto Documenti',
   generate_image: 'Immagine generata',
   analyze_image: 'Analisi immagine',
   generate_speech: 'Sintesi vocale',
+  get_api_costs: 'Costi API',
+  get_signal_analytics: 'Analytics Agenti',
+  generate_pdf: 'Documento PDF',
+  get_whatsapp_status: 'WhatsApp',
+  get_whatsapp_users: 'Utenti WhatsApp',
+  archive_document: 'Documento Archiviato',
+  send_whatsapp_voice: 'Vocale WhatsApp',
+  send_whatsapp_message: 'Messaggio WhatsApp',
 }
 
-export function renderToolResult(toolName: string, result: any): JSX.Element | null {
+export function renderToolResult(toolName: string, result: any, context?: ActionContext): JSX.Element | null {
   if (!result) return null
 
   const Icon = toolIcons[toolName]
@@ -433,20 +913,24 @@ export function renderToolResult(toolName: string, result: any): JSX.Element | n
   const content = (() => {
     switch (toolName) {
       case 'get_financial_summary': return renderFinancialSummary(result)
-      case 'get_overdue_invoices': return renderOverdueInvoices(result)
+      case 'get_overdue_invoices': return renderOverdueInvoices(result, context)
       case 'get_pipeline': return renderPipeline(result)
-      case 'get_projects': return renderProjects(result)
-      case 'get_clients': return renderClients(result)
+      case 'get_projects': return renderProjects(result, context)
+      case 'get_clients': return renderClients(result, context)
       case 'get_suppliers': return renderSuppliers(result)
       case 'get_passive_invoices': return renderInvoicesOrOrders(result, 'fattura')
       case 'get_orders': return renderInvoicesOrOrders(result, 'ordine')
       case 'get_quotes': return renderInvoicesOrOrders(result, 'preventivo')
       case 'get_bank_accounts': return renderBankAccounts(result)
-      case 'get_expenses': return renderExpenses(result)
-      case 'get_candidates': return renderCandidates(result)
+      case 'get_expenses': return renderExpenses(result, context)
+      case 'get_candidates': return renderCandidates(result, context)
       case 'get_job_postings': return renderJobPostings(result)
       case 'get_documents':
-      case 'search_documents': return renderDocuments(result)
+      case 'search_documents': return renderDocuments(result, context)
+      case 'search_documents_deep': return renderDeepSearch(result, context)
+      case 'summarize_document': return renderDocumentSummary(result)
+      case 'get_document_content': return <RenderDocumentContent result={result} />
+      case 'compare_documents': return renderCompareDocuments(result)
       case 'get_dashboard_summary': return renderDashboardSummary(result)
       case 'create_lead':
       case 'create_client':
@@ -454,7 +938,9 @@ export function renderToolResult(toolName: string, result: any): JSX.Element | n
       case 'approve_expense': return renderCreateResult(result)
       case 'generate_image': return renderGeneratedImage(result)
       case 'generate_speech': return renderGeneratedSpeech(result)
-      case 'analyze_image': return null // analysis is shown as text, no special render
+      case 'analyze_image': return null
+      case 'generate_pdf': return renderGeneratedPdf(result)
+      case 'get_whatsapp_status': return renderWhatsAppStatus(result)
       default: return null
     }
   })()

@@ -5,6 +5,9 @@ import Modal from '../../components/ui/Modal'
 import Button from '../../components/ui/Button'
 import { Input, Select } from '../../components/ui/Form'
 import { uploadFatturaPassiva } from '../../lib/upload'
+import type { UploadResult } from '../../lib/upload'
+import DocumentArchiveModal from '../../components/DocumentArchiveModal'
+import { useAuthStore, useDocumentiStore } from '../../store'
 import type { Fornitore, InvoiceRecognitionResult } from '../../types'
 
 interface UploadFatturaModalProps {
@@ -25,6 +28,10 @@ export default function UploadFatturaModal({ open, onClose, fornitori, onSave }:
   const [dragOver, setDragOver] = useState(false)
   const [saving, setSaving] = useState(false)
   const [fileUrl, setFileUrl] = useState<string | null>(null)
+  const [uploadMeta, setUploadMeta] = useState<UploadResult | null>(null)
+  const [showArchiveModal, setShowArchiveModal] = useState(false)
+  const [uploadedFileName, setUploadedFileName] = useState('')
+  const [uploadedFileSize, setUploadedFileSize] = useState(0)
 
   const [form, setForm] = useState({
     fornitore_id: '',
@@ -42,6 +49,10 @@ export default function UploadFatturaModal({ open, onClose, fornitori, onSave }:
     setDragOver(false)
     setSaving(false)
     setFileUrl(null)
+    setUploadMeta(null)
+    setShowArchiveModal(false)
+    setUploadedFileName('')
+    setUploadedFileSize(0)
     setForm({
       fornitore_id: '',
       numero: '',
@@ -91,9 +102,12 @@ export default function UploadFatturaModal({ open, onClose, fornitori, onSave }:
     try {
       const result = await uploadFatturaPassiva(file)
       const recognized = result.recognizedData as InvoiceRecognitionResult | undefined
-      const url = (result.file_url as string) || null
+      const url = result.fileUrl || null
 
       setFileUrl(url)
+      setUploadMeta(result)
+      setUploadedFileName(file.name)
+      setUploadedFileSize(file.size)
 
       if (recognized) {
         const fornitoreId = matchFornitore(recognized)
@@ -163,7 +177,12 @@ export default function UploadFatturaModal({ open, onClose, fornitori, onSave }:
         file_url: fileUrl,
       })
       toast.success('Fattura passiva creata')
-      handleClose()
+      // Show archive modal instead of closing immediately
+      if (fileUrl && uploadMeta) {
+        setShowArchiveModal(true)
+      } else {
+        handleClose()
+      }
     } catch {
       toast.error('Errore nel salvataggio')
     } finally {
@@ -172,6 +191,7 @@ export default function UploadFatturaModal({ open, onClose, fornitori, onSave }:
   }
 
   return (
+    <>
     <Modal open={open} onClose={handleClose} title="Upload Fattura" className="max-w-lg">
       {step === 'upload' && (
         <div
@@ -309,5 +329,41 @@ export default function UploadFatturaModal({ open, onClose, fornitori, onSave }:
         </div>
       )}
     </Modal>
+      {showArchiveModal && fileUrl && uploadMeta && (
+        <DocumentArchiveModal
+          open={showArchiveModal}
+          onClose={() => {
+            setShowArchiveModal(false)
+            handleClose()
+          }}
+          fileUrl={fileUrl}
+          fileName={uploadedFileName}
+          fileSize={uploadedFileSize}
+          suggestedCategoria={uploadMeta.suggestedCategoria || 'amministrazione'}
+          suggestedTags={uploadMeta.suggestedTags || ['fattura', 'passiva']}
+          suggestedDescrizione={uploadMeta.suggestedDescrizione || ''}
+          extractedText={uploadMeta.extractedText || ''}
+          onConfirm={async (data) => {
+            const profile = useAuthStore.getState().profile
+            const user = useAuthStore.getState().user
+            if (!profile?.azienda_id || !user?.id) return
+            const ext = uploadedFileName.split('.').pop()?.toLowerCase() || ''
+            await useDocumentiStore.getState().create({
+              azienda_id: profile.azienda_id,
+              nome: data.nome,
+              tipo_file: ext,
+              categoria: data.categoria as any,
+              descrizione: data.descrizione || null,
+              file_url: fileUrl,
+              file_size: uploadedFileSize,
+              tags: data.tags.length > 0 ? data.tags : null,
+              contenuto_testo: data.contenuto_testo || null,
+              uploaded_by: user.id,
+            })
+            handleClose()
+          }}
+        />
+      )}
+    </>
   )
 }

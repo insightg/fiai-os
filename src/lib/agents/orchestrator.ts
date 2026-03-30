@@ -6,7 +6,8 @@ import { getSuggestions } from './suggestions'
 
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions'
 const OPENROUTER_API_KEY = import.meta.env.VITE_OPENROUTER_API_KEY ?? ''
-const MODEL = 'z-ai/glm-5'
+const CLASSIFIER_MODEL = 'anthropic/claude-haiku-4.5'  // Haiku per classificazione (veloce, obbediente)
+const RESPONSE_MODEL = 'anthropic/claude-haiku-4.5'  // Haiku per risposte dirette
 
 interface ConversationMessage {
   role: 'user' | 'assistant'
@@ -25,28 +26,27 @@ interface OrchestrateResult {
   agentDomain: string
   agentColor: string
   suggestions?: string[]
+  totalCost?: number
+  totalTokens?: number
 }
 
 const CLASSIFICATION_PROMPT =
   'Sei un classificatore di intenti per FIAI, un gestionale aziendale italiano. ' +
   'Analizza il messaggio dell\'utente e classifica il dominio principale. ' +
   'I domini disponibili sono:\n' +
-  '- crm: clienti, lead, pipeline commerciale, creazione clienti/lead\n' +
-  '- finance: fatture, conti bancari, rimborsi, fatture passive, fatture scadute, riepilogo finanziario, liquidità, pagamenti, approvazione spese\n' +
-  '- sales: preventivi, ordini, progetti\n' +
-  '- hr: candidati, annunci lavoro, selezione personale, recruiting\n' +
-  '- documents: documenti aziendali, ricerca documenti, contratti, archivio\n' +
-  '- analytics: dashboard, overview aziendale, fornitori, statistiche generali, riepilogo complessivo\n' +
-  '- image: generazione immagini, disegni, illustrazioni, grafiche, loghi, foto, visualizzazioni, analisi/descrizione di immagini generate, rielaborazione immagini, modifica immagini\n' +
-  '- tts: sintesi vocale, text-to-speech, leggi ad alta voce, pronuncia, voce, clona voce, audio parlato, leggi questo, dì questo, genera audio\n' +
-  '- general: saluti, domande generiche, conversazione, opinioni\n\n' +
-  'Rispondi SOLO con un JSON valido nel formato:\n' +
-  '{"domain": "nome_dominio", "confidence": 0.0-1.0, "needsMultiAgent": false, "secondaryDomains": []}\n\n' +
-  'Se la richiesta coinvolge chiaramente PIU\' domini (es. "dammi fatture e candidati"), ' +
-  'imposta needsMultiAgent: true e includi i domini secondari in secondaryDomains.\n' +
-  'Se l\'utente chiede di generare, creare, disegnare, analizzare, descrivere o modificare un\'immagine, usa SEMPRE il dominio "image".\n' +
-  'Se l\'utente dice "analizzala", "descrivila", "cosa vedi" dopo aver generato un\'immagine, classifica come "image".\n' +
-  'Se l\'utente chiede di leggere ad alta voce, pronunciare, generare audio parlato, sintesi vocale, o clonare una voce, usa SEMPRE il dominio "tts".'
+  '- pulse: overview aziendale, briefing, riepilogo generale, daily brief, come va l\'azienda, stato generale\n' +
+  '- commerciale: clienti, lead, pipeline, prospect, vendita, contatti commerciali, brief pre-call, nuovo cliente\n' +
+  '- produzione: progetti, ordini, milestone, avanzamento, delivery, deadline, rischi progetto, stato progetto\n' +
+  '- marketing: contenuti, campagne, lead scoring, brand, social, immagini, grafiche, genera immagine, crea logo, illustra, post, newsletter\n' +
+  '- amministrazione: fatture, conti, liquidità, scadenze fiscali, rimborsi, budget, fornitori, cash flow, pagamenti, fatturato\n' +
+  '- hr: candidati, annunci lavoro, recruiting, onboarding, costo aziendale, curriculum, selezione\n' +
+  '- legal: contratti, clausole, normative, compliance, documenti legali, privacy, GDPR, analisi contratto, ricerca documenti, riassumi documento, confronta documenti, contenuto documento\n' +
+  '- infra: costi API, performance sistema, monitoring agenti, utenti, ruoli, configurazione, AgentOps\n' +
+  '- tts: sintesi vocale, text-to-speech, leggi ad alta voce, pronuncia, voce, audio, parla, clona voce\n' +
+  '- general: saluti, domande generiche, conversazione\n\n' +
+  'IMPORTANTE: Le richieste di generazione immagini vanno SEMPRE a "marketing".\n' +
+  'Le richieste di leggere, pronunciare o generare audio vanno SEMPRE a "tts".\n' +
+  'Rispondi SOLO con un JSON valido: {"domain": "...", "confidence": 0.0-1.0, "needsMultiAgent": false, "secondaryDomains": []}'
 
 async function classifyIntent(messages: ConversationMessage[]): Promise<ClassificationResult> {
   // Use last 3 messages for context
@@ -66,12 +66,12 @@ async function classifyIntent(messages: ConversationMessage[]): Promise<Classifi
         'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
       },
       body: JSON.stringify({
-        model: MODEL,
+        model: CLASSIFIER_MODEL,
         messages: [
           { role: 'system', content: CLASSIFICATION_PROMPT },
           { role: 'user', content: contextText },
         ],
-        max_tokens: 256,
+        max_tokens: 80,
       }),
     })
 
@@ -89,21 +89,21 @@ async function classifyIntent(messages: ConversationMessage[]): Promise<Classifi
 
     const jsonMatch = fullText.match(/\{[\s\S]*\}/)
     if (!jsonMatch) {
-      console.warn('Classification: no JSON found in response, falling back to analytics')
-      return { domain: 'analytics', confidence: 0.5, needsMultiAgent: false }
+      console.warn('Classification: no JSON found in response, falling back to pulse')
+      return { domain: 'pulse', confidence: 0.5, needsMultiAgent: false }
     }
 
     const parsed = JSON.parse(jsonMatch[0]) as ClassificationResult
-    const validDomains: AgentDomain[] = ['crm', 'finance', 'sales', 'hr', 'documents', 'analytics', 'general', 'image', 'tts']
+    const validDomains: AgentDomain[] = ['pulse', 'commerciale', 'produzione', 'marketing', 'amministrazione', 'hr', 'legal', 'documents', 'infra', 'general', 'image', 'tts']
     if (!validDomains.includes(parsed.domain)) {
-      return { domain: 'analytics', confidence: 0.5, needsMultiAgent: false }
+      return { domain: 'pulse', confidence: 0.5, needsMultiAgent: false }
     }
 
     console.log(`Classification: ${parsed.domain} (confidence: ${parsed.confidence})`)
     return parsed
   } catch (err) {
-    console.warn('Classification error, falling back to analytics:', err)
-    return { domain: 'analytics', confidence: 0.5, needsMultiAgent: false }
+    console.warn('Classification error, falling back to pulse:', err)
+    return { domain: 'pulse', confidence: 0.5, needsMultiAgent: false }
   }
 }
 
@@ -124,7 +124,7 @@ async function directLLMResponse(messages: ConversationMessage[], context?: stri
       'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
     },
     body: JSON.stringify({
-      model: MODEL,
+      model: RESPONSE_MODEL,
       messages: [
         { role: 'system', content: systemPrompt },
         ...messages.map((m) => ({
@@ -170,7 +170,7 @@ async function synthesizeResults(
       'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
     },
     body: JSON.stringify({
-      model: MODEL,
+      model: RESPONSE_MODEL,
       messages: [
         { role: 'system', content: systemPrompt },
         {
@@ -195,6 +195,7 @@ async function synthesizeResults(
 type ResponseMode = 'minimal' | 'iteration' | 'full'
 
 const sessionDomainCache = new Map<string, AgentDomain>()
+const contextCache = new Map<string, { content: string; ts: number }>()
 
 function detectResponseMode(messages: ConversationMessage[]): ResponseMode {
   const lastMsg = messages[messages.length - 1]
@@ -218,12 +219,39 @@ function detectResponseMode(messages: ConversationMessage[]): ResponseMode {
   return 'full'
 }
 
+// Fast keyword classification — avoids LLM call for obvious intents (~3s saved)
+function quickClassifyKeywords(text: string): AgentDomain | null {
+  const t = text.toLowerCase().trim()
+  // TTS — HIGHEST PRIORITY (explicit user intent to use voice)
+  if (/con la mia voce|mia voce|\bleggi\b|leggi.*alta|pronuncia|text.to.speech|\btts\b|\bparla\b|sintesi vocale|genera.*audio|voce.*clona|lista voci|voci disponibili|imposta voce|voce predefinita|impostazioni tts|clona.*voce|wizard.*voce|crea.*voce|registra.*voce/.test(t)) return 'tts'
+  // Commerciale
+  if (/client[ie]|lead[s]?|pipeline|prospect|contatt[io]/.test(t)) return 'commerciale'
+  // Amministrazione
+  if (/fattur|finanz|fatturato|incass|liquid|scadut|conto|saldo|rimbors|spese|pagament|fornitor/.test(t)) return 'amministrazione'
+  // Produzione
+  if (/progett[io]|ordin[ie]|milestone|delivery|avanzament/.test(t)) return 'produzione'
+  // HR
+  if (/candidat|annunci.*lavoro|recruiting|assunzion|cv|curriculum|onboarding/.test(t)) return 'hr'
+  // Documents (upload + search + legal)
+  if (/\[documento caricato|\[documento allegato|archivia.*documento|cataloga|classifica.*file/.test(t)) return 'documents'
+  // Legal
+  if (/\bcontratt|clausol|normativ|compliance|gdpr|\blegal\b|riassumi.*document|confronta.*document|cerca.*document|contenuto.*document/.test(t)) return 'legal'
+  // Marketing
+  if (/immag|disegna|illustra|logo|grafica|\bpost\b|newsletter|contenut|campagna|brand/.test(t)) return 'marketing'
+  // Infra
+  if (/costi? api|performance|monitoring|agenti.*config|utenti.*sistema|health|agentops|whatsapp|qr code/.test(t)) return 'infra'
+  // Pulse
+  if (/overview|riepilog|come va|stato general|daily brief|panoramic|dashboard/.test(t)) return 'pulse'
+  return null
+}
+
 export async function orchestrate(
   messages: ConversationMessage[],
   sessionId: string,
   onToolUse?: (event: ToolUseEvent) => void,
   onTextChunk?: (chunk: string) => void,
-  attachedImageBase64?: string
+  attachedImageBase64?: string,
+  attachedAudioBase64?: string
 ): Promise<OrchestrateResult> {
   const startTime = Date.now()
 
@@ -245,6 +273,8 @@ export async function orchestrate(
       tools: toolsUsed,
       latencyMs,
       agentName: result.agentName,
+      cost: result.totalCost ?? 0,
+      tokens: result.totalTokens ?? 0,
     })
 
     // Run post_execute hook
@@ -321,7 +351,7 @@ export async function orchestrate(
     // fallback to full classification
   }
 
-  // If an image is attached, force image domain for analysis
+  // If an image is attached, force image analysis via imageAgent but tag as marketing
   if (attachedImageBase64) {
     const { imageAgent } = await import('./registry')
     // Store the attached image for analysis
@@ -329,11 +359,35 @@ export async function orchestrate(
       imageAgent.addImageToHistory(sessionId, attachedImageBase64)
     }
     const result = await imageAgent.execute(messages, onTextChunk, sessionId)
-    return finalizeResult(result)
+    return finalizeResult({ ...result, agentDomain: 'marketing' })
   }
 
-  // Step 1: Classify intent
-  const classification = await classifyIntent(messages)
+  // If audio is attached, store it as reference for TTS voice cloning
+  if (attachedAudioBase64 && sessionId) {
+    const { ttsAgent } = await import('./tts-agent')
+    ttsAgent.setReferenceAudio(sessionId, attachedAudioBase64)
+    const text = `Audio di riferimento ricevuto! Ora puoi dire: _"con la mia voce: testo da pronunciare"_ per generare audio con la voce clonata.\n\nOppure scrivi _"clona voce"_ per avviare il wizard di clonazione.`
+    if (onTextChunk) onTextChunk(text)
+    return finalizeResult({
+      text,
+      toolCalls: [],
+      agentName: 'TTS Agent',
+      agentDomain: 'tts',
+      agentColor: '#FF6F00',
+    })
+  }
+
+  // Step 1: Classify intent + prefetch context in PARALLEL
+  const lastText = (typeof messages[messages.length - 1].content === 'string' ? messages[messages.length - 1].content : '').toLowerCase()
+
+  // Fast-path keyword classification (instant, no LLM call — saves ~3s)
+  let classification: ClassificationResult
+  const kwDomain = quickClassifyKeywords(lastText)
+  if (kwDomain) {
+    classification = { domain: kwDomain, confidence: 0.95, needsMultiAgent: false }
+  } else {
+    classification = await classifyIntent(messages)
+  }
 
   // Run post_classify hook
   let hookCtx: HookContext = { messages, domain: classification.domain, confidence: classification.confidence, sessionId }
@@ -346,16 +400,14 @@ export async function orchestrate(
     return finalizeResult(result, classification)
   }
 
-  // Step 2b: Image generation/analysis — uses Gemini model
+  // Step 2b: Normalize image domain to marketing (backward compat for classifier)
   if (classification.domain === 'image') {
-    const { imageAgent } = await import('./registry')
-    const result = await imageAgent.execute(messages, onTextChunk, sessionId)
-    return finalizeResult(result, classification)
+    classification.domain = 'marketing' as AgentDomain
   }
 
   // Step 3: General — direct LLM response (no tools)
   if (classification.domain === 'general') {
-    const context = await buildFullContext('analytics', sessionId).catch(() => '')
+    const context = await buildFullContext('pulse', sessionId).catch(() => '')
     const text = await directLLMResponse(messages, context)
     const result: OrchestrateResult = {
       text,
@@ -407,7 +459,7 @@ export async function orchestrate(
   const agent = getAgent(classification.domain)
   if (!agent) {
     // Fallback to general
-    const context = await buildFullContext('analytics', sessionId).catch(() => '')
+    const context = await buildFullContext('pulse', sessionId).catch(() => '')
     const text = await directLLMResponse(messages, context)
     const result: OrchestrateResult = {
       text,
@@ -419,7 +471,16 @@ export async function orchestrate(
     return finalizeResult(result, classification)
   }
 
-  const context = await buildFullContext(classification.domain, sessionId).catch(() => '')
+  // Context with 60s cache to avoid repeated fetches
+  const cacheKey = `${classification.domain}:${sessionId || ''}`
+  const cached = contextCache.get(cacheKey)
+  let context: string
+  if (cached && Date.now() - cached.ts < 60000) {
+    context = cached.content
+  } else {
+    context = await buildFullContext(classification.domain, sessionId).catch(() => '')
+    contextCache.set(cacheKey, { content: context, ts: Date.now() })
+  }
   const result = await agent.execute(messages, onToolUse, context, onTextChunk)
 
   return finalizeResult(result, classification)
