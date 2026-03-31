@@ -349,7 +349,7 @@ function getSessionId(sender: string): string {
 
 // ── Use shared server-side orchestrator ──────────────────
 
-import { orchestrateServerSide } from './chat-api.js'
+import { handleChatMessage } from './agents/index.js'
 
 async function callAgent(userMessage: string, userId: string, sender: string): Promise<{ text: string; toolCalls: any[]; agentName?: string }> {
   const profile = db.prepare('SELECT * FROM user_profiles WHERE id = ?').get(userId) as any
@@ -361,10 +361,10 @@ async function callAgent(userMessage: string, userId: string, sender: string): P
   // Add user message to history
   addToHistory(sender, 'user', userMessage)
 
-  const result = await orchestrateServerSide(userMessage, userId, aziendaId, {
+  const result = await handleChatMessage(userMessage, userId, aziendaId, {
     format: 'whatsapp',
     sessionId,
-    conversationHistory: history.slice(0, -1), // exclude current message (already passed as `message`)
+    history: history.slice(0, -1), // exclude current message (already passed as `message`)
   })
 
   // Add assistant response to history
@@ -474,7 +474,7 @@ async function sendVoiceNote(targetJid: string, text: string, voice: string = 'V
   })
 }
 
-// Exported for external use (e.g., from chat-api)
+// Exported for external use (e.g., from agents/tool-registry)
 export { sendVoiceNote }
 export function getSock() { return sock }
 

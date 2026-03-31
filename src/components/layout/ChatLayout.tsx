@@ -45,8 +45,10 @@ import {
   X,
   ThumbsUp,
   ThumbsDown,
+  Volume2,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
+import VoiceChat from '../VoiceChat'
 import AudioRecorder from '../AudioRecorder'
 import Badge from '../ui/Badge'
 import { renderToolResult, toolNameMapExtended } from '../ChatToolRenderers'
@@ -64,7 +66,19 @@ import { supabase } from '../../lib/supabase'
 import type { ChatMessage } from '../../types'
 import { useAuthStore, useClientiStore, useLeadsStore, useProgettiStore, useCandidatiStore, useRimborsiStore, useDocumentiStore, useFattureStore } from '../../store'
 import { uploadGeneric } from '../../lib/upload'
-import { rateMessage } from '../../lib/agents/context-client'
+import { getAuthToken } from '../../lib/supabase'
+
+// Rate message via backend API
+async function rateMessageFn(messageId: string, sessionId: string, domain: string, rating: 'up' | 'down') {
+  try {
+    const token = getAuthToken()
+    await fetch('/api/signals/rate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(token ? { 'Authorization': `Bearer ${token}` } : {}) },
+      body: JSON.stringify({ messageId, sessionId, domain, rating }),
+    })
+  } catch { /* fire-and-forget */ }
+}
 import UserFilesModal from '../UserFilesModal'
 import PanelRouter from '../panels/PanelRouter'
 import DocumentArchiveModal from '../DocumentArchiveModal'
@@ -269,7 +283,7 @@ function MessageBubble({ message, activeSessionId, onAction }: { message: Displa
   }, [message.content])
 
   const handleRate = useCallback((rating: 'up' | 'down') => {
-    rateMessage(message.id, activeSessionId || '', message.agentDomain || 'general', rating)
+    rateMessageFn(message.id, activeSessionId || '', message.agentDomain || 'general', rating)
     toast.success(rating === 'up' ? 'Grazie per il feedback!' : 'Feedback registrato')
   }, [message.id, activeSessionId, message.agentDomain])
 
@@ -486,6 +500,8 @@ export default function ChatLayout() {
   const [attachedFile, setAttachedFile] = useState<File | null>(null)
   const [attachedPreview, setAttachedPreview] = useState<string | null>(null)
   const [isRecording, setIsRecording] = useState(false)
+  const [voiceMode, setVoiceMode] = useState(false)
+  const lastResponseRef = useRef('')
 
   // Inline CRUD form state
   const [inlineForm, setInlineForm] = useState<{
@@ -1049,6 +1065,9 @@ export default function ChatLayout() {
             agentColor: result.agentColor,
           }])
         }
+        // Save response for voice chat
+        lastResponseRef.current = result.text
+
         const updatedHistory = [
           ...newHistory,
           { role: 'assistant' as const, content: result.text },
@@ -1445,6 +1464,16 @@ export default function ChatLayout() {
                     onCancel={() => setIsRecording(false)}
                   />
                 )}
+                {voiceMode && (
+                  <VoiceChat
+                    onSendMessage={async (text: string) => {
+                      lastResponseRef.current = ''
+                      await handleSend(text)
+                      return lastResponseRef.current
+                    }}
+                    onClose={() => setVoiceMode(false)}
+                  />
+                )}
                 <div className="bg-bg2 border border-border rounded-2xl shadow-sm focus-within:border-gold/40 focus-within:shadow-md transition-all">
                   {/* Attachment Preview */}
                   {attachedFile && (
@@ -1490,6 +1519,17 @@ export default function ChatLayout() {
                       title="Registra audio"
                     >
                       <Mic className="w-4 h-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setVoiceMode(v => !v)}
+                      disabled={isLoading}
+                      className={`shrink-0 w-9 h-9 mb-3 flex items-center justify-center transition-colors disabled:opacity-30 ${
+                        voiceMode ? 'text-gold' : 'text-text3 hover:text-gold'
+                      }`}
+                      title="Conversazione vocale"
+                    >
+                      <Volume2 className="w-4 h-4" />
                     </button>
                     <input
                       ref={fileInputRef}

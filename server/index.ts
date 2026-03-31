@@ -15,7 +15,7 @@ import ttsRouter from './tts.js'
 import signalsRouter from './signals.js'
 import pdfRouter from './pdf.js'
 import { startWhatsApp, whatsappRouter } from './whatsapp.js'
-import chatApiRouter from './chat-api.js'
+import chatRouter from './agents/index.js'
 
 // Run migrations on startup
 const migrationPath = path.join(import.meta.dirname || '.', 'migrations', 'init-sqlite.sql')
@@ -24,6 +24,9 @@ if (fs.existsSync(migrationPath)) {
   db.exec(sql)
   console.log('SQLite migrations applied.')
 }
+
+// Add tts_voice column if missing
+try { db.exec("ALTER TABLE user_profiles ADD COLUMN tts_voice TEXT DEFAULT 'Vivian'") } catch {}
 
 const app = express()
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001
@@ -52,7 +55,7 @@ app.use('/api/tts', ttsRouter)
 app.use('/api/signals', signalsRouter)
 app.use('/api/pdf', pdfRouter)
 app.use('/api/whatsapp', whatsappRouter)
-app.use('/api/chat', chatApiRouter)
+app.use('/api/chat', chatRouter)
 
 // Health check
 app.get('/api/health', (_req, res) => {

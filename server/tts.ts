@@ -4,6 +4,7 @@ import path from 'path'
 import crypto from 'crypto'
 import { execSync } from 'child_process'
 import { AuthRequest, authMiddleware } from './middleware.js'
+import db from './db.js'
 
 const router = Router()
 
@@ -81,7 +82,7 @@ router.post('/speak', authMiddleware(true), async (req: AuthRequest, res: Respon
 // POST /api/tts/stream — Stream audio directly to browser (for playback while generating)
 router.post('/stream', authMiddleware(true), async (req: AuthRequest, res: Response) => {
   try {
-    const { text, voice = 'Vivian', language = 'it', voiceName } = req.body
+    const { text, voice, language = 'it', voiceName } = req.body
 
     if (!text || typeof text !== 'string' || text.trim().length === 0) {
       res.status(400).json({ error: 'Il campo "text" è obbligatorio.' })
@@ -91,9 +92,21 @@ router.post('/stream', authMiddleware(true), async (req: AuthRequest, res: Respo
     const aziendaId = req.aziendaId || 'unknown'
     const userId = req.userId || 'unknown'
 
-    // If voiceName is a cloned voice, use clone endpoint with streaming
-    if (voiceName) {
-      const voicePath = path.join(UPLOADS_DIR, aziendaId, userId, 'voices', `${voiceName.replace(/[^a-zA-Z0-9_-]/g, '_')}.wav`)
+    // Use user's preferred voice if not explicitly specified
+    let selectedVoiceForStream = voice
+    if (!selectedVoiceForStream) {
+      try {
+        const profile = db.prepare('SELECT tts_voice FROM user_profiles WHERE id = ?').get(userId) as any
+        selectedVoiceForStream = profile?.tts_voice || 'Vivian'
+      } catch {
+        selectedVoiceForStream = 'Vivian'
+      }
+    }
+
+    // Check if selected voice (explicit or user preference) is a cloned voice
+    const cloneVoiceToCheck = voiceName || selectedVoiceForStream
+    if (cloneVoiceToCheck) {
+      const voicePath = path.join(UPLOADS_DIR, aziendaId, userId, 'voices', `${cloneVoiceToCheck.replace(/[^a-zA-Z0-9_-]/g, '_')}.wav`)
       if (fs.existsSync(voicePath)) {
         const refAudio = fs.readFileSync(voicePath).toString('base64')
         const cloneUrl = TTS_API_URL.replace('/v1/audio/speech', '/v1/audio/voice-clone')
@@ -105,28 +118,45 @@ router.post('/stream', authMiddleware(true), async (req: AuthRequest, res: Respo
             ref_audio: refAudio,
             x_vector_only_mode: true,
             language: language === 'it' ? 'Italian' : language,
-            response_format: 'mp3',
+            response_format: 'pcm',
             speed: 1.0,
+            stream: true,
           }),
         })
         if (!response.ok) {
           res.status(502).json({ error: 'Errore clonazione streaming' })
           return
         }
-        res.setHeader('Content-Type', 'audio/mpeg')
+        res.setHeader('Content-Type', 'application/octet-stream')
+        res.setHeader('X-Audio-Format', 'pcm-s16le')
+        res.setHeader('X-Sample-Rate', '24000')
         res.setHeader('Transfer-Encoding', 'chunked')
-        const reader = response.body as any
-        if (reader?.pipe) { reader.pipe(res) }
-        else {
-          const buf = Buffer.from(await response.arrayBuffer())
-          res.end(buf)
+        res.setHeader('Cache-Control', 'no-cache')
+        if (response.body) {
+          const reader = (response.body as any).getReader?.()
+          if (reader) {
+            const pump = async () => {
+              while (true) {
+                const { done, value } = await reader.read()
+                if (done) { res.end(); break }
+                res.write(Buffer.from(value))
+              }
+            }
+            pump().catch(() => res.end())
+          } else if ((response.body as any).pipe) {
+            ;(response.body as any).pipe(res)
+          } else {
+            res.end(Buffer.from(await response.arrayBuffer()))
+          }
+        } else {
+          res.end(Buffer.from(await response.arrayBuffer()))
         }
         return
       }
     }
 
-    // Standard TTS with streaming
-    const selectedVoice = AVAILABLE_VOICES.includes(voice as any) ? voice : 'Vivian'
+    // Standard TTS with real-time PCM streaming
+    const selectedVoice = AVAILABLE_VOICES.includes(selectedVoiceForStream as any) ? selectedVoiceForStream : selectedVoiceForStream
     const langMap: Record<string, string> = { Italian: 'it', it: 'it', English: 'en', en: 'en', French: 'fr', fr: 'fr', Spanish: 'es', es: 'es', German: 'de', de: 'de' }
     const langCode = langMap[language] || 'it'
     const model = langCode === 'it' ? 'tts-1' : `tts-1-${langCode}`
@@ -138,7 +168,7 @@ router.post('/stream', authMiddleware(true), async (req: AuthRequest, res: Respo
         model,
         voice: selectedVoice,
         input: text.trim(),
-        response_format: 'mp3',
+        response_format: 'pcm',
         speed: 1.0,
         stream: true,
       }),
@@ -146,19 +176,21 @@ router.post('/stream', authMiddleware(true), async (req: AuthRequest, res: Respo
 
     if (!response.ok) {
       const errText = await response.text()
+      console.error('TTS stream error:', response.status, errText)
       res.status(502).json({ error: `Errore TTS streaming: ${response.status}` })
       return
     }
 
-    // Stream audio directly to browser using ReadableStream
-    res.setHeader('Content-Type', 'audio/mpeg')
+    // Stream raw PCM (16-bit signed LE, 24kHz mono) to browser
+    res.setHeader('Content-Type', 'application/octet-stream')
+    res.setHeader('X-Audio-Format', 'pcm-s16le')
+    res.setHeader('X-Sample-Rate', '24000')
     res.setHeader('Transfer-Encoding', 'chunked')
     res.setHeader('Cache-Control', 'no-cache')
 
     if (response.body) {
       const reader = (response.body as any).getReader?.()
       if (reader) {
-        // Web ReadableStream (Node 20 fetch)
         const pump = async () => {
           while (true) {
             const { done, value } = await reader.read()
@@ -168,7 +200,6 @@ router.post('/stream', authMiddleware(true), async (req: AuthRequest, res: Respo
         }
         pump().catch(() => res.end())
       } else if ((response.body as any).pipe) {
-        // Node Readable stream
         ;(response.body as any).pipe(res)
       } else {
         const buf = Buffer.from(await response.arrayBuffer())

@@ -34,11 +34,17 @@ const TOOL_SUGGESTIONS: Record<string, string[]> = {
   // Documents/Legal
   get_documents: ['Cerca contratto', 'Normative recenti', 'Analizza documento'],
   search_documents: ['Carica documento', 'Per categoria'],
+
+  // User Management
+  get_users: ['Crea nuovo utente', 'Modifica ruolo', 'Utenti WhatsApp'],
+  create_user: ['Lista utenti', 'Modifica utente', 'Assegna ruolo'],
+  update_user: ['Lista utenti', 'Dettaglio utente'],
+  delete_user: ['Lista utenti'],
 }
 
 // Domain-level fallback suggestions (when no specific tool match)
 const DOMAIN_SUGGESTIONS: Record<string, string[]> = {
-  pulse: ['Overview aziendale', 'Daily brief', 'Alert e priorità', 'Stato generale'],
+  pulse: ['Overview aziendale', 'Daily brief', 'Alert e priorita', 'Stato generale'],
   commerciale: ['Pipeline lead', 'Lista clienti', 'Nuovo lead', 'Brief pre-call'],
   produzione: ['Progetti attivi', 'Milestone prossime', 'Rischi', 'Ordini in corso'],
   marketing: ['Genera immagine', 'Crea post', 'Score lead', 'Contenuti campagna'],
@@ -51,7 +57,7 @@ const DOMAIN_SUGGESTIONS: Record<string, string[]> = {
 
 export function getSuggestions(domain: string, toolsUsed: string[]): string[] {
   // Try tool-specific suggestions first
-  for (const tool of toolsUsed.reverse()) { // most recent tool first
+  for (const tool of [...toolsUsed].reverse()) { // most recent tool first
     const suggestions = TOOL_SUGGESTIONS[tool]
     if (suggestions) return suggestions.slice(0, 4)
   }

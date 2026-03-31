@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS user_profiles (
   avatar_url       TEXT,
   whatsapp_phone   TEXT,
   whatsapp_active  INTEGER DEFAULT 0,
+  tts_voice        TEXT DEFAULT 'Vivian',
   created_at       TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
