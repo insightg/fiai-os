@@ -30,34 +30,13 @@ const imageHistory = new Map<string, string[]>()
 
 // ── Quick Classify Keywords (instant, no LLM call) ─────
 
+// Minimal fast-path — only for cases where the planner would waste time
+// All business domain routing is handled by the planner LLM
 function quickClassifyKeywords(text: string): AgentDomain | null {
   const t = text.toLowerCase().trim()
-  // TTS — HIGHEST PRIORITY
-  if (/con la mia voce|mia voce|\bleggi\b|leggi.*alta|pronuncia|text.to.speech|\btts\b|\bparla\b|sintesi vocale|genera.*audio|voce.*clona|lista voci|voci disponibili|imposta voce|voce predefinita|impostazioni tts|clona.*voce|wizard.*voce|crea.*voce|registra.*voce/.test(t)) return 'tts'
-
-  // Autonomous agents / workflows — route to infra
-  if (/agente autonomo|agenti autonomi|workflow|crea.*monitor|crea.*agente|lista.*agenti|disattiva.*agente|attiva.*agente|log.*agenti/.test(t)) return 'infra'
-  // WhatsApp / messaging commands — route to infra
-  if (/manda.*whatsapp|invia.*whatsapp|scrivi.*whatsapp|messaggio.*whatsapp|whatsapp.*manda|whatsapp.*invia|wapp|vocale.*whatsapp|manda.*messaggio|invia.*messaggio|scrivi.*a\s+\w+/.test(t)) return 'infra'
-
-  // Count how many domains match — if 2+, return null to force LLM multi-agent classification
-  const domainMatches: AgentDomain[] = []
-  if (/client[ie]|lead[s]?|pipeline|prospect|contatt[io]/.test(t)) domainMatches.push('commerciale')
-  if (/fattur|finanz|fatturato|incass|liquid|scadut|conto|saldo|rimbors|spese|pagament|fornitor/.test(t)) domainMatches.push('amministrazione')
-  if (/progett[io]|ordin[ie]|milestone|delivery|avanzament/.test(t)) domainMatches.push('produzione')
-  if (/candidat|annunci.*lavoro|recruiting|assunzion|cv|curriculum|onboarding/.test(t)) domainMatches.push('hr')
-  if (/\bcontratt|clausol|normativ|compliance|gdpr|\blegal\b|riassumi.*document|confronta.*document|cerca.*document|contenuto.*document/.test(t)) domainMatches.push('legal')
-  if (/immag|disegna|illustra|logo|grafica|\bpost\b|newsletter|contenut|campagna|brand/.test(t)) domainMatches.push('marketing')
-  if (/costi? api|performance|monitoring|agenti.*config|utenti.*sistema|gestione utenti|utenti|health|agentops|whatsapp|qr code/.test(t)) domainMatches.push('infra')
-  if (/overview|riepilog|come va|stato general|daily brief|panoramic|dashboard/.test(t)) domainMatches.push('pulse')
-  if (/\[documento caricato|\[documento allegato|archivia.*documento|cataloga|classifica.*file/.test(t)) domainMatches.push('legal')
-
-  // Multi-domain detected → force LLM classification for multi-agent routing
-  if (domainMatches.length >= 2) return null
-
-  // Single domain → fast return
-  if (domainMatches.length === 1) return domainMatches[0]
-
+  // TTS keywords → route to TTS agent
+  if (/\btts\b|sintesi vocale|lista voci|imposta voce|clona.*voce|voce predefinita/.test(t)) return 'tts'
+  // Everything else → let the planner decide
   return null
 }
 
@@ -466,14 +445,17 @@ export async function orchestrate(
   }
 
   // ── FULL: Planner LLM → plan + execute + synthesize ──
+  // Quick classify can override domain for specific cases (TTS)
+  const quickDomain = quickClassifyKeywords(message)
+
   const plan = await createPlan(message, conversationHistory)
-  let planDomain = plan.domain as AgentDomain
+  let planDomain = (quickDomain || plan.domain) as AgentDomain
   if (planDomain === 'image' as any) planDomain = 'marketing' as AgentDomain
   if (planDomain === 'documents' as any) planDomain = 'legal' as AgentDomain
 
   const classification: ClassificationResult = {
     domain: planDomain || 'general',
-    confidence: 0.9,
+    confidence: quickDomain ? 0.95 : 0.9,
     needsMultiAgent: false,
   }
 
@@ -486,190 +468,9 @@ export async function orchestrate(
   }
   await runHooks('post_classify', hookCtx)
 
-  // ── TTS — voice commands ──
-  if (classification.domain === 'tts') {
-    let ttsText = ''
-    const tLower = message.toLowerCase()
-    const TTS_API_URL = process.env.TTS_API_URL || 'http://host.docker.internal:7777/v1/audio/speech'
-    const TTS_BASE = TTS_API_URL.replace('/v1/audio/speech', '')
-    console.log(`[TTS] message="${tLower}", hasAudio=${!!attachedAudioBase64}, audioLen=${attachedAudioBase64?.length || 0}`)
-    const UPLOADS_DIR = process.env.UPLOADS_DIR || '/app/data/uploads'
-
-    // Get available voices
-    let availableVoices = 'Vivian, Serena, Ryan, Dylan, Eric, Aiden'
-    try {
-      const vRes = await fetch(`${TTS_BASE}/v1/voices`, { signal: AbortSignal.timeout(5000) })
-      if (vRes.ok) {
-        const voices = await vRes.json()
-        const names = (voices.voices || voices || []).map((v: any) => v.name || v)
-        if (names.length > 0) availableVoices = names.join(', ')
-      }
-    } catch {}
-
-    // Get current user voice preference
-    const currentVoice = db.prepare("SELECT json_extract(metadata, '$.tts_voice') as tts_voice FROM names WHERE id = ?").get(userId) as any
-    const userVoice = currentVoice?.tts_voice || 'Vivian'
-
-    // Voice cloning: user attached audio + clone command
-    if (attachedAudioBase64 && /clona|crea voce|salva voce|registra voce|wizard voce|con la mia voce|mia voce|audio.*voce|voce.*audio/.test(tLower)) {
-      // Extract voice name from message
-      const nameMatch = tLower.match(/(?:clona|crea|salva|registra|chiama(?:la)?)\s+(?:voce\s+)?(?:come\s+)?["']?(\w+)["']?/i)
-        || tLower.match(/voce\s+["']?(\w+)["']?/i)
-      const voiceName = nameMatch ? nameMatch[1].charAt(0).toUpperCase() + nameMatch[1].slice(1).toLowerCase() : `Clone_${Date.now()}`
-
-      try {
-        const fs = await import('fs')
-        const path = await import('path')
-        const crypto = await import('crypto')
-        const { execSync } = await import('child_process')
-
-        // Clean base64
-        let cleanBase64 = attachedAudioBase64
-        if (cleanBase64.includes(',')) cleanBase64 = cleanBase64.split(',')[1]
-        while (cleanBase64.length % 4 !== 0) cleanBase64 += '='
-
-        // Convert to WAV
-        const tmpDir = path.default.join(UPLOADS_DIR, 'tmp')
-        fs.default.mkdirSync(tmpDir, { recursive: true })
-        const inputFile = path.default.join(tmpDir, `clone-${crypto.default.randomUUID()}.webm`)
-        const outputFile = inputFile.replace('.webm', '.wav')
-        fs.default.writeFileSync(inputFile, Buffer.from(cleanBase64, 'base64'))
-        try {
-          execSync(`ffmpeg -y -i "${inputFile}" -ar 16000 -ac 1 "${outputFile}" 2>/dev/null`, { timeout: 15000 })
-          cleanBase64 = fs.default.readFileSync(outputFile).toString('base64')
-        } catch { /* use original */ }
-
-        // Save voice file
-        const safeName = voiceName.replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 30)
-        const voicesDir = path.default.join(UPLOADS_DIR, aziendaId, userId, 'voices')
-        fs.default.mkdirSync(voicesDir, { recursive: true })
-        const destPath = path.default.join(voicesDir, `${safeName}.wav`)
-
-        if (fs.default.existsSync(outputFile)) {
-          fs.default.renameSync(outputFile, destPath)
-        } else {
-          fs.default.writeFileSync(destPath, Buffer.from(cleanBase64, 'base64'))
-        }
-
-        // Cleanup
-        try { fs.default.unlinkSync(inputFile) } catch {}
-
-        // Test clone with a short phrase
-        const cloneUrl = TTS_API_URL.replace('/v1/audio/speech', '/v1/audio/voice-clone')
-        const testRes = await fetch(cloneUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            input: 'Ciao, questa è la mia voce clonata.',
-            ref_audio: cleanBase64,
-            x_vector_only_mode: true,
-            language: 'Italian',
-            response_format: 'mp3',
-            speed: 1.0,
-          }),
-          signal: AbortSignal.timeout(60000),
-        })
-
-        if (testRes.ok) {
-          // Save test audio
-          const audioDir = path.default.join(UPLOADS_DIR, aziendaId, userId, 'audio')
-          fs.default.mkdirSync(audioDir, { recursive: true })
-          const testFilename = `clone-test-${crypto.default.randomUUID()}.mp3`
-          const testPath = path.default.join(audioDir, testFilename)
-          fs.default.writeFileSync(testPath, Buffer.from(await testRes.arrayBuffer()))
-          const audioUrl = `/api/uploads/${aziendaId}/${userId}/audio/${testFilename}`
-
-          ttsText = `Voce **${safeName}** clonata con successo! Il campione di riferimento e stato salvato.\n\n` +
-            `[Ascolta il test della voce clonata](${audioUrl})\n\n` +
-            `Per usarla scrivi: *imposta voce ${safeName}*`
-        } else {
-          ttsText = `Voce **${safeName}** salvata, ma il test di clonazione ha avuto un problema. ` +
-            `Il modello Base potrebbe essere in fase di caricamento — riprova tra qualche secondo.`
-        }
-      } catch (err: any) {
-        ttsText = `Errore nella clonazione: ${err.message || 'errore sconosciuto'}. Assicurati di allegare un audio chiaro di almeno 5 secondi.`
-      }
-
-      const result: ChatResponse = {
-        text: ttsText,
-        toolCalls: [], agentName: 'Assistente FIAI', agentDomain: 'tts', agentColor: AGENT_COLORS.tts,
-        suggestions: [`Imposta voce ${voiceName}`, 'Lista voci', 'Registra altra voce'],
-      }
-      return finalizeResult(result, classification)
-    }
-
-    if (/lista voci|voci disponibili|quali voci|elenco voci/.test(tLower)) {
-      // Check for cloned voices
-      let clonedVoicesList = ''
-      try {
-        const fs = await import('fs')
-        const path = await import('path')
-        const voicesDir = path.default.join(UPLOADS_DIR, aziendaId, userId, 'voices')
-        if (fs.default.existsSync(voicesDir)) {
-          const cloned = fs.default.readdirSync(voicesDir).filter((f: string) => f.endsWith('.wav')).map((f: string) => f.replace('.wav', ''))
-          if (cloned.length > 0) clonedVoicesList = `\n\n**Voci clonate:** ${cloned.join(', ')}`
-        }
-      } catch {}
-      ttsText = `**Voci predefinite:** ${availableVoices}${clonedVoicesList}\n\n**Voce attuale:** ${userVoice}\n\nPer cambiare voce scrivi: *usa [nome] come voce* o *imposta voce [nome]*\nPer clonare: allega un audio e scrivi *clona voce [nome]*`
-
-    } else if (/imposta voce|usa.*come voce|cambia voce|voce di default|voce predefinita|setta voce|set voice/.test(tLower)) {
-      // Extract voice name from message
-      const voiceMatch = tLower.match(/(?:imposta voce|usa|cambia voce(?:.*?in)?|setta voce|set voice)\s+(\w+)/i)
-        || tLower.match(/(\w+)\s+come voce/)
-      if (voiceMatch) {
-        const requested = voiceMatch[1].charAt(0).toUpperCase() + voiceMatch[1].slice(1).toLowerCase()
-        // Check built-in voices
-        const allVoices = availableVoices.split(', ').map(v => v.trim())
-        // Also check cloned voices
-        let clonedNames: string[] = []
-        try {
-          const fs = await import('fs')
-          const path = await import('path')
-          const voicesDir = path.default.join(UPLOADS_DIR, aziendaId, userId, 'voices')
-          if (fs.default.existsSync(voicesDir)) {
-            clonedNames = fs.default.readdirSync(voicesDir).filter((f: string) => f.endsWith('.wav')).map((f: string) => f.replace('.wav', ''))
-          }
-        } catch {}
-        const allAvailable = [...allVoices, ...clonedNames]
-        const matched = allAvailable.find(v => v.toLowerCase() === requested.toLowerCase())
-        if (matched) {
-          db.prepare("UPDATE names SET metadata = json_set(metadata, '$.tts_voice', ?) WHERE id = ?").run(matched, userId)
-          const isCloned = clonedNames.some(c => c.toLowerCase() === matched.toLowerCase())
-          ttsText = `Voce impostata su **${matched}**${isCloned ? ' (clonata)' : ''}. Tutte le risposte vocali useranno questa voce.`
-        } else {
-          const clonedInfo = clonedNames.length > 0 ? `\n**Clonate:** ${clonedNames.join(', ')}` : ''
-          ttsText = `Voce "${requested}" non trovata.\n**Predefinite:** ${availableVoices}${clonedInfo}`
-        }
-      } else {
-        ttsText = `**Voce attuale:** ${userVoice}\n\nPer cambiare, scrivi: *usa Serena come voce* o *imposta voce Ryan*\n\n**Disponibili:** ${availableVoices}`
-      }
-
-    } else if (/qual.*voce|voce attuale|che voce/.test(tLower)) {
-      ttsText = `La voce attuale e **${userVoice}**.\n\n**Disponibili:** ${availableVoices}`
-
-    } else if (!attachedAudioBase64 && /clona|crea voce|registra voce|wizard voce/.test(tLower)) {
-      ttsText = `Per clonare una voce devi **allegare un audio** di almeno 5 secondi.\n\n` +
-        `1. Clicca il bottone **microfono** per registrare\n` +
-        `2. Parla per almeno 5 secondi in modo chiaro\n` +
-        `3. Scrivi: *clona voce [nome]* insieme all'audio allegato`
-
-    } else {
-      ttsText = `**Comandi vocali disponibili:**\n` +
-        `- **Lista voci** — mostra le voci disponibili\n` +
-        `- **Imposta voce [nome]** — cambia voce (es. *usa Serena come voce*)\n` +
-        `- **Voce attuale** — mostra la voce in uso\n` +
-        `- **Clona voce [nome]** — clona la tua voce (allega un audio di almeno 5 secondi)\n\n` +
-        `**Voce attuale:** ${userVoice}\n` +
-        `Per la conversazione vocale, clicca il bottone altoparlante nell'area di input.`
-    }
-
-    const result: ChatResponse = {
-      text: ttsText,
-      toolCalls: [], agentName: 'Assistente FIAI', agentDomain: 'tts', agentColor: AGENT_COLORS.tts,
-      suggestions: ['Lista voci', 'Voce attuale', 'Clona voce'],
-    }
-    return finalizeResult(result, classification)
-  }
+  // ── TTS — handled by TTS agent (no hardcoded logic) ──
+  // (The TTS agent in config.ts has tools: list_voices, set_voice, get_current_voice, clone_voice, generate_tts)
+  // It goes through the standard agent execution path below.
 
   // ── General — direct LLM response (but execute plan steps if any) ──
   if (classification.domain === 'general' && plan.steps.length === 0) {

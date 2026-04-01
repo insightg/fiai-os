@@ -558,6 +558,7 @@ export default function ChatLayout() {
 
   // File attachment state
   const [attachedFile, setAttachedFile] = useState<File | null>(null)
+  const [isDragging, setIsDragging] = useState(false)
   const [attachedPreview, setAttachedPreview] = useState<string | null>(null)
   const [isRecording, setIsRecording] = useState(false)
   const [voiceMode, setVoiceMode] = useState(false)
@@ -937,15 +938,37 @@ export default function ChatLayout() {
     }
   }, [])
 
+  const processFile = useCallback(async (file: File) => {
+    setSmartUpload({ status: 'analyzing', fileName: file.name, fileSize: file.size, file })
+    await runSmartUpload(file, 'compact')
+  }, [runSmartUpload])
+
   const handleFileSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
     if (fileInputRef.current) fileInputRef.current.value = ''
+    await processFile(file)
+  }, [processFile])
 
-    // Always use compact mode — no depth selection modal
-    setSmartUpload({ status: 'analyzing', fileName: file.name, fileSize: file.size, file })
-    await runSmartUpload(file, 'compact')
-  }, [runSmartUpload])
+  const handleDrop = useCallback(async (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragging(false)
+    const file = e.dataTransfer.files?.[0]
+    if (file) await processFile(file)
+  }, [processFile])
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragging(true)
+  }, [])
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragging(false)
+  }, [])
 
   const removeAttachment = useCallback(() => {
     setAttachedFile(null)
@@ -1421,7 +1444,21 @@ export default function ChatLayout() {
         </aside>
 
         {/* Chat Area - shrinks when panel is open */}
-        <div className="flex-1 flex flex-col min-w-0">
+        <div
+          className="flex-1 flex flex-col min-w-0 relative"
+          onDrop={handleDrop}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+        >
+          {/* Drag overlay */}
+          {isDragging && (
+            <div className="absolute inset-0 z-40 bg-gold/10 border-2 border-dashed border-gold rounded-xl flex items-center justify-center pointer-events-none">
+              <div className="bg-bg2 px-6 py-4 rounded-xl shadow-lg text-center">
+                <p className="text-sm font-medium text-gold">Rilascia il file qui</p>
+                <p className="text-xs text-text3 mt-1">Verrà analizzato automaticamente</p>
+              </div>
+            </div>
+          )}
           {messages.length === 0 && !isLoading ? (
             <EmptyState onQuickCommand={handleQuickCommand} />
           ) : (

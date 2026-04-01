@@ -147,6 +147,12 @@ export const TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     limit: { type: 'number' },
   } } } },
 
+  // ── TTS agent tools ──
+  list_voices: { type: 'function', function: { name: 'list_voices', description: 'Lista tutte le voci disponibili (built-in + clonate dall\'utente)', parameters: { type: 'object', properties: {} } } },
+  set_voice: { type: 'function', function: { name: 'set_voice', description: 'Imposta la voce preferita dell\'utente', parameters: { type: 'object', properties: { voice_name: { type: 'string' } }, required: ['voice_name'] } } },
+  get_current_voice: { type: 'function', function: { name: 'get_current_voice', description: 'Ottieni la voce attuale dell\'utente', parameters: { type: 'object', properties: {} } } },
+  clone_voice: { type: 'function', function: { name: 'clone_voice', description: 'Clona una voce da un audio allegato. L\'utente deve aver allegato un audio nella chat.', parameters: { type: 'object', properties: { name: { type: 'string', description: 'Nome da dare alla voce clonata' } }, required: ['name'] } } },
+
   // ── Agentic RAG retrieve tool ──
   retrieve: { type: 'function', function: { name: 'retrieve', description: 'Cerca DENTRO il contenuto dei documenti caricati. Trova articoli, clausole, definizioni, sezioni specifiche. Usa per domande sul contenuto di documenti, non per cercare documenti per nome.', parameters: { type: 'object', properties: {
     query: { type: 'string', description: 'Cosa cercare nel contenuto (es. "definizione imprenditore", "clausola penale")' },
@@ -492,6 +498,74 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
       })
     }
 
+    // ── TTS AGENT TOOLS ──
+    case 'list_voices': {
+      const TTS_BASE = (process.env.TTS_API_URL || 'http://host.docker.internal:7777/v1/audio/speech').replace('/v1/audio/speech', '')
+      let builtinVoices = ['Vivian', 'Serena', 'Ryan', 'Dylan', 'Eric', 'Aiden']
+      try {
+        const vRes = await fetch(`${TTS_BASE}/v1/voices`, { signal: AbortSignal.timeout(5000) })
+        if (vRes.ok) {
+          const voices = await vRes.json()
+          const names = (voices.voices || voices || []).map((v: any) => v.name || v)
+          if (names.length > 0) builtinVoices = names
+        }
+      } catch {}
+      // Cloned voices
+      const UPLOADS_DIR = process.env.UPLOADS_DIR || '/app/data/uploads'
+      const fs = await import('fs')
+      const path = await import('path')
+      let clonedVoices: string[] = []
+      try {
+        // Find user from aziendaId context — list all voice dirs
+        const voiceDirs = fs.default.readdirSync(path.default.join(UPLOADS_DIR, aziendaId), { withFileTypes: true })
+        for (const d of voiceDirs) {
+          if (d.isDirectory()) {
+            const vDir = path.default.join(UPLOADS_DIR, aziendaId, d.name, 'voices')
+            if (fs.default.existsSync(vDir)) {
+              clonedVoices.push(...fs.default.readdirSync(vDir).filter((f: string) => f.endsWith('.wav')).map((f: string) => f.replace('.wav', '')))
+            }
+          }
+        }
+      } catch {}
+      return { builtin: builtinVoices, clonate: [...new Set(clonedVoices)] }
+    }
+
+    case 'set_voice': {
+      const allVoices = ['Vivian', 'Serena', 'Ryan', 'Dylan', 'Eric', 'Aiden']
+      // Check cloned voices too
+      const fs = await import('fs')
+      const path = await import('path')
+      const UPLOADS_DIR = process.env.UPLOADS_DIR || '/app/data/uploads'
+      try {
+        const dirs = fs.default.readdirSync(path.default.join(UPLOADS_DIR, aziendaId), { withFileTypes: true })
+        for (const d of dirs) {
+          if (d.isDirectory()) {
+            const vDir = path.default.join(UPLOADS_DIR, aziendaId, d.name, 'voices')
+            if (fs.default.existsSync(vDir)) {
+              allVoices.push(...fs.default.readdirSync(vDir).filter((f: string) => f.endsWith('.wav')).map((f: string) => f.replace('.wav', '')))
+            }
+          }
+        }
+      } catch {}
+      const matched = allVoices.find(v => v.toLowerCase() === (input.voice_name as string).toLowerCase())
+      if (!matched) return { errore: `Voce "${input.voice_name}" non trovata. Disponibili: ${allVoices.join(', ')}` }
+      // Save in names metadata — find the user who is making the request
+      const users = db.prepare("SELECT id FROM names WHERE azienda_id = ? AND tags LIKE '%\"utente\"%'").all(aziendaId) as any[]
+      for (const u of users) {
+        db.prepare("UPDATE names SET metadata = json_set(metadata, '$.tts_voice', ?) WHERE id = ?").run(matched, u.id)
+      }
+      return { successo: true, messaggio: `Voce impostata su ${matched}` }
+    }
+
+    case 'get_current_voice': {
+      const users = db.prepare("SELECT display_name, json_extract(metadata, '$.tts_voice') as voice FROM names WHERE azienda_id = ? AND tags LIKE '%\"utente\"%'").all(aziendaId) as any[]
+      return users.map((u: any) => ({ utente: u.display_name, voce: u.voice || 'Vivian' }))
+    }
+
+    case 'clone_voice': {
+      return { errore: 'Per clonare una voce, allega un audio nella chat e scrivi "clona voce [nome]".' }
+    }
+
     // ── AGENTIC RAG RETRIEVE ──
     case 'retrieve': {
       const limit = Math.min(input.limit as number || 5, 10)
@@ -527,17 +601,27 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
       const hasGoodResults = directResults.length >= 2 && bestRank > 5
 
       if (!hasGoodResults && allChunks.size < limit) {
-        // Step 3: Try simple query reformulations (no LLM call — just heuristics)
-        const words = query.split(/\s+/).filter(w => w.length > 2)
-        if (words.length > 1) {
-          // Try individual words
-          for (const w of words) {
-            const r = ftsSearch(w)
-            for (const row of r) allChunks.set(row.id, row)
-          }
+        // Step 3: Try individual words from query
+        const words = query.split(/\s+/).filter((w: string) => w.length > 2)
+        for (const w of words) {
+          for (const row of ftsSearch(w)) allChunks.set(row.id, row)
         }
 
-        // Step 4: LIKE fallback if FTS found nothing
+        // Step 4: LLM generates smarter query variants (truly agentic)
+        // Always try this if results are insufficient — the LLM understands
+        // that "successioni" needs "eredità testamento Art. 456 apertura"
+        if (allChunks.size < limit) {
+          try {
+            const { generateSearchQueries } = await import('../ai.js')
+            const variants = await generateSearchQueries(query)
+            console.log(`[Retrieve] LLM variants for "${query}":`, variants)
+            for (const v of variants.slice(0, 3)) {
+              for (const row of ftsSearch(v)) allChunks.set(row.id, row)
+            }
+          } catch {}
+        }
+
+        // Step 5: LIKE fallback if still nothing
         if (allChunks.size === 0) {
           try {
             let sql = `SELECT e.id, e.display_name, e.parent_id,
@@ -552,17 +636,6 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
             if (input.doc_id) { sql += ' AND e.parent_id = ?'; params.push(input.doc_id) }
             sql += ` LIMIT ${limit}`
             for (const row of db.prepare(sql).all(...params) as any[]) allChunks.set(row.id, row)
-          } catch {}
-        }
-
-        // Step 5: Only use LLM judge if still no results (rare case)
-        if (allChunks.size === 0) {
-          try {
-            const { generateSearchQueries } = await import('../ai.js')
-            const variants = await generateSearchQueries(query)
-            for (const v of variants.slice(0, 2)) {
-              for (const row of ftsSearch(v)) allChunks.set(row.id, row)
-            }
           } catch {}
         }
       }
