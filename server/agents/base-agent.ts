@@ -60,7 +60,12 @@ export async function executeAgent(
 
   // Build system prompt with context
   let systemPrompt = agent.systemPrompt +
-    '\n\nREGOLA IMPORTANTE: Quando usi un tool che restituisce dati (tabelle, liste, numeri), NON ripetere gli stessi dati in formato tabella markdown nella tua risposta testuale. I dati del tool vengono gia visualizzati automaticamente. Nella tua risposta aggiungi solo commenti, analisi, suggerimenti o prossimi passi — mai duplicare i dati.'
+    '\n\nREGOLE FONDAMENTALI:' +
+    '\n1. FONTI: Rispondi ESCLUSIVAMENTE in base ai dati presenti nel sistema (names, entity, documenti caricati). NON inventare dati, NON usare conoscenze esterne a meno che l\'utente non lo chieda esplicitamente.' +
+    '\n2. Se NON trovi l\'informazione nei dati del sistema, dillo chiaramente: "Non ho trovato questa informazione nell\'archivio." NON inventare contenuti, NON suggerire siti web, NON fornire informazioni da fonti esterne. Se pensi che una ricerca web possa aiutare, chiedi: "Vuoi che cerchi sul web?" — ma non farlo autonomamente e non suggerire URL specifici.' +
+    '\n3. Quando citi dati o testi da documenti, riporta il testo LETTERALMENTE come trovato nel sistema — non riformulare, non parafrasare, non interpretare. Usa virgolette e indica la fonte esatta (nome documento, articolo, sezione).' +
+    '\n4. NON ripetere in formato tabella markdown i dati che il tool renderer mostra già automaticamente. Aggiungi solo commenti, analisi e prossimi passi.' +
+    '\n5. Se ricevi RISULTATI TOOL già eseguiti dal planner, NON richiamare gli stessi tool. I dati sono già disponibili — usali direttamente nella risposta.'
 
   if (context) {
     systemPrompt += '\n\n' + context
@@ -71,10 +76,11 @@ export async function executeAgent(
   }
   systemPrompt += '\nNon ripetere i dati grezzi dei tool nella risposta. Sintetizza in modo leggibile.'
 
-  // Profile context from DB
-  const profile = db.prepare('SELECT nome, cognome, ruolo FROM user_profiles WHERE id = ?').get(userId) as any
-  if (profile) {
-    systemPrompt += `\nUtente: ${profile.nome} ${profile.cognome} (${profile.ruolo})`
+  // Profile context from names (VFS)
+  const nameProfile = db.prepare("SELECT display_name, metadata FROM names WHERE id = ?").get(userId) as any
+  if (nameProfile) {
+    const meta = typeof nameProfile.metadata === 'string' ? JSON.parse(nameProfile.metadata) : (nameProfile.metadata || {})
+    systemPrompt += `\nUtente: ${nameProfile.display_name} (${meta.ruolo || 'collaboratore'})`
   }
 
   const apiMessages: any[] = [

@@ -466,3 +466,112 @@ export interface ChatMessage {
   tool_calls: Record<string, unknown>[] | null
   created_at: string
 }
+
+// ══════════════════════════════════════════════════════════
+// VFS v5 — Virtual Filesystem Types
+// ══════════════════════════════════════════════════════════
+
+export interface Name {
+  id: string
+  azienda_id: string | null
+  display_name: string
+  slug: string
+  email: string | null
+  telefono: string | null
+  piva: string | null
+  tags: string[]
+  stato: string | null
+  metadata: Record<string, unknown>
+  path: string
+  created_at: string
+  updated_at: string
+}
+
+export interface Entity {
+  id: string
+  azienda_id: string
+  type: string
+  display_name: string
+  slug: string
+  stato: string | null
+  name_id: string | null
+  parent_id: string | null
+  user_id: string | null
+  file_url: string | null
+  numero: string | null
+  data: string | null
+  totale: number | null
+  metadata: Record<string, unknown>
+  path: string
+  ordine: number
+  created_at: string
+  updated_at: string
+  // Resolved from joins
+  name_display?: string
+  name?: Name
+  children?: Entity[]
+}
+
+export interface Relation {
+  id: string
+  azienda_id: string | null
+  from_type: 'name' | 'entity'
+  from_id: string
+  to_type: 'name' | 'entity'
+  to_id: string
+  tipo: string
+  metadata: Record<string, unknown>
+  created_at: string
+}
+
+// ── Layout Descriptor for Dynamic UI ─────────────────────
+
+export interface LayoutColumn {
+  key: string
+  label: string
+  type?: 'text' | 'number' | 'currency' | 'date' | 'badge' | 'email' | 'phone' | 'tags' | 'percent'
+  width?: string
+}
+
+export interface LayoutField {
+  key: string
+  label: string
+  type?: 'text' | 'email' | 'phone' | 'number' | 'currency' | 'date' | 'select' | 'textarea' | 'tags' | 'file'
+  required?: boolean
+  options?: { value: string; label: string }[]
+  placeholder?: string
+  defaultValue?: unknown
+}
+
+export interface LayoutDescriptor {
+  view: 'list' | 'kanban' | 'detail' | 'form' | 'chart' | 'calendar' | 'grid' | 'tree'
+  title: string
+  source?: {
+    table: 'names' | 'entity'
+    type?: string
+    tags?: string[]
+    filters?: Record<string, unknown>
+    sort?: string
+    limit?: number
+  }
+  columns?: LayoutColumn[]
+  kanban?: {
+    groupBy: string
+    groups: { value: string; label: string; color: string }[]
+    cardTitle: string
+    cardSubtitle?: string
+    cardValue?: string
+  }
+  sections?: { title: string; fields: { key: string; label: string; type?: string }[] }[]
+  tabs?: { id: string; label: string; source: { table: string; type?: string; filters?: Record<string, unknown> }; columns?: LayoutColumn[] }[]
+  fields?: LayoutField[]
+  chart?: {
+    type: 'bar' | 'pie' | 'line' | 'donut'
+    data: { label: string; value: number; color?: string }[]
+  }
+  calendar?: { dateField: string; endDateField?: string; titleField: string; colorField?: string }
+  actions?: ('create' | 'edit' | 'delete' | 'export' | 'convert' | 'relate')[]
+  createForm?: { fields: LayoutField[] }
+  editForm?: { fields: LayoutField[] }
+  data?: unknown[]
+}

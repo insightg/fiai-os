@@ -34,6 +34,12 @@ export interface ChatResponse {
   suggestions?: string[]
   totalCost?: number
   totalTokens?: number
+  reasoning?: {
+    steps: { tool: string; description: string; result_summary: string }[]
+    domain: string
+    thinking: string
+    latencyMs?: number
+  }
 }
 
 export interface ToolDefinition {

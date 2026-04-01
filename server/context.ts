@@ -208,62 +208,27 @@ function generateGlobalContext(aziendaId: string): string {
   const now = new Date().toISOString().slice(0, 16).replace('T', ' ')
   const yearStart = new Date().getFullYear() + '-01-01'
 
-  // Company info
-  const azienda = db.prepare('SELECT * FROM aziende WHERE id = ?').get(aziendaId) as Record<string, string> | undefined
+  // Company info from names (VFS)
+  const azienda = db.prepare("SELECT display_name as nome, piva, email, metadata FROM names WHERE id = ? AND tags LIKE '%\"organizzazione\"%'").get(aziendaId) as any
+  const aziendaMeta = azienda?.metadata ? (typeof azienda.metadata === 'string' ? JSON.parse(azienda.metadata) : azienda.metadata) : {}
 
-  // Counts
-  const clienti = queryScalar('SELECT COUNT(*) as c FROM clienti WHERE azienda_id = ?', [aziendaId])
-  const leadTotali = queryScalar('SELECT COUNT(*) as c FROM leads WHERE azienda_id = ?', [aziendaId])
-  const leadProposta = queryScalar("SELECT COUNT(*) as c FROM leads WHERE azienda_id = ? AND stato = 'proposta'", [aziendaId])
-  const leadNuovi = queryScalar("SELECT COUNT(*) as c FROM leads WHERE azienda_id = ? AND stato = 'nuovo'", [aziendaId])
+  // Names counts
+  const clienti = queryScalar("SELECT COUNT(*) as c FROM names WHERE azienda_id = ? AND tags LIKE '%\"cliente\"%'", [aziendaId])
+  const leadTotali = queryScalar("SELECT COUNT(*) as c FROM names WHERE azienda_id = ? AND tags LIKE '%\"lead\"%'", [aziendaId])
+  const leadProposta = queryScalar("SELECT COUNT(*) as c FROM names WHERE azienda_id = ? AND tags LIKE '%\"lead\"%' AND stato = 'proposta'", [aziendaId])
+  const leadNuovi = queryScalar("SELECT COUNT(*) as c FROM names WHERE azienda_id = ? AND tags LIKE '%\"lead\"%' AND stato = 'nuovo'", [aziendaId])
+  const candidatiInCorso = queryScalar("SELECT COUNT(*) as c FROM names WHERE azienda_id = ? AND tags LIKE '%\"candidato\"%' AND stato IN ('nuovo','screening','colloquio','offerta')", [aziendaId])
 
-  // Financial
-  const fatturatoYTD = queryScalar(
-    "SELECT COALESCE(SUM(totale), 0) as c FROM fatture WHERE azienda_id = ? AND stato = 'pagata' AND data >= ?",
-    [aziendaId, yearStart]
-  )
-  const daIncassare = queryScalar(
-    "SELECT COALESCE(SUM(totale), 0) as c FROM fatture WHERE azienda_id = ? AND stato IN ('emessa','inviata_sdi')",
-    [aziendaId]
-  )
-  const fattureScaduteCount = queryScalar(
-    "SELECT COUNT(*) as c FROM fatture WHERE azienda_id = ? AND scadenza < date('now') AND stato NOT IN ('pagata','stornata')",
-    [aziendaId]
-  )
-  const fattureScaduteImporto = queryScalar(
-    "SELECT COALESCE(SUM(totale), 0) as c FROM fatture WHERE azienda_id = ? AND scadenza < date('now') AND stato NOT IN ('pagata','stornata')",
-    [aziendaId]
-  )
-  const liquidita = queryScalar(
-    'SELECT COALESCE(SUM(saldo), 0) as c FROM conti WHERE azienda_id = ?',
-    [aziendaId]
-  )
-
-  // Projects & Orders
-  const progettiAttivi = queryScalar(
-    "SELECT COUNT(*) as c FROM progetti WHERE azienda_id = ? AND stato IN ('pianificato','in_corso')",
-    [aziendaId]
-  )
-  const ordiniInLavorazione = queryScalar(
-    "SELECT COUNT(*) as c FROM ordini WHERE azienda_id = ? AND stato IN ('confermato','in_lavorazione')",
-    [aziendaId]
-  )
-
-  // HR
-  const candidatiInCorso = queryScalar(
-    "SELECT COUNT(*) as c FROM candidati WHERE azienda_id = ? AND stato IN ('nuovo','screening','colloquio','offerta')",
-    [aziendaId]
-  )
-  const annunciPubblicati = queryScalar(
-    "SELECT COUNT(*) as c FROM annunci_lavoro WHERE azienda_id = ? AND stato = 'pubblicato'",
-    [aziendaId]
-  )
-
-  // Documents
-  const documentiCount = queryScalar(
-    'SELECT COUNT(*) as c FROM documenti WHERE azienda_id = ?',
-    [aziendaId]
-  )
+  // Entity counts
+  const fatturatoYTD = queryScalar("SELECT COALESCE(SUM(totale), 0) as c FROM entity WHERE azienda_id = ? AND type = 'fattura' AND stato = 'pagata' AND data >= ?", [aziendaId, yearStart])
+  const daIncassare = queryScalar("SELECT COALESCE(SUM(totale), 0) as c FROM entity WHERE azienda_id = ? AND type = 'fattura' AND stato IN ('emessa','inviata_sdi')", [aziendaId])
+  const fattureScaduteCount = queryScalar("SELECT COUNT(*) as c FROM entity WHERE azienda_id = ? AND type = 'fattura' AND json_extract(metadata, '$.scadenza') < date('now') AND stato NOT IN ('pagata','stornata')", [aziendaId])
+  const fattureScaduteImporto = queryScalar("SELECT COALESCE(SUM(totale), 0) as c FROM entity WHERE azienda_id = ? AND type = 'fattura' AND json_extract(metadata, '$.scadenza') < date('now') AND stato NOT IN ('pagata','stornata')", [aziendaId])
+  const liquidita = queryScalar("SELECT COALESCE(SUM(json_extract(metadata, '$.saldo')), 0) as c FROM entity WHERE azienda_id = ? AND type = 'conto'", [aziendaId])
+  const progettiAttivi = queryScalar("SELECT COUNT(*) as c FROM entity WHERE azienda_id = ? AND type = 'progetto' AND stato IN ('pianificato','in_corso')", [aziendaId])
+  const ordiniInLavorazione = queryScalar("SELECT COUNT(*) as c FROM entity WHERE azienda_id = ? AND type = 'ordine' AND stato IN ('confermato','in_lavorazione')", [aziendaId])
+  const annunciPubblicati = queryScalar("SELECT COUNT(*) as c FROM entity WHERE azienda_id = ? AND type = 'annuncio' AND stato = 'pubblicato'", [aziendaId])
+  const documentiCount = queryScalar("SELECT COUNT(*) as c FROM entity WHERE azienda_id = ? AND type = 'documento'", [aziendaId])
 
   const fmt = (n: number) => n.toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
@@ -273,7 +238,7 @@ Aggiornato: ${now}
 ## Azienda
 - Nome: ${azienda?.nome ?? 'N/D'}
 - P.IVA: ${azienda?.piva ?? 'N/D'}
-- Sede: ${azienda?.citta ?? ''} ${azienda?.provincia ? '(' + azienda.provincia + ')' : ''}
+- Sede: ${aziendaMeta?.citta ?? ''} ${aziendaMeta?.provincia ? '(' + aziendaMeta.provincia + ')' : ''}
 - Email: ${azienda?.email ?? 'N/D'}
 
 ## KPI Aziendali
@@ -306,9 +271,12 @@ Aggiornato: ${now}
 }
 
 function generateUserProfile(aziendaId: string, userId: string): string {
-  const profile = db.prepare('SELECT * FROM user_profiles WHERE id = ? AND azienda_id = ?').get(userId, aziendaId) as Record<string, string> | undefined
-  if (!profile) return '# Profilo Utente\nProfilo non trovato.\n'
+  const name = db.prepare("SELECT display_name, email, telefono, tags, metadata FROM names WHERE id = ?").get(userId) as any
+  if (!name) return '# Profilo Utente\nProfilo non trovato.\n'
 
+  const meta = typeof name.metadata === 'string' ? JSON.parse(name.metadata) : (name.metadata || {})
+  const tags = typeof name.tags === 'string' ? JSON.parse(name.tags) : (name.tags || [])
+  const ruolo = meta.ruolo || (tags.includes('admin') ? 'admin' : 'collaboratore')
   const permessi: Record<string, string> = {
     admin: 'Accesso completo a tutte le funzionalità',
     collaboratore: 'Accesso a CRM, vendite, documenti. Limitato su finanza e HR.',
@@ -316,213 +284,154 @@ function generateUserProfile(aziendaId: string, userId: string): string {
   }
 
   return `# Profilo Utente
-- Nome: ${profile.nome} ${profile.cognome}
-- Ruolo: ${profile.ruolo}
-- Email: ${profile.email}
-- Permessi: ${permessi[profile.ruolo] ?? 'Standard'}
+- Nome: ${name.display_name}
+- Ruolo: ${ruolo}
+- Email: ${name.email || 'N/D'}
+- Telefono: ${name.telefono || 'N/D'}
+- Tags: ${tags.join(', ')}
+- Voce TTS: ${meta.tts_voice || 'Vivian'}
+- Permessi: ${permessi[ruolo] ?? 'Standard'}
 `
 }
 
 function generateSkillContexts(aziendaId: string): void {
   const yearStart = new Date().getFullYear() + '-01-01'
+  const now = new Date().toISOString().slice(0, 16).replace('T', ' ')
   const fmt = (n: number) => n.toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
-  // ── Finance ──
+  // VFS-only query helpers
+  const q = (sql: string, params: any[]) => db.prepare(sql).all(...params)
+  const qs = (sql: string, params: any[]) => queryScalar(sql, params)
+
+  // ── Amministrazione (finance) ──
   try {
-    const conti = db.prepare('SELECT nome, tipo, saldo FROM conti WHERE azienda_id = ? ORDER BY saldo DESC').all(aziendaId) as { nome: string; tipo: string; saldo: number }[]
-    const contiStr = conti.map(c => `  - ${c.nome} (${c.tipo}): € ${fmt(c.saldo)}`).join('\n') || '  (nessun conto)'
+    const conti = q(
+      "SELECT display_name as nome, json_extract(metadata,'$.tipo') as tipo, json_extract(metadata,'$.saldo') as saldo FROM entity WHERE azienda_id = ? AND type = 'conto' ORDER BY json_extract(metadata,'$.saldo') DESC",
+      [aziendaId]
+    ) as any[]
+    const contiStr = conti.map((c: any) => `  - ${c.nome} (${c.tipo}): € ${fmt(c.saldo || 0)}`).join('\n') || '  (nessun conto)'
 
-    const fattureInScadenza = db.prepare(
-      "SELECT numero, totale, scadenza FROM fatture WHERE azienda_id = ? AND stato IN ('emessa','inviata_sdi') AND scadenza BETWEEN date('now') AND date('now', '+7 days') ORDER BY scadenza LIMIT 5"
-    ).all(aziendaId) as { numero: string; totale: number; scadenza: string }[]
-    const scadenzaStr = fattureInScadenza.map(f => `  - Fatt. ${f.numero}: € ${fmt(f.totale)} scad. ${f.scadenza}`).join('\n') || '  (nessuna)'
+    const fattureInScadenza = q(
+      "SELECT numero, totale, json_extract(metadata,'$.scadenza') as scadenza FROM entity WHERE azienda_id = ? AND type = 'fattura' AND stato IN ('emessa','inviata_sdi') AND json_extract(metadata,'$.scadenza') BETWEEN date('now') AND date('now','+7 days') ORDER BY json_extract(metadata,'$.scadenza') LIMIT 5",
+      [aziendaId]
+    ) as any[]
+    const scadenzaStr = fattureInScadenza.map((f: any) => `  - Fatt. ${f.numero}: € ${fmt(f.totale)} scad. ${f.scadenza}`).join('\n') || '  (nessuna)'
 
-    const topDaIncassare = db.prepare(
-      "SELECT numero, totale, scadenza FROM fatture WHERE azienda_id = ? AND stato IN ('emessa','inviata_sdi') ORDER BY totale DESC LIMIT 5"
-    ).all(aziendaId) as { numero: string; totale: number; scadenza: string }[]
-    const topStr = topDaIncassare.map(f => `  - Fatt. ${f.numero}: € ${fmt(f.totale)} scad. ${f.scadenza ?? 'N/D'}`).join('\n') || '  (nessuna)'
+    writeContextFile(safePath('aziende', aziendaId, 'skills', 'amministrazione.md'),
+      `# Contesto Amministrazione\nAggiornato: ${now}\n\n## Conti Bancari\n${contiStr}\n\n## Fatture in Scadenza (7gg)\n${scadenzaStr}\n`)
+  } catch (err) { console.error('Amministrazione context error:', err) }
 
-    const financeContent = `# Contesto Finanza
-Aggiornato: ${new Date().toISOString().slice(0, 16).replace('T', ' ')}
-
-## Conti Bancari
-${contiStr}
-
-## Fatture in Scadenza (prossimi 7 giorni)
-${scadenzaStr}
-
-## Top 5 Fatture da Incassare
-${topStr}
-`
-    writeContextFile(safePath('aziende', aziendaId, 'skills', 'finance.md'), financeContent)
-  } catch (err) {
-    console.error('Finance context generation error:', err)
-  }
-
-  // ── CRM ──
+  // ── Commerciale (CRM + sales) ──
   try {
-    const topClienti = db.prepare(
-      `SELECT c.nome, c.ragione_sociale, COALESCE(SUM(f.totale), 0) as fatturato
-       FROM clienti c LEFT JOIN fatture f ON f.cliente_id = c.id AND f.stato = 'pagata' AND f.data >= ?
-       WHERE c.azienda_id = ? GROUP BY c.id ORDER BY fatturato DESC LIMIT 5`
-    ).all(yearStart, aziendaId) as { nome: string; ragione_sociale: string; fatturato: number }[]
-    const topCliStr = topClienti.map(c => `  - ${c.ragione_sociale || c.nome}: € ${fmt(c.fatturato)}`).join('\n') || '  (nessun cliente)'
+    const topClienti = q(
+      `SELECT n.display_name, COALESCE(SUM(e.totale), 0) as fatturato FROM names n LEFT JOIN entity e ON e.name_id = n.id AND e.type = 'fattura' AND e.stato = 'pagata' AND e.data >= ? WHERE n.azienda_id = ? AND n.tags LIKE '%"cliente"%' GROUP BY n.id ORDER BY fatturato DESC LIMIT 5`,
+      [yearStart, aziendaId]
+    ) as any[]
+    const topCliStr = topClienti.map((c: any) => `  - ${c.display_name}: € ${fmt(c.fatturato)}`).join('\n') || '  (nessun cliente)'
 
-    const leadCaldi = db.prepare(
-      "SELECT nome, cognome, azienda_lead, valore_stimato FROM leads WHERE azienda_id = ? AND stato = 'proposta' ORDER BY valore_stimato DESC LIMIT 5"
-    ).all(aziendaId) as { nome: string; cognome: string; azienda_lead: string; valore_stimato: number }[]
-    const leadStr = leadCaldi.map(l => `  - ${l.nome} ${l.cognome} (${l.azienda_lead || 'N/D'}): € ${fmt(l.valore_stimato ?? 0)}`).join('\n') || '  (nessuno)'
+    const leadCaldi = q(
+      "SELECT display_name, json_extract(metadata,'$.valore_stimato') as valore FROM names WHERE azienda_id = ? AND tags LIKE '%\"lead\"%' AND stato = 'proposta' ORDER BY json_extract(metadata,'$.valore_stimato') DESC LIMIT 5",
+      [aziendaId]
+    ) as any[]
+    const leadStr = leadCaldi.map((l: any) => `  - ${l.display_name}: € ${fmt(l.valore || 0)}`).join('\n') || '  (nessuno)'
 
-    const ultimiLead = db.prepare(
-      "SELECT nome, cognome, stato, created_at FROM leads WHERE azienda_id = ? ORDER BY created_at DESC LIMIT 5"
-    ).all(aziendaId) as { nome: string; cognome: string; stato: string; created_at: string }[]
-    const ultimiStr = ultimiLead.map(l => `  - ${l.nome} ${l.cognome} [${l.stato}] — ${l.created_at.slice(0, 10)}`).join('\n') || '  (nessuno)'
+    const ultimiLead = q(
+      "SELECT display_name, stato, created_at FROM names WHERE azienda_id = ? AND tags LIKE '%\"lead\"%' ORDER BY created_at DESC LIMIT 5",
+      [aziendaId]
+    ) as any[]
+    const ultimiStr = ultimiLead.map((l: any) => `  - ${l.display_name} [${l.stato}] — ${l.created_at?.slice(0, 10)}`).join('\n') || '  (nessuno)'
 
-    const crmContent = `# Contesto CRM
-Aggiornato: ${new Date().toISOString().slice(0, 16).replace('T', ' ')}
+    const preventiviAperti = q(
+      "SELECT numero, totale, stato, display_name FROM entity WHERE azienda_id = ? AND type = 'preventivo' AND stato IN ('bozza','inviato') ORDER BY totale DESC LIMIT 5",
+      [aziendaId]
+    ) as any[]
+    const prevStr = preventiviAperti.map((p: any) => `  - ${p.numero}: € ${fmt(p.totale)} [${p.stato}]`).join('\n') || '  (nessuno)'
 
-## Top 5 Clienti per Fatturato YTD
-${topCliStr}
+    writeContextFile(safePath('aziende', aziendaId, 'skills', 'commerciale.md'),
+      `# Contesto Commerciale\nAggiornato: ${now}\n\n## Top Clienti per Fatturato\n${topCliStr}\n\n## Lead Caldi\n${leadStr}\n\n## Ultimi Lead\n${ultimiStr}\n\n## Preventivi Aperti\n${prevStr}\n`)
+  } catch (err) { console.error('Commerciale context error:', err) }
 
-## Lead Caldi (in fase proposta)
-${leadStr}
-
-## Ultimi Lead Creati
-${ultimiStr}
-`
-    writeContextFile(safePath('aziende', aziendaId, 'skills', 'crm.md'), crmContent)
-  } catch (err) {
-    console.error('CRM context generation error:', err)
-  }
-
-  // ── Sales ──
+  // ── Produzione ──
   try {
-    const preventiviAperti = db.prepare(
-      "SELECT numero, oggetto, totale, stato FROM preventivi WHERE azienda_id = ? AND stato IN ('bozza','inviato') ORDER BY totale DESC LIMIT 5"
-    ).all(aziendaId) as { numero: string; oggetto: string; totale: number; stato: string }[]
-    const prevStr = preventiviAperti.map(p => `  - Prev. ${p.numero}: € ${fmt(p.totale)} [${p.stato}] — ${p.oggetto ?? ''}`).join('\n') || '  (nessuno)'
+    const ordiniAttivi = q(
+      "SELECT numero, totale, stato FROM entity WHERE azienda_id = ? AND type = 'ordine' AND stato IN ('confermato','in_lavorazione') ORDER BY data DESC LIMIT 5",
+      [aziendaId]
+    ) as any[]
+    const ordStr = ordiniAttivi.map((o: any) => `  - Ord. ${o.numero}: € ${fmt(o.totale)} [${o.stato}]`).join('\n') || '  (nessuno)'
 
-    const ordiniAttivi = db.prepare(
-      "SELECT numero, totale, stato FROM ordini WHERE azienda_id = ? AND stato IN ('confermato','in_lavorazione') ORDER BY data DESC LIMIT 5"
-    ).all(aziendaId) as { numero: string; totale: number; stato: string }[]
-    const ordStr = ordiniAttivi.map(o => `  - Ord. ${o.numero}: € ${fmt(o.totale)} [${o.stato}]`).join('\n') || '  (nessuno)'
+    const progettiAttivi = q(
+      "SELECT display_name, stato, json_extract(metadata,'$.data_fine_prevista') as scadenza FROM entity WHERE azienda_id = ? AND type = 'progetto' AND stato IN ('pianificato','in_corso') LIMIT 5",
+      [aziendaId]
+    ) as any[]
+    const projStr = progettiAttivi.map((p: any) => `  - ${p.display_name} [${p.stato}] scad. ${p.scadenza ?? 'N/D'}`).join('\n') || '  (nessuno)'
 
-    const progettiAttivi = db.prepare(
-      "SELECT nome, stato, data_fine_prevista FROM progetti WHERE azienda_id = ? AND stato IN ('pianificato','in_corso') ORDER BY data_fine_prevista LIMIT 5"
-    ).all(aziendaId) as { nome: string; stato: string; data_fine_prevista: string }[]
-    const projStr = progettiAttivi.map(p => `  - ${p.nome} [${p.stato}] scad. ${p.data_fine_prevista ?? 'N/D'}`).join('\n') || '  (nessuno)'
-
-    const salesContent = `# Contesto Vendite
-Aggiornato: ${new Date().toISOString().slice(0, 16).replace('T', ' ')}
-
-## Preventivi Aperti
-${prevStr}
-
-## Ordini Attivi
-${ordStr}
-
-## Progetti in Corso
-${projStr}
-`
-    writeContextFile(safePath('aziende', aziendaId, 'skills', 'sales.md'), salesContent)
-  } catch (err) {
-    console.error('Sales context generation error:', err)
-  }
+    writeContextFile(safePath('aziende', aziendaId, 'skills', 'produzione.md'),
+      `# Contesto Produzione\nAggiornato: ${now}\n\n## Ordini Attivi\n${ordStr}\n\n## Progetti in Corso\n${projStr}\n`)
+  } catch (err) { console.error('Produzione context error:', err) }
 
   // ── HR ──
   try {
-    const annunci = db.prepare(
-      "SELECT ruolo, stato, sede FROM annunci_lavoro WHERE azienda_id = ? AND stato = 'pubblicato' ORDER BY created_at DESC LIMIT 5"
-    ).all(aziendaId) as { ruolo: string; stato: string; sede: string }[]
-    const annStr = annunci.map(a => `  - ${a.ruolo} — ${a.sede ?? 'N/D'}`).join('\n') || '  (nessun annuncio)'
+    const annunci = q(
+      "SELECT display_name as ruolo, json_extract(metadata,'$.sede') as sede FROM entity WHERE azienda_id = ? AND type = 'annuncio' AND stato = 'pubblicato' LIMIT 5",
+      [aziendaId]
+    ) as any[]
+    const annStr = annunci.map((a: any) => `  - ${a.ruolo} — ${a.sede ?? 'N/D'}`).join('\n') || '  (nessun annuncio)'
 
-    const candidati = db.prepare(
-      "SELECT nome, cognome, ruolo_candidato, stato FROM candidati WHERE azienda_id = ? AND stato IN ('colloquio','offerta') ORDER BY updated_at DESC LIMIT 5"
-    ).all(aziendaId) as { nome: string; cognome: string; ruolo_candidato: string; stato: string }[]
-    const candStr = candidati.map(c => `  - ${c.nome} ${c.cognome} per ${c.ruolo_candidato ?? 'N/D'} [${c.stato}]`).join('\n') || '  (nessuno)'
+    const candidati = q(
+      "SELECT display_name, stato, json_extract(metadata,'$.ruolo_candidato') as ruolo FROM names WHERE azienda_id = ? AND tags LIKE '%\"candidato\"%' AND stato IN ('colloquio','offerta') LIMIT 5",
+      [aziendaId]
+    ) as any[]
+    const candStr = candidati.map((c: any) => `  - ${c.display_name} per ${c.ruolo || 'N/D'} [${c.stato}]`).join('\n') || '  (nessuno)'
 
-    const hrContent = `# Contesto HR
-Aggiornato: ${new Date().toISOString().slice(0, 16).replace('T', ' ')}
+    writeContextFile(safePath('aziende', aziendaId, 'skills', 'hr.md'),
+      `# Contesto HR\nAggiornato: ${now}\n\n## Annunci Pubblicati\n${annStr}\n\n## Candidati Avanzati\n${candStr}\n`)
+  } catch (err) { console.error('HR context error:', err) }
 
-## Annunci Pubblicati
-${annStr}
-
-## Candidati in Colloquio/Offerta
-${candStr}
-`
-    writeContextFile(safePath('aziende', aziendaId, 'skills', 'hr.md'), hrContent)
-  } catch (err) {
-    console.error('HR context generation error:', err)
-  }
-
-  // ── Documents ──
+  // ── Legal (documents) ──
   try {
-    const perCategoria = db.prepare(
-      "SELECT categoria, COUNT(*) as c FROM documenti WHERE azienda_id = ? GROUP BY categoria ORDER BY c DESC"
-    ).all(aziendaId) as { categoria: string; c: number }[]
-    const catStr = perCategoria.map(d => `  - ${d.categoria}: ${d.c}`).join('\n') || '  (nessun documento)'
+    const perCategoria = q(
+      "SELECT json_extract(metadata,'$.categoria') as categoria, COUNT(*) as c FROM entity WHERE azienda_id = ? AND type = 'documento' GROUP BY json_extract(metadata,'$.categoria') ORDER BY c DESC",
+      [aziendaId]
+    ) as any[]
+    const catStr = perCategoria.map((d: any) => `  - ${d.categoria}: ${d.c}`).join('\n') || '  (nessun documento)'
 
-    const ultimi = db.prepare(
-      "SELECT nome, categoria, created_at FROM documenti WHERE azienda_id = ? ORDER BY created_at DESC LIMIT 5"
-    ).all(aziendaId) as { nome: string; categoria: string; created_at: string }[]
-    const ultStr = ultimi.map(d => `  - ${d.nome} [${d.categoria}] — ${d.created_at.slice(0, 10)}`).join('\n') || '  (nessuno)'
+    const ultimi = q(
+      "SELECT display_name, json_extract(metadata,'$.categoria') as categoria, created_at FROM entity WHERE azienda_id = ? AND type = 'documento' ORDER BY created_at DESC LIMIT 5",
+      [aziendaId]
+    ) as any[]
+    const ultStr = ultimi.map((d: any) => `  - ${d.display_name} [${d.categoria}] — ${d.created_at?.slice(0, 10)}`).join('\n') || '  (nessuno)'
 
-    const docsContent = `# Contesto Documenti
-Aggiornato: ${new Date().toISOString().slice(0, 16).replace('T', ' ')}
+    writeContextFile(safePath('aziende', aziendaId, 'skills', 'legal.md'),
+      `# Contesto Documenti/Legal\nAggiornato: ${now}\n\n## Per Categoria\n${catStr}\n\n## Ultimi Documenti\n${ultStr}\n`)
+  } catch (err) { console.error('Legal context error:', err) }
 
-## Documenti per Categoria
-${catStr}
-
-## Ultimi 5 Documenti Caricati
-${ultStr}
-`
-    writeContextFile(safePath('aziende', aziendaId, 'skills', 'documents.md'), docsContent)
-  } catch (err) {
-    console.error('Documents context generation error:', err)
-  }
-
-  // ── Analytics ──
+  // ── Pulse (analytics) ──
   try {
-    const now = new Date()
-    const thisMonth = now.toISOString().slice(0, 7) // YYYY-MM
-    const prevDate = new Date(now.getFullYear(), now.getMonth() - 1, 1)
+    const thisMonth = new Date().toISOString().slice(0, 7)
+    const prevDate = new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1)
     const prevMonth = prevDate.toISOString().slice(0, 7)
 
-    const fatturatoThisMonth = queryScalar(
-      "SELECT COALESCE(SUM(totale), 0) as c FROM fatture WHERE azienda_id = ? AND stato = 'pagata' AND data LIKE ?",
+    const fatturatoThis = qs(
+      "SELECT COALESCE(SUM(totale),0) as c FROM entity WHERE azienda_id=? AND type='fattura' AND stato='pagata' AND data LIKE ?",
       [aziendaId, thisMonth + '%']
     )
-    const fatturatoPrevMonth = queryScalar(
-      "SELECT COALESCE(SUM(totale), 0) as c FROM fatture WHERE azienda_id = ? AND stato = 'pagata' AND data LIKE ?",
+    const fatturatoPrev = qs(
+      "SELECT COALESCE(SUM(totale),0) as c FROM entity WHERE azienda_id=? AND type='fattura' AND stato='pagata' AND data LIKE ?",
       [aziendaId, prevMonth + '%']
     )
-
-    const leadThisMonth = queryScalar(
-      "SELECT COUNT(*) as c FROM leads WHERE azienda_id = ? AND created_at LIKE ?",
+    const leadThis = qs(
+      "SELECT COUNT(*) as c FROM names WHERE azienda_id=? AND tags LIKE '%\"lead\"%' AND created_at LIKE ?",
       [aziendaId, thisMonth + '%']
     )
-    const leadPrevMonth = queryScalar(
-      "SELECT COUNT(*) as c FROM leads WHERE azienda_id = ? AND created_at LIKE ?",
+    const leadPrev = qs(
+      "SELECT COUNT(*) as c FROM names WHERE azienda_id=? AND tags LIKE '%\"lead\"%' AND created_at LIKE ?",
       [aziendaId, prevMonth + '%']
     )
+    const delta = (c: number, p: number) => { if (p === 0) return c > 0 ? '+100%' : '0%'; return ((c - p) / p * 100).toFixed(0) + '%' }
 
-    const delta = (curr: number, prev: number): string => {
-      if (prev === 0) return curr > 0 ? '+100%' : '0%'
-      const pct = ((curr - prev) / prev * 100).toFixed(0)
-      return (curr >= prev ? '+' : '') + pct + '%'
-    }
-
-    const analyticsContent = `# Contesto Analytics
-Aggiornato: ${new Date().toISOString().slice(0, 16).replace('T', ' ')}
-
-## Confronto Mese Corrente vs Precedente
-- Fatturato incassato: € ${fmt(fatturatoThisMonth)} vs € ${fmt(fatturatoPrevMonth)} (${delta(fatturatoThisMonth, fatturatoPrevMonth)})
-- Nuovi lead: ${leadThisMonth} vs ${leadPrevMonth} (${delta(leadThisMonth, leadPrevMonth)})
-`
-    writeContextFile(safePath('aziende', aziendaId, 'skills', 'analytics.md'), analyticsContent)
-  } catch (err) {
-    console.error('Analytics context generation error:', err)
-  }
+    writeContextFile(safePath('aziende', aziendaId, 'skills', 'pulse.md'),
+      `# Contesto Analytics\nAggiornato: ${now}\n\n## Mese Corrente vs Precedente\n- Fatturato: € ${fmt(fatturatoThis)} vs € ${fmt(fatturatoPrev)} (${delta(fatturatoThis, fatturatoPrev)})\n- Nuovi lead: ${leadThis} vs ${leadPrev} (${delta(leadThis, leadPrev)})\n`)
+  } catch (err) { console.error('Pulse context error:', err) }
 }
 
 // ── User Preferences (Learning Memory) ─────────────────────

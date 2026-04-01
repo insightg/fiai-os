@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, type JSX } from 'react'
+import { useState, useEffect, useRef, lazy, Suspense, type JSX } from 'react'
 import Badge from './ui/Badge'
 import {
   TrendingUp,
@@ -867,6 +867,97 @@ const toolIcons: Record<string, React.ComponentType<any>> = {
   generate_speech: Volume2,
 }
 
+// ── VFS generic tool renderers ──────────────────────────
+
+function renderSearchResults(result: any): JSX.Element {
+  if (!Array.isArray(result)) return renderCreateResult(result)
+  if (result.length === 0) return <p className="text-xs text-text3 italic">Nessun risultato trovato</p>
+  return (
+    <div className="space-y-1">
+      {result.slice(0, 15).map((item: any, i: number) => (
+        <div key={item.id || i} className="flex items-center gap-2 px-2 py-1.5 bg-bg3 rounded text-xs">
+          {item.tags && <span className="text-[10px] text-gold">{(Array.isArray(item.tags) ? item.tags : []).join(', ')}</span>}
+          {item.type && <span className="text-[10px] px-1.5 py-0.5 bg-bg2 rounded text-text3">{item.type}</span>}
+          <span className="font-medium text-text">{item.display_name}</span>
+          {item.stato && <span className="text-[10px] text-text3">({item.stato})</span>}
+          {item.totale != null && <span className="ml-auto text-[11px] font-semibold text-gold">€ {Number(item.totale).toLocaleString('it-IT')}</span>}
+          {item.email && <span className="text-[10px] text-text3 ml-auto">{item.email}</span>}
+        </div>
+      ))}
+      {result.length > 15 && <p className="text-[10px] text-text3">...e altri {result.length - 15}</p>}
+    </div>
+  )
+}
+
+function renderTreeResult(result: any): JSX.Element {
+  if (!result?.record) return renderCreateResult(result)
+  const r = result.record
+  return (
+    <div className="space-y-2">
+      <div className="px-2 py-1.5 bg-bg3 rounded text-xs">
+        <p className="font-semibold text-text">{r.display_name}</p>
+        {r.tags && <p className="text-[10px] text-gold mt-0.5">{(Array.isArray(r.tags) ? r.tags : []).join(', ')}</p>}
+        {r.path && <p className="text-[10px] text-text3 mt-0.5">{r.path}</p>}
+      </div>
+      {result.children?.length > 0 && (
+        <div className="pl-3 border-l-2 border-gold/20 space-y-1">
+          <p className="text-[10px] text-text3 font-medium">Collegati ({result.children.length}):</p>
+          {result.children.slice(0, 10).map((c: any, i: number) => (
+            <div key={c.id || i} className="text-xs text-text">
+              <span className="text-text3">[{c.type}]</span> {c.display_name}
+              {c.totale != null && <span className="text-gold ml-1">€ {Number(c.totale).toLocaleString('it-IT')}</span>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function renderRetrieveResults(result: any): JSX.Element {
+  if (!Array.isArray(result) || result.length === 0) {
+    return <p className="text-xs text-text3 italic">Nessun contenuto trovato nel documento.</p>
+  }
+  return (
+    <div className="space-y-2">
+      {result.slice(0, 5).map((chunk: any, i: number) => (
+        <div key={i} className="bg-bg3 rounded-lg p-3 border-l-2 border-gold/30">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-[10px] font-medium text-gold">{chunk.sezione || chunk.documento}</span>
+            {chunk.documento && chunk.sezione && (
+              <span className="text-[10px] text-text3">— {chunk.documento}</span>
+            )}
+          </div>
+          <p className="text-xs text-text whitespace-pre-wrap">{chunk.testo?.substring(0, 400)}{chunk.testo?.length > 400 ? '...' : ''}</p>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function renderGeneratedAudio(result: any): JSX.Element {
+  if (!result?.audio_url) return renderCreateResult(result)
+  return (
+    <div className="space-y-2">
+      <p className="text-xs text-text3">{result.messaggio}</p>
+      <audio controls className="w-full max-w-sm" src={result.audio_url}>
+        Il browser non supporta la riproduzione audio.
+      </audio>
+    </div>
+  )
+}
+
+const LazyDynamicPanel = lazy(() => import('./dynamic/DynamicPanel'))
+
+function renderDynamicView(result: any): JSX.Element {
+  if (!result?.layout) return renderCreateResult(result)
+  return (
+    <Suspense fallback={<div className="text-xs text-text3">Caricamento vista...</div>}>
+      <LazyDynamicPanel layout={result.layout} />
+    </Suspense>
+  )
+}
+
 export const toolNameMapExtended: Record<string, string> = {
   get_financial_summary: 'Riepilogo finanziario',
   get_overdue_invoices: 'Fatture scadute',
@@ -903,6 +994,16 @@ export const toolNameMapExtended: Record<string, string> = {
   archive_document: 'Documento Archiviato',
   send_whatsapp_voice: 'Vocale WhatsApp',
   send_whatsapp_message: 'Messaggio WhatsApp',
+  // VFS tools
+  search: 'Ricerca',
+  create: 'Creazione',
+  update: 'Aggiornamento',
+  delete_record: 'Eliminazione',
+  relate: 'Relazione',
+  get_tree: 'Dettaglio',
+  render_view: 'Vista dinamica',
+  retrieve: 'Ricerca nel documento',
+  generate_tts: 'Audio TTS',
 }
 
 export function renderToolResult(toolName: string, result: any, context?: ActionContext): JSX.Element | null {
@@ -941,6 +1042,16 @@ export function renderToolResult(toolName: string, result: any, context?: Action
       case 'analyze_image': return null
       case 'generate_pdf': return renderGeneratedPdf(result)
       case 'get_whatsapp_status': return renderWhatsAppStatus(result)
+      // VFS generic tools
+      case 'search': return renderSearchResults(result)
+      case 'create': return renderCreateResult(result)
+      case 'update': return renderCreateResult(result)
+      case 'delete_record': return renderCreateResult(result)
+      case 'relate': return renderCreateResult(result)
+      case 'get_tree': return renderTreeResult(result)
+      case 'retrieve': return renderRetrieveResults(result)
+      case 'generate_tts': return renderGeneratedAudio(result)
+      case 'render_view': return renderDynamicView(result)
       default: return null
     }
   })()

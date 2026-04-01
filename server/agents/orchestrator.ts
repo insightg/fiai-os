@@ -4,6 +4,7 @@ import { buildContext, saveSessionContext, captureSignal } from './context.js'
 import { runHooks, type HookContext } from './hooks.js'
 import { getSuggestions } from './suggestions.js'
 import { executeAgent, directLLMResponse } from './base-agent.js'
+import { createPlan, executePlan, formatPlanResults } from './planner.js'
 import db from '../db.js'
 
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions'
@@ -33,24 +34,30 @@ function quickClassifyKeywords(text: string): AgentDomain | null {
   const t = text.toLowerCase().trim()
   // TTS — HIGHEST PRIORITY
   if (/con la mia voce|mia voce|\bleggi\b|leggi.*alta|pronuncia|text.to.speech|\btts\b|\bparla\b|sintesi vocale|genera.*audio|voce.*clona|lista voci|voci disponibili|imposta voce|voce predefinita|impostazioni tts|clona.*voce|wizard.*voce|crea.*voce|registra.*voce/.test(t)) return 'tts'
-  // Commerciale
-  if (/client[ie]|lead[s]?|pipeline|prospect|contatt[io]/.test(t)) return 'commerciale'
-  // Amministrazione
-  if (/fattur|finanz|fatturato|incass|liquid|scadut|conto|saldo|rimbors|spese|pagament|fornitor/.test(t)) return 'amministrazione'
-  // Produzione
-  if (/progett[io]|ordin[ie]|milestone|delivery|avanzament/.test(t)) return 'produzione'
-  // HR
-  if (/candidat|annunci.*lavoro|recruiting|assunzion|cv|curriculum|onboarding/.test(t)) return 'hr'
-  // Documents
-  if (/\[documento caricato|\[documento allegato|archivia.*documento|cataloga|classifica.*file/.test(t)) return 'documents'
-  // Legal
-  if (/\bcontratt|clausol|normativ|compliance|gdpr|\blegal\b|riassumi.*document|confronta.*document|cerca.*document|contenuto.*document/.test(t)) return 'legal'
-  // Marketing
-  if (/immag|disegna|illustra|logo|grafica|\bpost\b|newsletter|contenut|campagna|brand/.test(t)) return 'marketing'
-  // Infra
-  if (/costi? api|performance|monitoring|agenti.*config|utenti.*sistema|gestione utenti|lista utenti|crea utente|nuovo utente|modifica utente|elimina utente|ruolo utente|utenti|health|agentops|whatsapp|qr code/.test(t)) return 'infra'
-  // Pulse
-  if (/overview|riepilog|come va|stato general|daily brief|panoramic|dashboard/.test(t)) return 'pulse'
+
+  // Autonomous agents / workflows — route to infra
+  if (/agente autonomo|agenti autonomi|workflow|crea.*monitor|crea.*agente|lista.*agenti|disattiva.*agente|attiva.*agente|log.*agenti/.test(t)) return 'infra'
+  // WhatsApp / messaging commands — route to infra
+  if (/manda.*whatsapp|invia.*whatsapp|scrivi.*whatsapp|messaggio.*whatsapp|whatsapp.*manda|whatsapp.*invia|wapp|vocale.*whatsapp|manda.*messaggio|invia.*messaggio|scrivi.*a\s+\w+/.test(t)) return 'infra'
+
+  // Count how many domains match — if 2+, return null to force LLM multi-agent classification
+  const domainMatches: AgentDomain[] = []
+  if (/client[ie]|lead[s]?|pipeline|prospect|contatt[io]/.test(t)) domainMatches.push('commerciale')
+  if (/fattur|finanz|fatturato|incass|liquid|scadut|conto|saldo|rimbors|spese|pagament|fornitor/.test(t)) domainMatches.push('amministrazione')
+  if (/progett[io]|ordin[ie]|milestone|delivery|avanzament/.test(t)) domainMatches.push('produzione')
+  if (/candidat|annunci.*lavoro|recruiting|assunzion|cv|curriculum|onboarding/.test(t)) domainMatches.push('hr')
+  if (/\bcontratt|clausol|normativ|compliance|gdpr|\blegal\b|riassumi.*document|confronta.*document|cerca.*document|contenuto.*document/.test(t)) domainMatches.push('legal')
+  if (/immag|disegna|illustra|logo|grafica|\bpost\b|newsletter|contenut|campagna|brand/.test(t)) domainMatches.push('marketing')
+  if (/costi? api|performance|monitoring|agenti.*config|utenti.*sistema|gestione utenti|utenti|health|agentops|whatsapp|qr code/.test(t)) domainMatches.push('infra')
+  if (/overview|riepilog|come va|stato general|daily brief|panoramic|dashboard/.test(t)) domainMatches.push('pulse')
+  if (/\[documento caricato|\[documento allegato|archivia.*documento|cataloga|classifica.*file/.test(t)) domainMatches.push('legal')
+
+  // Multi-domain detected → force LLM classification for multi-agent routing
+  if (domainMatches.length >= 2) return null
+
+  // Single domain → fast return
+  if (domainMatches.length === 1) return domainMatches[0]
+
   return null
 }
 
@@ -63,12 +70,16 @@ function detectResponseMode(message: string, historyLength: number): ResponseMod
   if (t.length < 25 && /^(ok|va bene|grazie|thanks|ciao|buon[a-z]*|salve|perfetto|ottimo|capito|chiaro|si|si|no|bene|bravo|fantastico|eccellente)[\s!.]*$/i.test(t)) {
     return 'minimal'
   }
-  // Explicit numeric rating
-  if (/^\d{1,2}[\s\-:!.]/.test(t) || /^\d{1,2}$/.test(t)) {
+  // Explicit numeric rating — but NOT if in a conversation (likely a menu choice)
+  if (historyLength <= 2 && (/^\d{1,2}[\s\-:!.]/.test(t) || /^\d{1,2}$/.test(t))) {
     return 'minimal'
   }
 
   // ITERATION: continues previous context
+  // Single number in conversation = menu choice, not rating
+  if (historyLength > 2 && /^\d{1,2}$/.test(t)) {
+    return 'iteration'
+  }
   if (historyLength > 2 && /^(ora|adesso|invece|piuttosto|prova|modifica|cambia|aggiungi|togli|rimuovi|rifai|migliora|correggi|aggiorna|continua|e anche|inoltre|poi)/i.test(t)) {
     return 'iteration'
   }
@@ -93,7 +104,13 @@ const CLASSIFICATION_PROMPT =
   '- tts: sintesi vocale, text-to-speech, leggi ad alta voce, pronuncia, voce, audio, parla, clona voce\n' +
   '- general: saluti, domande generiche, conversazione\n\n' +
   'IMPORTANTE: Le richieste di generazione immagini vanno SEMPRE a "marketing".\n' +
-  'Le richieste di leggere, pronunciare o generare audio vanno SEMPRE a "tts".\n' +
+  'Le richieste di leggere, pronunciare o generare audio vanno SEMPRE a "tts".\n\n' +
+  'MULTI-AGENT: Se la richiesta tocca PIU domini, imposta needsMultiAgent=true e secondaryDomains con i domini aggiuntivi.\n' +
+  'Esempi multi-agent:\n' +
+  '- "fatturato dei clienti con progetti attivi" → domain="amministrazione", needsMultiAgent=true, secondaryDomains=["commerciale","produzione"]\n' +
+  '- "candidati per i ruoli nei nuovi progetti" → domain="hr", needsMultiAgent=true, secondaryDomains=["produzione"]\n' +
+  '- "report completo vendite fatture progetti" → domain="pulse", needsMultiAgent=true, secondaryDomains=["commerciale","amministrazione","produzione"]\n' +
+  '- "overview con pipeline e scadenze" → domain="pulse", needsMultiAgent=true, secondaryDomains=["commerciale","amministrazione"]\n\n' +
   'Rispondi SOLO con un JSON valido: {"domain": "...", "confidence": 0.0-1.0, "needsMultiAgent": false, "secondaryDomains": []}'
 
 async function classifyIntent(message: string, conversationHistory?: ConversationMessage[]): Promise<ClassificationResult> {
@@ -448,13 +465,16 @@ export async function orchestrate(
     // fallback to full classification
   }
 
-  // ── FULL classification ──
-  let classification: ClassificationResult
-  const kwDomain = quickClassifyKeywords(message)
-  if (kwDomain) {
-    classification = { domain: kwDomain, confidence: 0.95, needsMultiAgent: false }
-  } else {
-    classification = await classifyIntent(message, conversationHistory)
+  // ── FULL: Planner LLM → plan + execute + synthesize ──
+  const plan = await createPlan(message, conversationHistory)
+  let planDomain = plan.domain as AgentDomain
+  if (planDomain === 'image' as any) planDomain = 'marketing' as AgentDomain
+  if (planDomain === 'documents' as any) planDomain = 'legal' as AgentDomain
+
+  const classification: ClassificationResult = {
+    domain: planDomain || 'general',
+    confidence: 0.9,
+    needsMultiAgent: false,
   }
 
   // Run post_classify hook
@@ -465,16 +485,6 @@ export async function orchestrate(
     sessionId,
   }
   await runHooks('post_classify', hookCtx)
-
-  // Normalize image domain to marketing
-  if (classification.domain === 'image') {
-    classification.domain = 'marketing' as AgentDomain
-  }
-
-  // documents -> legal fallback
-  if (classification.domain === 'documents') {
-    classification.domain = 'legal' as AgentDomain
-  }
 
   // ── TTS — voice commands ──
   if (classification.domain === 'tts') {
@@ -497,7 +507,7 @@ export async function orchestrate(
     } catch {}
 
     // Get current user voice preference
-    const currentVoice = db.prepare('SELECT tts_voice FROM user_profiles WHERE id = ?').get(userId) as any
+    const currentVoice = db.prepare("SELECT json_extract(metadata, '$.tts_voice') as tts_voice FROM names WHERE id = ?").get(userId) as any
     const userVoice = currentVoice?.tts_voice || 'Vivian'
 
     // Voice cloning: user attached audio + clone command
@@ -623,10 +633,7 @@ export async function orchestrate(
         const allAvailable = [...allVoices, ...clonedNames]
         const matched = allAvailable.find(v => v.toLowerCase() === requested.toLowerCase())
         if (matched) {
-          try {
-            db.prepare('ALTER TABLE user_profiles ADD COLUMN tts_voice TEXT DEFAULT \'Vivian\'').run()
-          } catch {}
-          db.prepare('UPDATE user_profiles SET tts_voice = ? WHERE id = ?').run(matched, userId)
+          db.prepare("UPDATE names SET metadata = json_set(metadata, '$.tts_voice', ?) WHERE id = ?").run(matched, userId)
           const isCloned = clonedNames.some(c => c.toLowerCase() === matched.toLowerCase())
           ttsText = `Voce impostata su **${matched}**${isCloned ? ' (clonata)' : ''}. Tutte le risposte vocali useranno questa voce.`
         } else {
@@ -664,8 +671,8 @@ export async function orchestrate(
     return finalizeResult(result, classification)
   }
 
-  // ── General — direct LLM response (no tools) ──
-  if (classification.domain === 'general') {
+  // ── General — direct LLM response (but execute plan steps if any) ──
+  if (classification.domain === 'general' && plan.steps.length === 0) {
     const context = buildContext('pulse', aziendaId, userId, sessionId)
     const text = await directLLMResponse(message, context, conversationHistory)
     const result: ChatResponse = {
@@ -711,7 +718,7 @@ export async function orchestrate(
     return finalizeResult(result, classification)
   }
 
-  // ── Single-agent execution ──
+  // ── Execute plan + synthesize with domain agent ──
   const agent = AGENTS[classification.domain] || AGENTS.pulse
 
   // Context with 60s cache
@@ -725,6 +732,50 @@ export async function orchestrate(
     contextCache.set(cacheKey, { content: context, ts: Date.now() })
   }
 
-  const result = await executeAgent(message, agent, aziendaId, userId, context, format, conversationHistory)
+  // Execute plan steps (if any)
+  let planContext = ''
+  const allToolCalls: Record<string, unknown>[] = []
+  const reasoningSteps: { tool: string; description: string; result_summary: string }[] = []
+
+  if (plan.steps.length > 0) {
+    const planResults = await executePlan(plan, aziendaId)
+    planContext = '\n\nRISULTATI TOOL (già eseguiti dal planner):\n' + formatPlanResults(plan, planResults)
+
+    for (const pr of planResults) {
+      allToolCalls.push({ tool: pr.step.tool, result: pr.result })
+      // Build reasoning step summary
+      let summary = ''
+      if (pr.error) summary = `Errore: ${pr.error}`
+      else if (Array.isArray(pr.result)) summary = `${pr.result.length} risultati`
+      else if (pr.result && typeof pr.result === 'object') {
+        const r = pr.result as any
+        if (r.successo) summary = r.messaggio || 'OK'
+        else if (r.errore) summary = r.errore
+        else summary = Object.keys(r).slice(0, 3).join(', ')
+      } else summary = String(pr.result || '').substring(0, 60)
+      reasoningSteps.push({ tool: pr.step.tool, description: pr.step.description, result_summary: summary })
+    }
+  }
+
+  // Agent synthesizes: gets the message + plan results as context
+  const agentMessage = plan.steps.length > 0
+    ? message + planContext
+    : message
+
+  const result = await executeAgent(agentMessage, agent, aziendaId, userId, context, format, conversationHistory)
+
+  // Planner tool calls go into reasoning only (not shown as visible cards)
+  // Only the agent's own tool calls (if any) stay in toolCalls for rendering
+
+  // Attach reasoning info with planner results
+  if (plan.steps.length > 0) {
+    result.reasoning = {
+      steps: reasoningSteps,
+      domain: plan.domain,
+      thinking: plan.reasoning,
+      latencyMs: Date.now() - startTime,
+    }
+  }
+
   return finalizeResult(result, classification)
 }

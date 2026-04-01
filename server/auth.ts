@@ -11,6 +11,16 @@ function generateToken(userId: string, email: string): string {
   return jwt.sign({ userId, email }, JWT_SECRET, { expiresIn: '7d' })
 }
 
+function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[àáâã]/g, 'a').replace(/[èéêë]/g, 'e').replace(/[ìíîï]/g, 'i')
+    .replace(/[òóôõ]/g, 'o').replace(/[ùúûü]/g, 'u')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+    .substring(0, 80) || 'unnamed'
+}
+
 // POST /api/auth/login
 router.post('/login', async (req: Request, res: Response) => {
   try {
@@ -21,13 +31,23 @@ router.post('/login', async (req: Request, res: Response) => {
       return
     }
 
-    const user = db.prepare('SELECT id, email, password_hash FROM users WHERE email = ?').get(email) as { id: string; email: string; password_hash: string } | undefined
+    // Look up user in names table (tag: utente)
+    const user = db.prepare(
+      "SELECT id, email, metadata FROM names WHERE email = ? AND tags LIKE '%\"utente\"%'"
+    ).get(email) as { id: string; email: string; metadata: string } | undefined
+
     if (!user) {
       res.status(400).json({ user: null, session: null, error: { message: 'Credenziali non valide' } })
       return
     }
 
-    const passwordMatch = await bcrypt.compare(password, user.password_hash)
+    const metadata = JSON.parse(user.metadata)
+    if (!metadata.password_hash) {
+      res.status(400).json({ user: null, session: null, error: { message: 'Credenziali non valide' } })
+      return
+    }
+
+    const passwordMatch = await bcrypt.compare(password, metadata.password_hash)
     if (!passwordMatch) {
       res.status(400).json({ user: null, session: null, error: { message: 'Credenziali non valide' } })
       return
@@ -56,8 +76,8 @@ router.post('/signup', async (req: Request, res: Response) => {
       return
     }
 
-    // Check if user already exists
-    const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(email)
+    // Check if user already exists in names
+    const existing = db.prepare("SELECT id FROM names WHERE email = ?").get(email)
     if (existing) {
       res.status(400).json({ user: null, session: null, error: { message: 'Utente già esistente' } })
       return
@@ -67,23 +87,41 @@ router.post('/signup', async (req: Request, res: Response) => {
 
     const signupTx = db.transaction(() => {
       const userId = crypto.randomUUID()
+      const displayName = nome ? `${nome} ${cognome || ''}`.trim() : email
+      const slug = slugify(displayName)
+      const tags = ['utente']
+      if (ruolo === 'admin') tags.push('admin')
 
-      db.prepare('INSERT INTO users (id, email, password_hash) VALUES (?, ?, ?)').run(userId, email, passwordHash)
-
-      // Use the provided azienda_id, or find the first one
-      let profileAziendaId = azienda_id
-      if (!profileAziendaId) {
-        const azienda = db.prepare('SELECT id FROM aziende LIMIT 1').get() as { id: string } | undefined
-        if (azienda) {
-          profileAziendaId = azienda.id
-        }
+      // Resolve azienda_id
+      let orgId = azienda_id
+      if (!orgId) {
+        const org = db.prepare("SELECT id FROM names WHERE tags LIKE '%\"organizzazione\"%' LIMIT 1").get() as any
+        orgId = org?.id
       }
 
-      if (profileAziendaId) {
-        db.prepare(
-          `INSERT INTO user_profiles (id, azienda_id, email, nome, cognome, ruolo)
-           VALUES (?, ?, ?, ?, ?, ?)`
-        ).run(userId, profileAziendaId, email, nome || '', cognome || '', ruolo || 'collaboratore')
+      // Create name with utente tag
+      db.prepare(`INSERT INTO names (id, azienda_id, display_name, slug, email, tags, metadata, path)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        userId, orgId, displayName, slug, email,
+        JSON.stringify(tags),
+        JSON.stringify({
+          password_hash: passwordHash,
+          cognome: cognome || '',
+          ruolo: ruolo || 'collaboratore',
+          tts_voice: 'Vivian',
+        }),
+        `/names/${slug}`
+      )
+
+      // Legacy write (keeps users table in sync for any remaining references)
+      try { db.prepare('INSERT OR IGNORE INTO users (id, email, password_hash) VALUES (?, ?, ?)').run(userId, email, passwordHash) } catch {}
+
+      // Create membro_di relation
+      if (orgId) {
+        db.prepare(`INSERT OR IGNORE INTO relations (id, azienda_id, from_type, from_id, to_type, to_id, tipo)
+          VALUES (?, ?, 'name', ?, 'name', ?, 'membro_di')`).run(
+          crypto.randomUUID(), orgId, userId, orgId
+        )
       }
 
       return { id: userId, email }

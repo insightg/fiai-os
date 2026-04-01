@@ -262,3 +262,129 @@ Rispondi in italiano.`
     return { similarities: [], differences: [], summary: 'Errore nel confronto documenti.' }
   }
 }
+
+// ── Retrieval Judge (Agentic RAG) ─────────────────────────
+
+export async function judgeRetrieval(query: string, chunks: { display_name: string; content: string }[]): Promise<{ sufficient: boolean; score: number; refine_query?: string }> {
+  if (chunks.length === 0) return { sufficient: false, score: 0, refine_query: query }
+
+  try {
+    const chunkSummary = chunks.slice(0, 5).map((c, i) =>
+      `[${i}] ${c.display_name}: ${c.content.substring(0, 300)}`
+    ).join('\n')
+
+    const result = await callLLM([{
+      role: 'user',
+      content: `Query: "${query}"\n\nChunk trovati:\n${chunkSummary}\n\nI chunk rispondono alla query? Rispondi SOLO JSON:\n{"sufficient": true/false, "score": 1-5, "refine_query": "query migliorata se score < 3"}`
+    }], true)
+
+    const match = result.match(/\{[\s\S]*\}/)
+    if (!match) return { sufficient: chunks.length > 0, score: 3 }
+    const parsed = JSON.parse(match[0])
+    return {
+      sufficient: parsed.sufficient ?? (parsed.score >= 3),
+      score: parsed.score ?? 3,
+      refine_query: parsed.refine_query,
+    }
+  } catch {
+    return { sufficient: chunks.length > 0, score: 3 }
+  }
+}
+
+// ── Smart Upload Analysis ─────────────────────────────────
+
+export interface UploadAnalysis {
+  entity_type: string        // fattura_passiva, contratto, cv, preventivo, report, foto, documento
+  display_name: string       // nome suggerito
+  suggested_name: string | null  // nome azienda/persona da collegare
+  categoria: string
+  tags: string[]
+  descrizione: string
+  extracted_data: Record<string, unknown>  // dati strutturati (numero, data, totale, piva...)
+}
+
+export async function analyzeUpload(
+  content: string,
+  fileName: string,
+  isImage: boolean,
+  mimeType?: string,
+  customCategories?: { name: string; description: string; keywords: string[] }[]
+): Promise<UploadAnalysis> {
+  const defaultResult: UploadAnalysis = {
+    entity_type: 'documento',
+    display_name: fileName,
+    suggested_name: null,
+    categoria: 'altro',
+    tags: [],
+    descrizione: '',
+    extracted_data: {},
+  }
+
+  try {
+    const prompt = `Analizza questo file e identifica cosa è. Restituisci SOLO un JSON valido.
+
+FILE: ${fileName}
+TIPO: ${mimeType || 'sconosciuto'}
+${isImage ? 'Il file è un\'immagine.' : ''}
+
+${customCategories?.length ? `\nCATEGORIE CUSTOM DISPONIBILI:\n${customCategories.map(c => `- ${c.name}: ${c.description} (keywords: ${c.keywords.join(', ')})`).join('\n')}\n` : ''}
+${!isImage ? `CONTENUTO (prime 3000 car.):
+${content.substring(0, 3000)}` : ''}
+
+Rispondi con questo JSON:
+{
+  "entity_type": "fattura_passiva|contratto|cv|preventivo|report|foto|audio|documento",
+  "display_name": "nome leggibile del documento",
+  "suggested_name": "nome azienda o persona collegata (null se non identificabile)",
+  "categoria": "amministrazione|legale|hr|commerciale|marketing|produzione|normative|contratti|documentazione_tecnica|altro${customCategories?.length ? '|' + customCategories.map(c => c.name).join('|') : ''}",
+  "tags": ["tag1", "tag2"],
+  "descrizione": "breve descrizione del contenuto",
+  "extracted_data": {
+    "numero": "numero documento se presente",
+    "data": "data in formato YYYY-MM-DD se presente",
+    "totale": 0.00,
+    "fornitore": "ragione sociale se fattura",
+    "piva": "P.IVA se presente",
+    "email": "email se presente",
+    "telefono": "telefono se presente",
+    "nome_persona": "nome persona se CV/contatto"
+  }
+}
+
+REGOLE:
+- entity_type "fattura_passiva" se è una fattura/ricevuta con importi
+- entity_type "contratto" se è un accordo/contratto con clausole
+- entity_type "cv" se è un curriculum/CV con competenze
+- entity_type "preventivo" se è un'offerta/preventivo commerciale
+- entity_type "report" se è un report/analisi con dati
+- entity_type "foto" se è un'immagine senza testo significativo
+- entity_type "documento" per tutto il resto
+- In extracted_data metti SOLO i campi che riesci a estrarre dal contenuto
+- suggested_name: la persona o azienda PIU' rilevante nel documento`
+
+    const messages: OpenRouterMessage[] = isImage
+      ? [{ role: 'user', content: [
+          { type: 'text', text: prompt },
+          { type: 'image_url', image_url: { url: content } }
+        ] }]
+      : [{ role: 'user', content: prompt }]
+
+    const result = await callLLM(messages, true)
+    const jsonMatch = result.match(/\{[\s\S]*\}/)
+    if (!jsonMatch) return defaultResult
+
+    const parsed = JSON.parse(jsonMatch[0]) as UploadAnalysis
+    return {
+      entity_type: parsed.entity_type || 'documento',
+      display_name: parsed.display_name || fileName,
+      suggested_name: parsed.suggested_name || null,
+      categoria: parsed.categoria || 'altro',
+      tags: Array.isArray(parsed.tags) ? parsed.tags : [],
+      descrizione: parsed.descrizione || '',
+      extracted_data: parsed.extracted_data || {},
+    }
+  } catch (err) {
+    console.error('Upload analysis error:', err)
+    return defaultResult
+  }
+}

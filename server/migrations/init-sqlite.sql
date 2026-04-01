@@ -476,3 +476,165 @@ CREATE TABLE IF NOT EXISTS whatsapp_users (
   created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_whatsapp_users_phone ON whatsapp_users(phone);
+
+-- ══════════════════════════════════════════════════════════
+-- FIAI OS v5 — Virtual Filesystem (names + entity)
+-- ══════════════════════════════════════════════════════════
+
+-- ── Names — people, orgs, groups, system users ──────────
+CREATE TABLE IF NOT EXISTS names (
+  id            TEXT PRIMARY KEY,
+  azienda_id    TEXT,
+  display_name  TEXT NOT NULL,
+  slug          TEXT NOT NULL,
+  email         TEXT,
+  telefono      TEXT,
+  piva          TEXT,
+  tags          TEXT NOT NULL DEFAULT '[]',
+  stato         TEXT,
+  metadata      TEXT NOT NULL DEFAULT '{}',
+  path          TEXT NOT NULL,
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_names_azienda ON names(azienda_id);
+CREATE INDEX IF NOT EXISTS idx_names_slug ON names(slug);
+CREATE INDEX IF NOT EXISTS idx_names_email ON names(email);
+CREATE INDEX IF NOT EXISTS idx_names_piva ON names(piva);
+CREATE INDEX IF NOT EXISTS idx_names_tags ON names(tags);
+CREATE INDEX IF NOT EXISTS idx_names_stato ON names(azienda_id, stato);
+CREATE INDEX IF NOT EXISTS idx_names_path ON names(path);
+
+-- ── Entity — everything else ────────────────────────────
+CREATE TABLE IF NOT EXISTS entity (
+  id            TEXT PRIMARY KEY,
+  azienda_id    TEXT NOT NULL,
+  type          TEXT NOT NULL,
+  display_name  TEXT NOT NULL,
+  slug          TEXT NOT NULL,
+  stato         TEXT,
+  name_id       TEXT REFERENCES names(id) ON DELETE SET NULL,
+  parent_id     TEXT REFERENCES entity(id) ON DELETE CASCADE,
+  user_id       TEXT,
+  file_url      TEXT,
+  numero        TEXT,
+  data          TEXT,
+  totale        REAL,
+  metadata      TEXT NOT NULL DEFAULT '{}',
+  path          TEXT NOT NULL,
+  ordine        INTEGER DEFAULT 0,
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_entity_azienda ON entity(azienda_id);
+CREATE INDEX IF NOT EXISTS idx_entity_type ON entity(azienda_id, type);
+CREATE INDEX IF NOT EXISTS idx_entity_name ON entity(name_id);
+CREATE INDEX IF NOT EXISTS idx_entity_parent ON entity(parent_id);
+CREATE INDEX IF NOT EXISTS idx_entity_user ON entity(user_id);
+CREATE INDEX IF NOT EXISTS idx_entity_stato ON entity(azienda_id, type, stato);
+CREATE INDEX IF NOT EXISTS idx_entity_numero ON entity(azienda_id, type, numero);
+CREATE INDEX IF NOT EXISTS idx_entity_data ON entity(azienda_id, type, data);
+CREATE INDEX IF NOT EXISTS idx_entity_path ON entity(path);
+
+-- ── Relations — links between names and/or entities ─────
+CREATE TABLE IF NOT EXISTS relations (
+  id         TEXT PRIMARY KEY,
+  azienda_id TEXT,
+  from_type  TEXT NOT NULL CHECK (from_type IN ('name','entity')),
+  from_id    TEXT NOT NULL,
+  to_type    TEXT NOT NULL CHECK (to_type IN ('name','entity')),
+  to_id      TEXT NOT NULL,
+  tipo       TEXT NOT NULL,
+  metadata   TEXT DEFAULT '{}',
+  created_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(from_id, to_id, tipo)
+);
+
+CREATE INDEX IF NOT EXISTS idx_relations_from ON relations(from_id);
+CREATE INDEX IF NOT EXISTS idx_relations_to ON relations(to_id);
+CREATE INDEX IF NOT EXISTS idx_relations_tipo ON relations(tipo);
+
+-- ── FTS for document chunks ──────────────────────────────
+CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5(
+  contenuto_testo, display_name,
+  content='entity', content_rowid='rowid',
+  tokenize='unicode61 remove_diacritics 2'
+);
+
+CREATE TRIGGER IF NOT EXISTS chunk_fts_ai AFTER INSERT ON entity WHEN NEW.type = 'chunk' BEGIN
+  INSERT INTO chunk_fts(rowid, contenuto_testo, display_name)
+  VALUES (NEW.rowid, json_extract(NEW.metadata, '$.contenuto_testo'), NEW.display_name);
+END;
+
+CREATE TRIGGER IF NOT EXISTS chunk_fts_ad AFTER DELETE ON entity WHEN OLD.type = 'chunk' BEGIN
+  INSERT INTO chunk_fts(chunk_fts, rowid, contenuto_testo, display_name)
+  VALUES ('delete', OLD.rowid, json_extract(OLD.metadata, '$.contenuto_testo'), OLD.display_name);
+END;
+
+CREATE TRIGGER IF NOT EXISTS chunk_fts_au AFTER UPDATE ON entity WHEN OLD.type = 'chunk' BEGIN
+  INSERT INTO chunk_fts(chunk_fts, rowid, contenuto_testo, display_name)
+  VALUES ('delete', OLD.rowid, json_extract(OLD.metadata, '$.contenuto_testo'), OLD.display_name);
+  INSERT INTO chunk_fts(rowid, contenuto_testo, display_name)
+  VALUES (NEW.rowid, json_extract(NEW.metadata, '$.contenuto_testo'), NEW.display_name);
+END;
+
+-- ── VFS compatibility views ──────────────────────────────
+-- These views allow legacy code (documenti.ts, etc.) to query entity as if it were the old table
+CREATE VIEW IF NOT EXISTS v_documenti AS
+  SELECT id, azienda_id, display_name as nome,
+    json_extract(metadata, '$.tipo_file') as tipo_file,
+    json_extract(metadata, '$.categoria') as categoria,
+    json_extract(metadata, '$.descrizione') as descrizione,
+    file_url, json_extract(metadata, '$.file_size') as file_size,
+    json_extract(metadata, '$.tags') as tags,
+    json_extract(metadata, '$.contenuto_testo') as contenuto_testo,
+    user_id as uploaded_by, created_at, updated_at
+  FROM entity WHERE type = 'documento';
+
+-- ── FTS for names search ────────────────────────────────
+CREATE VIRTUAL TABLE IF NOT EXISTS names_fts USING fts5(
+  display_name, email, metadata,
+  content='names', content_rowid='rowid'
+);
+
+CREATE TRIGGER IF NOT EXISTS names_fts_ai AFTER INSERT ON names BEGIN
+  INSERT INTO names_fts(rowid, display_name, email, metadata)
+  VALUES (NEW.rowid, NEW.display_name, NEW.email, NEW.metadata);
+END;
+
+CREATE TRIGGER IF NOT EXISTS names_fts_ad AFTER DELETE ON names BEGIN
+  INSERT INTO names_fts(names_fts, rowid, display_name, email, metadata)
+  VALUES ('delete', OLD.rowid, OLD.display_name, OLD.email, OLD.metadata);
+END;
+
+CREATE TRIGGER IF NOT EXISTS names_fts_au AFTER UPDATE ON names BEGIN
+  INSERT INTO names_fts(names_fts, rowid, display_name, email, metadata)
+  VALUES ('delete', OLD.rowid, OLD.display_name, OLD.email, OLD.metadata);
+  INSERT INTO names_fts(rowid, display_name, email, metadata)
+  VALUES (NEW.rowid, NEW.display_name, NEW.email, NEW.metadata);
+END;
+
+-- ── FTS for entity search ───────────────────────────────
+CREATE VIRTUAL TABLE IF NOT EXISTS entity_fts USING fts5(
+  display_name, type, metadata,
+  content='entity', content_rowid='rowid'
+);
+
+CREATE TRIGGER IF NOT EXISTS entity_fts_ai AFTER INSERT ON entity BEGIN
+  INSERT INTO entity_fts(rowid, display_name, type, metadata)
+  VALUES (NEW.rowid, NEW.display_name, NEW.type, NEW.metadata);
+END;
+
+CREATE TRIGGER IF NOT EXISTS entity_fts_ad AFTER DELETE ON entity BEGIN
+  INSERT INTO entity_fts(entity_fts, rowid, display_name, type, metadata)
+  VALUES ('delete', OLD.rowid, OLD.display_name, OLD.type, OLD.metadata);
+END;
+
+CREATE TRIGGER IF NOT EXISTS entity_fts_au AFTER UPDATE ON entity BEGIN
+  INSERT INTO entity_fts(entity_fts, rowid, display_name, type, metadata)
+  VALUES ('delete', OLD.rowid, OLD.display_name, OLD.type, OLD.metadata);
+  INSERT INTO entity_fts(rowid, display_name, type, metadata)
+  VALUES (NEW.rowid, NEW.display_name, NEW.type, NEW.metadata);
+END;

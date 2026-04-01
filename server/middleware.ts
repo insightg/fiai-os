@@ -26,10 +26,17 @@ export function authMiddleware(required = true) {
       const decoded = jwt.verify(token, JWT_SECRET) as { userId: string; email: string }
       req.userId = decoded.userId
 
-      // Fetch azienda_id from user_profiles
-      const profile = db.prepare('SELECT azienda_id FROM user_profiles WHERE id = ?').get(decoded.userId) as { azienda_id: string } | undefined
-      if (profile) {
-        req.aziendaId = profile.azienda_id
+      // Resolve azienda_id from names relation membro_di → organizzazione
+      const rel = db.prepare(
+        "SELECT r.to_id FROM relations r WHERE r.from_id = ? AND r.tipo = 'membro_di' LIMIT 1"
+      ).get(decoded.userId) as { to_id: string } | undefined
+
+      if (rel) {
+        req.aziendaId = rel.to_id
+      } else {
+        // Fallback: try azienda_id directly from names
+        const nameRec = db.prepare("SELECT azienda_id FROM names WHERE id = ?").get(decoded.userId) as any
+        if (nameRec?.azienda_id) req.aziendaId = nameRec.azienda_id
       }
 
       next()
@@ -41,4 +48,14 @@ export function authMiddleware(required = true) {
       next()
     }
   }
+}
+
+/**
+ * Sanitize metadata: remove sensitive fields (password_hash) from API responses.
+ * Call this on any names record before sending to client.
+ */
+export function sanitizeMetadata(metadata: string | Record<string, unknown>): Record<string, unknown> {
+  const obj = typeof metadata === 'string' ? JSON.parse(metadata) : { ...metadata }
+  delete obj.password_hash
+  return obj
 }

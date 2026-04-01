@@ -13,6 +13,11 @@ const UPLOADS_DIR = process.env.UPLOADS_DIR || '/app/data/uploads'
 
 let sock: any = null
 let qrCode: string | null = null
+
+// Map LID → phone number (WhatsApp uses LID format in newer versions)
+const lidPhoneMap = new Map<string, string>()
+// Pending login attempts: LID → user record (waiting for password)
+const pendingLogins = new Map<string, any>()
 let connectionStatus: 'disconnected' | 'connecting' | 'connected' = 'disconnected'
 
 // ── WhatsApp Connection ──────────────────────────────────
@@ -94,11 +99,93 @@ async function handleIncomingMessage(msg: WAMessage) {
 
   console.log(`WhatsApp message from ${sender}: ${text.substring(0, 50)}${hasDocument ? ' [+doc]' : ''}${hasImage ? ' [+img]' : ''}`)
 
-  // Check if user is authorized — lookup in unified user_profiles
-  const phone = sender.replace('@s.whatsapp.net', '').replace('@lid', '')
-  const waUser = db.prepare(
-    'SELECT up.id as user_id, up.nome, up.cognome, up.ruolo, up.azienda_id, up.email FROM user_profiles up WHERE up.whatsapp_phone = ? AND up.whatsapp_active = 1'
-  ).get(phone) as any
+  // Resolve phone number — handle both @s.whatsapp.net and @lid formats
+  let phone = ''
+  if (sender.endsWith('@s.whatsapp.net')) {
+    phone = sender.replace('@s.whatsapp.net', '').replace(/^\+/, '')
+  } else if (sender.endsWith('@lid')) {
+    // LID format: resolve via in-memory cache or DB lookup
+    const lidId = sender.replace('@lid', '')
+    phone = lidPhoneMap.get(lidId) || ''
+    if (!phone) {
+      const byLid = db.prepare(
+        "SELECT telefono FROM names WHERE json_extract(metadata, '$.whatsapp_lid') = ? AND telefono IS NOT NULL LIMIT 1"
+      ).get(lidId) as any
+      if (byLid?.telefono) {
+        phone = byLid.telefono.replace(/^\+/, '')
+        lidPhoneMap.set(lidId, phone)
+      }
+    }
+  } else {
+    phone = sender.replace(/[^0-9]/g, '')
+  }
+
+  // No phone resolved — check if this is a pending login attempt
+  if (!phone && sender.endsWith('@lid')) {
+    const lidId = sender.replace('@lid', '')
+    const pending = pendingLogins.get(lidId)
+
+    if (pending) {
+      // Second message: expecting password
+      const bcrypt = await import('bcryptjs')
+      const password = text.trim()
+      const meta = typeof pending.metadata === 'string' ? JSON.parse(pending.metadata) : pending.metadata
+      const match = await bcrypt.compare(password, meta.password_hash || '')
+      pendingLogins.delete(lidId)
+
+      if (match) {
+        // Login OK — save LID mapping
+        const userPhone = pending.telefono?.replace(/^\+/, '') || lidId
+        db.prepare("UPDATE names SET metadata = json_set(metadata, '$.whatsapp_lid', ?, '$.whatsapp_active', 1) WHERE id = ?").run(lidId, pending.id)
+        lidPhoneMap.set(lidId, userPhone)
+        await sock.sendMessage(sender, { text: `✅ Autenticato come *${pending.display_name}*!\n\nOra puoi usare FIAI da WhatsApp.` })
+      } else {
+        await sock.sendMessage(sender, { text: '❌ Password errata. Riprova scrivendo la tua email.' })
+      }
+      return
+    }
+
+    // Check if text looks like an email — start login flow
+    const emailMatch = text.trim().match(/^[^\s@]+@[^\s@]+\.[^\s@]+$/)
+    if (emailMatch) {
+      const email = emailMatch[0].toLowerCase()
+      const user = db.prepare("SELECT id, display_name, telefono, metadata FROM names WHERE email = ? AND tags LIKE '%\"utente\"%'").get(email) as any
+      if (user) {
+        pendingLogins.set(lidId, user)
+        await sock.sendMessage(sender, { text: `👤 *${user.display_name}*\n\nInvia la tua password per autenticarti:` })
+      } else {
+        await sock.sendMessage(sender, { text: `❌ Email "${email}" non trovata.` })
+      }
+      return
+    }
+
+    // First contact — ask for email
+    await sock.sendMessage(sender, { text: '👋 Benvenuto in *FIAI OS*!\n\nPer autenticarti, invia la tua *email* di accesso:' })
+    return
+  }
+
+  if (!phone) {
+    await sock.sendMessage(sender, { text: '⚠️ Numero non riconosciuto. Contatta l\'amministratore.' })
+    return
+  }
+
+  let waUser: any = null
+
+  // VFS: search in names by telefono
+  const nameUser = db.prepare(
+    "SELECT id as user_id, display_name as nome, '' as cognome, metadata, azienda_id, email FROM names WHERE (telefono = ? OR telefono = ?) AND tags LIKE '%\"utente\"%'"
+  ).get(phone, '+' + phone) as any
+  if (nameUser) {
+    const meta = typeof nameUser.metadata === 'string' ? JSON.parse(nameUser.metadata) : nameUser.metadata
+    waUser = { ...nameUser, ruolo: meta?.ruolo || 'collaboratore', azienda_id: nameUser.azienda_id }
+    // Resolve azienda_id from relation if null
+    if (!waUser.azienda_id) {
+      const rel = db.prepare("SELECT to_id FROM relations WHERE from_id = ? AND tipo = 'membro_di' LIMIT 1").get(nameUser.user_id) as any
+      if (rel) waUser.azienda_id = rel.to_id
+    }
+  }
+
+  // No fallback — VFS only
 
   if (!waUser) {
     await sock.sendMessage(sender, { text: '⚠️ Numero non riconosciuto.\n\nChiedi al tuo amministratore di collegare questo numero al tuo profilo FIAI.' })
@@ -150,11 +237,8 @@ async function handleIncomingMessage(msg: WAMessage) {
     // Send text only if no media was sent (avoid duplicate messages)
     if (!mediaSent) {
       // Filter out tool results with large data (images, base64)
-      const cleanToolCalls = (response.toolCalls || []).filter((tc: any) => {
-        if (tc.tool === 'generate_image') return false
-        return true
-      })
-      const waText = formatForWhatsApp(response.text, cleanToolCalls)
+      // Don't append tool results — the agent text already contains the summary
+      const waText = formatForWhatsApp(response.text, [])
       if (waText.trim()) {
         await sock.sendMessage(sender, { text: waText })
       }
@@ -352,8 +436,9 @@ function getSessionId(sender: string): string {
 import { handleChatMessage } from './agents/index.js'
 
 async function callAgent(userMessage: string, userId: string, sender: string): Promise<{ text: string; toolCalls: any[]; agentName?: string }> {
-  const profile = db.prepare('SELECT * FROM user_profiles WHERE id = ?').get(userId) as any
-  const aziendaId = profile?.azienda_id || ''
+  // Resolve azienda_id from relation membro_di
+  const rel = db.prepare("SELECT to_id FROM relations WHERE from_id = ? AND tipo = 'membro_di' LIMIT 1").get(userId) as any
+  const aziendaId = rel?.to_id || (db.prepare("SELECT azienda_id FROM names WHERE id = ?").get(userId) as any)?.azienda_id || ''
 
   const history = getConversationHistory(sender)
   const sessionId = getSessionId(sender)
@@ -482,26 +567,32 @@ export function getSock() { return sock }
 
 async function handleLinkCommand(sender: string, text: string) {
   const email = text.replace('!collega ', '').trim().toLowerCase()
-  const phone = sender.replace('@s.whatsapp.net', '')
+  // For LID senders, we need the user to provide their phone via the link
+  const isLid = sender.endsWith('@lid')
 
-  // Find user by email
-  const user = db.prepare('SELECT up.id, up.nome, up.cognome FROM user_profiles up JOIN users u ON u.id = up.id WHERE u.email = ?').get(email) as any
+  // Find user by email in names
+  const user = db.prepare("SELECT id, display_name FROM names WHERE email = ? AND tags LIKE '%\"utente\"%'").get(email) as any
 
   if (!user) {
     await sock.sendMessage(sender, { text: `❌ Email "${email}" non trovata nel sistema FIAI.` })
     return
   }
 
-  // Check if already linked
-  const existing = db.prepare('SELECT id FROM whatsapp_users WHERE phone = ?').get(phone) as any
-  if (existing) {
-    db.prepare('UPDATE whatsapp_users SET user_id = ?, active = 1 WHERE phone = ?').run(user.id, phone)
-  } else {
-    db.prepare('INSERT INTO whatsapp_users (id, phone, user_id, active) VALUES (?, ?, ?, 1)').run(crypto.randomUUID(), phone, user.id)
+  // Get user's phone from names
+  const userRec = db.prepare("SELECT telefono FROM names WHERE id = ?").get(user.id) as any
+  const userPhone = userRec?.telefono?.replace(/^\+/, '') || ''
+
+  // If LID, save the mapping
+  if (isLid && userPhone) {
+    const lidId = sender.replace('@lid', '')
+    lidPhoneMap.set(lidId, userPhone)
   }
 
+  // Ensure whatsapp_active is set
+  db.prepare("UPDATE names SET metadata = json_set(metadata, '$.whatsapp_active', 1) WHERE id = ?").run(user.id)
+
   await sock.sendMessage(sender, {
-    text: `✅ Collegato come *${user.nome} ${user.cognome}*!\n\nScrivi !help per vedere i comandi disponibili.`
+    text: `✅ Collegato come *${user.display_name}*!\n\nScrivi !help per vedere i comandi disponibili.`
   })
 }
 
@@ -521,7 +612,7 @@ function formatForWhatsApp(text: string, toolCalls: any[]): string {
     if (tc.result && typeof tc.result === 'object') {
       if (Array.isArray(tc.result)) {
         const items = tc.result.slice(0, 10).map((item: any, i: number) => {
-          const name = item.nome || item.ragione_sociale || item.titolo || `#${i + 1}`
+          const name = item.display_name || item.nome || item.ragione_sociale || item.titolo || `#${i + 1}`
           const stato = item.stato ? ` (${item.stato})` : ''
           return `${i + 1}. ${name}${stato}`
         }).join('\n')

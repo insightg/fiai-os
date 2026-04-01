@@ -35,6 +35,9 @@ interface ParsedRelation {
 // ── Allowed tables (whitelist for safety) ───────────────────
 
 const ALLOWED_TABLES = new Set([
+  // v5 Virtual Filesystem
+  'names', 'entity', 'relations',
+  // Legacy tables (kept for backward compat)
   'aziende', 'user_profiles', 'clienti', 'leads', 'preventivi', 'preventivo_righe',
   'ordini', 'progetti', 'fatture', 'fattura_righe', 'ricorrenti', 'fornitori',
   'fatture_passive', 'conti', 'movimenti', 'rimborsi', 'chat_sessions', 'chat_messages',
@@ -59,6 +62,14 @@ function resolveForeignKey(mainTable: string, alias: string, foreignTable: strin
     },
     preventivi: {
       righe: { fkColumn: 'preventivo_id' },
+    },
+    // v5 VFS
+    entity: {
+      children: { fkColumn: 'parent_id' },
+      righe: { fkColumn: 'parent_id' },
+    },
+    names: {
+      entities: { fkColumn: 'name_id' },
     },
   }
 
@@ -358,6 +369,10 @@ function handleSelect(body: QueryRequest): { data: unknown; error: unknown; coun
       if (JSON_FIELDS.has(key) && typeof newRow[key] === 'string') {
         try { newRow[key] = JSON.parse(newRow[key] as string) } catch { /* keep as-is */ }
       }
+    }
+    // Sanitize: never expose password_hash in API responses
+    if (newRow.metadata && typeof newRow.metadata === 'object' && (newRow.metadata as any).password_hash) {
+      delete (newRow.metadata as any).password_hash
     }
     return newRow
   })

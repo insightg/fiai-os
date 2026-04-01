@@ -100,7 +100,13 @@ interface DisplayMessage {
   agentName?: string
   agentDomain?: string
   agentColor?: string
-  imagePreview?: string // base64 data URL for attached images
+  imagePreview?: string
+  reasoning?: {
+    steps: { tool: string; description: string; result_summary: string }[]
+    domain: string
+    thinking: string
+    latencyMs?: number
+  }
 }
 
 // ── Quick Commands ──────────────────────────────────────
@@ -262,6 +268,48 @@ function renderMarkdown(text: string): JSX.Element[] {
   return elements
 }
 
+// ── Reasoning Block (collapsed by default) ──────────────
+function ReasoningBlock({ reasoning }: { reasoning: NonNullable<DisplayMessage['reasoning']> }) {
+  const [expanded, setExpanded] = useState(false)
+  return (
+    <div className="mb-2">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-1.5 text-[10px] text-text3 hover:text-text transition-colors group"
+      >
+        <svg className={`w-3 h-3 transition-transform ${expanded ? 'rotate-90' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+        </svg>
+        <span className="font-medium">Ragionamento</span>
+        <span className="text-text3 group-hover:text-text3">
+          {reasoning.steps.length} step{reasoning.steps.length > 1 ? '' : ''}
+          {reasoning.latencyMs ? ` · ${(reasoning.latencyMs / 1000).toFixed(1)}s` : ''}
+        </span>
+      </button>
+      {expanded && (
+        <div className="mt-2 ml-4 pl-3 border-l-2 border-gold/20 space-y-1.5">
+          {reasoning.thinking && (
+            <p className="text-[10px] text-text3 italic mb-2">{reasoning.thinking}</p>
+          )}
+          {reasoning.steps.map((step, i) => (
+            <div key={i} className="flex items-start gap-2 text-[11px]">
+              <span className="text-gold font-mono shrink-0">{i + 1}.</span>
+              <div className="min-w-0">
+                <span className="text-text2">{step.description}</span>
+                <span className="text-text3 ml-1.5">
+                  <span className="font-mono text-[10px] bg-bg3 px-1 py-0.5 rounded">{step.tool}</span>
+                  {' → '}
+                  <span className="text-text3">{step.result_summary}</span>
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Message Bubble ──────────────────────────────────────
 function MessageBubble({ message, activeSessionId, onAction }: { message: DisplayMessage; activeSessionId: string | null; onAction?: (messageId: string, toolName: string, action: string, payload: any) => void }) {
   const isUser = message.role === 'user'
@@ -313,6 +361,11 @@ function MessageBubble({ message, activeSessionId, onAction }: { message: Displa
                 {message.agentName}
               </span>
             </div>
+          )}
+
+          {/* Reasoning block (collapsed by default, like Claude thinking) */}
+          {!isUser && message.reasoning && message.reasoning.steps.length > 0 && (
+            <ReasoningBlock reasoning={message.reasoning} />
           )}
 
           {/* Rich tool result renderers FIRST (data before commentary) */}
@@ -487,10 +540,17 @@ export default function ChatLayout() {
   const [suggestions, setSuggestions] = useState<string[]>([])
   const [loadingSuggestions, setLoadingSuggestions] = useState(false)
 
-  // Prompt history state
-  const [promptHistory, setPromptHistory] = useState<string[]>([])
+  // Prompt history state — persisted in localStorage
+  const [promptHistory, setPromptHistory] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem('fiai_prompt_history') || '[]') } catch { return [] }
+  })
   const [historyIndex, setHistoryIndex] = useState(-1)
   const [savedInput, setSavedInput] = useState('')
+
+  // Persist history changes
+  useEffect(() => {
+    try { localStorage.setItem('fiai_prompt_history', JSON.stringify(promptHistory.slice(-100))) } catch {}
+  }, [promptHistory])
 
   // Rename session state
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null)
@@ -511,7 +571,21 @@ export default function ChatLayout() {
     mode: 'create' | 'edit'
   } | null>(null)
 
-  // Document archive modal state
+  // Smart upload state
+  const [smartUpload, setSmartUpload] = useState<{
+    status: 'analyzing' | 'done'
+    phase?: string
+    fileName: string
+    fileSize?: number
+    file?: File
+    result?: import('../../lib/upload').SmartUploadResult
+    request?: string
+    editCategoria?: string
+    newCategoria?: string
+    newCategoriaDesc?: string  // description for template recognition
+  } | null>(null)
+
+  // Legacy archive modal (kept for backward compat)
   const [archiveModal, setArchiveModal] = useState<{
     open: boolean
     fileUrl: string
@@ -660,14 +734,23 @@ export default function ChatLayout() {
     try {
       const data = await fetchChatSessions()
       setSessions(data)
+      return data
     } catch {
-      // silent
+      return []
     }
   }, [])
 
+  // Load sessions and auto-select the most recent one
   useEffect(() => {
-    loadSessions()
-  }, [loadSessions])
+    (async () => {
+      const data = await loadSessions()
+      if (data.length > 0 && !activeSessionId) {
+        const mostRecent = data[0] // already sorted by updated_at DESC
+        setActiveSessionId(mostRecent.id)
+        await loadSessionMessages(mostRecent.id)
+      }
+    })()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Generate Contextual Suggestions ──────────────────
   const generateSuggestions = useCallback(async (history: ConversationMessage[], agentDomain?: string) => {
@@ -797,9 +880,11 @@ export default function ChatLayout() {
     setRenameValue('')
   }
 
-  // ── Auto-scroll ──────────────────────────────────────
+  // ── Auto-scroll + refocus input ──────────────────────
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    // Always keep focus on input after messages change
+    setTimeout(() => inputRef.current?.focus(), 150)
   }, [messages, activeTools])
 
   // ── Focus input on mount ─────────────────────────────
@@ -808,20 +893,59 @@ export default function ChatLayout() {
   }, [])
 
   // ── File Attachment ──────────────────────────────────
-  const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+  const LARGE_FILE_THRESHOLD = 500 * 1024 // 500KB — ask for analysis depth
+
+  const runSmartUpload = useCallback(async (file: File, analysisMode: 'full' | 'compact' | 'none' = 'full') => {
+    // Show phases of progress
+    setSmartUpload(prev => ({ ...prev!, status: 'analyzing', phase: 'Caricamento file...' }))
+
+    // Simulate phase progression (the actual work is a single API call, but we show progress)
+    const phaseTimer = setTimeout(() => {
+      setSmartUpload(prev => prev?.status === 'analyzing' ? { ...prev, phase: 'Estrazione testo...' } : prev)
+    }, 1500)
+    const phaseTimer2 = setTimeout(() => {
+      setSmartUpload(prev => prev?.status === 'analyzing' ? { ...prev, phase: analysisMode === 'none' ? 'Salvataggio...' : 'Analisi AI in corso...' } : prev)
+    }, 3000)
+    const phaseTimer3 = setTimeout(() => {
+      setSmartUpload(prev => prev?.status === 'analyzing' ? { ...prev, phase: 'Indicizzazione contenuto...' } : prev)
+    }, 6000)
+
+    try {
+      const { uploadSmart } = await import('../../lib/upload')
+      const result = await uploadSmart(file, analysisMode)
+      clearTimeout(phaseTimer); clearTimeout(phaseTimer2); clearTimeout(phaseTimer3)
+      setSmartUpload({ status: 'done', fileName: file.name, fileSize: file.size, file, result })
+
+      // For images: also set as attached preview for chat
+      if (file.type.startsWith('image/')) {
+        setAttachedFile(file)
+        const reader = new FileReader()
+        reader.onload = (ev) => setAttachedPreview(ev.target?.result as string)
+        reader.readAsDataURL(file)
+      }
+
+      // For audio: set as attached for voice cloning
+      if (file.type.startsWith('audio/')) {
+        setAttachedFile(file)
+        const reader = new FileReader()
+        reader.onload = (ev) => { (file as any).__audioBase64 = ev.target?.result }
+        reader.readAsDataURL(file)
+      }
+    } catch (err: any) {
+      toast.error(`Errore analisi: ${err.message}`)
+      setSmartUpload(null)
+    }
+  }, [])
+
+  const handleFileSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
-    setAttachedFile(file)
-    if (file.type.startsWith('image/')) {
-      const reader = new FileReader()
-      reader.onload = (ev) => setAttachedPreview(ev.target?.result as string)
-      reader.readAsDataURL(file)
-    } else {
-      setAttachedPreview(null)
-    }
-    // Reset input so re-selecting the same file triggers onChange
     if (fileInputRef.current) fileInputRef.current.value = ''
-  }, [])
+
+    // Always use compact mode — no depth selection modal
+    setSmartUpload({ status: 'analyzing', fileName: file.name, fileSize: file.size, file })
+    await runSmartUpload(file, 'compact')
+  }, [runSmartUpload])
 
   const removeAttachment = useCallback(() => {
     setAttachedFile(null)
@@ -871,58 +995,9 @@ export default function ChatLayout() {
             const attachmentInfo = `[Audio allegato: ${fileToUpload.name}]`
             content = content.includes('[Audio allegato') ? content : `${content}\n${attachmentInfo}`
           } else {
-            // For documents (PDF, DOC, TXT, etc.): upload with AI categorization
-            const isPdf = fileToUpload.name.toLowerCase().endsWith('.pdf')
-            const isTxt = fileToUpload.name.toLowerCase().endsWith('.txt')
-            const isDoc = /\.(doc|docx)$/i.test(fileToUpload.name)
-
-            if (isPdf || isTxt || isDoc) {
-              // Use document upload endpoint (extracts text + AI categorization)
-              const { uploadDocumento } = await import('../../lib/upload')
-              const result = await uploadDocumento(fileToUpload)
-              const url = result.fileUrl || ''
-              const categoria = result.suggestedCategoria || 'altro'
-              const tags = (result.suggestedTags || []).join(', ')
-              const descrizione = result.suggestedDescrizione || ''
-              const extractedText = result.extractedText || ''
-
-              content = content || `Archivia questo documento: ${fileToUpload.name}`
-              content += `\n[Documento caricato: ${fileToUpload.name}]`
-              content += `\n[URL: ${url}]`
-              content += `\n[Categoria suggerita: ${categoria}]`
-              content += `\n[Tags suggeriti: ${tags}]`
-              content += `\n[Descrizione: ${descrizione}]`
-              if (extractedText) content += `\n[Testo estratto: ${extractedText.substring(0, 500)}...]`
-
-              // Show archive modal for document archiving
-              setArchiveModal({
-                open: true,
-                fileUrl: url,
-                fileName: fileToUpload.name,
-                fileSize: fileToUpload.size,
-                suggestedCategoria: categoria,
-                suggestedTags: result.suggestedTags || [],
-                suggestedDescrizione: descrizione,
-                extractedText,
-              })
-            } else {
-              // Generic file upload
-              const result = await uploadGeneric(fileToUpload)
-              const url = result.url || ''
-              content = content ? `${content}\n[File allegato: ${fileToUpload.name} - ${url}]` : `[File allegato: ${fileToUpload.name} - ${url}]`
-
-              // Show archive modal for generic uploads too
-              setArchiveModal({
-                open: true,
-                fileUrl: url,
-                fileName: fileToUpload.name,
-                fileSize: fileToUpload.size,
-                suggestedCategoria: result.suggestedCategoria || 'altro',
-                suggestedTags: result.suggestedTags || [],
-                suggestedDescrizione: result.suggestedDescrizione || '',
-                extractedText: result.extractedText || '',
-              })
-            }
+            // Documents already uploaded via smart upload in handleFileSelect
+            // This shouldn't happen, but handle gracefully
+            if (!content) content = `File allegato: ${fileToUpload.name}`
           }
         } catch {
           toast.error('Errore nel caricamento del file')
@@ -1048,6 +1123,7 @@ export default function ChatLayout() {
                     agentName: result.agentName,
                     agentDomain: result.agentDomain,
                     agentColor: result.agentColor,
+                    reasoning: result.reasoning,
                   }
                 : m
             )
@@ -1063,6 +1139,7 @@ export default function ChatLayout() {
             agentName: result.agentName,
             agentDomain: result.agentDomain,
             agentColor: result.agentColor,
+            reasoning: result.reasoning,
           }])
         }
         // Save response for voice chat
@@ -1095,6 +1172,8 @@ export default function ChatLayout() {
       } finally {
         setIsLoading(false)
         setActiveTools([])
+        // Always refocus the input after response
+        setTimeout(() => inputRef.current?.focus(), 100)
       }
     },
     [inputValue, isLoading, activeSessionId, messages.length, conversationHistory, loadSessions, attachedFile]
@@ -1534,7 +1613,7 @@ export default function ChatLayout() {
                     <input
                       ref={fileInputRef}
                       type="file"
-                      accept=".pdf,.png,.jpg,.jpeg,.webp,.txt,.doc,.docx,.mp3,.wav,.webm,.ogg,.m4a"
+                      accept=".pdf,.png,.jpg,.jpeg,.webp,.txt,.doc,.docx,.xls,.xlsx,.csv,.mp3,.wav,.webm,.ogg,.m4a,.mp4,.mov,.zip,.pptx"
                       className="hidden"
                       onChange={handleFileSelect}
                     />
@@ -1614,6 +1693,284 @@ export default function ChatLayout() {
         </aside>
       </div>
       <UserFilesModal open={filesModalOpen} onClose={() => setFilesModalOpen(false)} />
+
+      {/* Smart Upload Overlay */}
+      {smartUpload && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
+          <div className="bg-bg2 border border-border rounded-2xl shadow-2xl w-full max-w-md p-6">
+            {smartUpload.status === 'analyzing' ? (
+              <div className="flex flex-col items-center gap-4 py-8">
+                <Loader2 className="w-10 h-10 animate-spin text-gold" />
+                <p className="text-sm text-text font-medium">{smartUpload.phase || 'Analisi in corso...'}</p>
+                <p className="text-xs text-text3">{smartUpload.fileName}</p>
+                {smartUpload.fileSize && (
+                  <p className="text-[10px] text-text3">{(smartUpload.fileSize / 1024).toFixed(0)} KB</p>
+                )}
+                {/* Phase progress dots */}
+                <div className="flex gap-1.5 mt-1">
+                  {['Caricamento', 'Estrazione', 'Analisi', 'Indicizzazione'].map((phase, i) => {
+                    const currentIdx = ['Caricamento file...', 'Estrazione testo...', 'Analisi AI in corso...', 'Indicizzazione contenuto...'].findIndex(p => p === smartUpload.phase)
+                    return (
+                      <div key={phase} className={`w-2 h-2 rounded-full transition-colors ${i <= currentIdx ? 'bg-gold' : 'bg-bg3'}`} />
+                    )
+                  })}
+                </div>
+              </div>
+            ) : smartUpload.result ? (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-semibold text-text">File Analizzato</h3>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-gold/10 text-gold">
+                    {smartUpload.result.entity_type}
+                  </span>
+                </div>
+
+                {/* Preview: image or audio */}
+                {smartUpload.result.entity_type === 'foto' && smartUpload.result.file_url && (
+                  <img src={smartUpload.result.file_url} alt="Preview" className="w-full max-h-48 object-contain rounded-lg bg-bg3" />
+                )}
+                {smartUpload.result.entity_type === 'audio' && smartUpload.result.file_url && (
+                  <audio controls className="w-full" src={smartUpload.result.file_url} />
+                )}
+
+                <div className="space-y-2 text-xs">
+                  <div className="bg-bg3 rounded-lg p-3 space-y-1.5">
+                    <p><span className="text-text3">Nome:</span> <span className="text-text font-medium">{smartUpload.result.display_name}</span></p>
+                    <div className="flex items-center gap-2">
+                      <span className="text-text3 shrink-0">Categoria:</span>
+                      <select
+                        value={smartUpload.editCategoria ?? smartUpload.result.categoria}
+                        onChange={(e) => setSmartUpload(prev => prev ? { ...prev, editCategoria: e.target.value, newCategoria: e.target.value === '__new__' ? '' : undefined } : null)}
+                        className="flex-1 px-2 py-1 text-xs bg-bg2 border border-border rounded text-text focus:outline-none focus:border-gold/40"
+                      >
+                        {['legale', 'amministrazione', 'commerciale', 'hr', 'marketing', 'produzione', 'documentazione_tecnica', 'normative', 'contratti', 'altro'].map(cat => (
+                          <option key={cat} value={cat}>{cat}</option>
+                        ))}
+                        {/* Add current AI suggestion if not in list */}
+                        {!['legale', 'amministrazione', 'commerciale', 'hr', 'marketing', 'produzione', 'documentazione_tecnica', 'normative', 'contratti', 'altro'].includes(smartUpload.result.categoria) && (
+                          <option value={smartUpload.result.categoria}>{smartUpload.result.categoria}</option>
+                        )}
+                        <option value="__new__">+ Nuova categoria...</option>
+                      </select>
+                    </div>
+                    {(smartUpload.editCategoria === '__new__' || smartUpload.newCategoria !== undefined) && (
+                      <div className="space-y-2 bg-bg3/50 rounded-lg p-2.5 border border-border">
+                        <input
+                          type="text"
+                          value={smartUpload.newCategoria || ''}
+                          onChange={(e) => setSmartUpload(prev => prev ? { ...prev, newCategoria: e.target.value } : null)}
+                          placeholder="Nome nuova categoria..."
+                          autoFocus
+                          className="w-full px-2 py-1.5 text-xs bg-bg2 border border-border rounded text-text placeholder:text-text3 focus:outline-none focus:border-gold/40"
+                        />
+                        <textarea
+                          value={smartUpload.newCategoriaDesc || ''}
+                          onChange={(e) => setSmartUpload(prev => prev ? { ...prev, newCategoriaDesc: e.target.value } : null)}
+                          placeholder="Descrivi questa categoria per il riconoscimento automatico futuro (es. parole chiave, tipo di contenuto, struttura tipica...)"
+                          rows={2}
+                          className="w-full px-2 py-1.5 text-[10px] bg-bg2 border border-border rounded text-text placeholder:text-text3 focus:outline-none focus:border-gold/40 resize-none"
+                        />
+                        <p className="text-[9px] text-text3">Questo template sarà usato per riconoscere automaticamente documenti simili in futuro.</p>
+                      </div>
+                    )}
+                    {smartUpload.result.tags.length > 0 && (
+                      <div className="flex gap-1 flex-wrap">
+                        <span className="text-text3">Tags:</span>
+                        {smartUpload.result.tags.map(t => (
+                          <span key={t} className="px-1.5 py-0.5 rounded bg-bg2 text-text2 text-[10px]">{t}</span>
+                        ))}
+                      </div>
+                    )}
+                    {smartUpload.result.descrizione && (
+                      <p><span className="text-text3">Descrizione:</span> <span className="text-text">{smartUpload.result.descrizione}</span></p>
+                    )}
+                  </div>
+
+                  {smartUpload.result.matched_name && (
+                    <div className="bg-green/10 border border-green/20 rounded-lg p-3">
+                      <p className="text-green text-[11px] font-medium">Collegato automaticamente a:</p>
+                      <p className="text-text font-medium mt-0.5">{smartUpload.result.matched_name.display_name}</p>
+                    </div>
+                  )}
+
+                  {smartUpload.result.suggested_name && !smartUpload.result.matched_name && (
+                    <div className="bg-amber/10 border border-amber/20 rounded-lg p-3">
+                      <p className="text-amber text-[11px]">Nome suggerito (non trovato nel DB):</p>
+                      <p className="text-text font-medium mt-0.5">{smartUpload.result.suggested_name}</p>
+                    </div>
+                  )}
+
+                  {smartUpload.result.chunked && (
+                  <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3">
+                    <p className="text-blue-400 text-[11px] font-medium">Documento analizzato in profondità</p>
+                    <p className="text-text text-xs mt-0.5">{smartUpload.result.chunk_count} sezioni indicizzate per ricerca</p>
+                  </div>
+                )}
+
+                {Object.keys(smartUpload.result.extracted_data).length > 0 && (
+                    <div className="bg-bg3 rounded-lg p-3">
+                      <p className="text-text3 text-[10px] font-medium mb-1">Dati estratti:</p>
+                      {Object.entries(smartUpload.result.extracted_data)
+                        .filter(([, v]) => v !== null && v !== '' && v !== 0)
+                        .map(([k, v]) => (
+                          <p key={k} className="text-[11px]">
+                            <span className="text-text3">{k}:</span>{' '}
+                            <span className="text-text">{typeof v === 'number' ? `€ ${v.toLocaleString('it-IT')}` : String(v)}</span>
+                          </p>
+                        ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Contextual suggestions */}
+                <div className="pt-1">
+                  <p className="text-[10px] text-text3 mb-2">Cosa vuoi fare?</p>
+                  <div className="flex flex-wrap gap-1.5 mb-3">
+                    {(() => {
+                      const r = smartUpload.result!
+                      const type = r.entity_type
+                      const suggestions: { label: string; action: string }[] = []
+
+                      // Common
+                      suggestions.push({ label: 'Archivia', action: `Archivia il file ${r.display_name}` })
+
+                      // Type-specific
+                      if (type === 'fattura_passiva') {
+                        suggestions.push({ label: 'Registra fattura', action: `Registra la fattura ${r.display_name} con i dati estratti` })
+                        if (r.matched_name) suggestions.push({ label: `Collega a ${r.matched_name.display_name}`, action: `Collega la fattura a ${r.matched_name.display_name}` })
+                        if (!r.matched_name && r.suggested_name) suggestions.push({ label: `Crea fornitore ${r.suggested_name}`, action: `Crea il fornitore ${r.suggested_name} e collega la fattura` })
+                      } else if (type === 'contratto') {
+                        suggestions.push({ label: 'Analizza clausole', action: `Analizza le clausole del contratto ${r.display_name}` })
+                        suggestions.push({ label: 'Riassumi', action: `Riassumi il contratto ${r.display_name}` })
+                      } else if (type === 'cv') {
+                        suggestions.push({ label: 'Crea candidato', action: `Crea un candidato dai dati del CV ${r.display_name}` })
+                        suggestions.push({ label: 'Valuta competenze', action: `Valuta le competenze nel CV ${r.display_name}` })
+                      } else if (type === 'preventivo') {
+                        suggestions.push({ label: 'Registra preventivo', action: `Registra il preventivo ${r.display_name}` })
+                      } else if (type === 'foto') {
+                        suggestions.push({ label: 'Analizza immagine', action: `Analizza l'immagine ${r.display_name}` })
+                        suggestions.push({ label: 'Invia su WhatsApp', action: `Invia l'immagine ${r.display_name} su WhatsApp` })
+                      } else if (type === 'audio') {
+                        suggestions.push({ label: 'Trascrivi', action: `Trascrivi l'audio ${r.display_name}` })
+                        suggestions.push({ label: 'Clona voce', action: `Clona la voce dall'audio ${r.display_name}` })
+                      } else if (type === 'report') {
+                        suggestions.push({ label: 'Riassumi', action: `Riassumi il report ${r.display_name}` })
+                        suggestions.push({ label: 'Estrai KPI', action: `Estrai i KPI dal report ${r.display_name}` })
+                      } else {
+                        suggestions.push({ label: 'Riassumi', action: `Riassumi il documento ${r.display_name}` })
+                      }
+
+                      // Chunked document: explore
+                      if (r.chunked) {
+                        suggestions.unshift({ label: 'Esplora documento', action: `Apri il documento ${r.display_name} e preparati a rispondere alle mie domande sul suo contenuto` })
+                      }
+
+                      // Universal
+                      suggestions.push({ label: 'Invia su WhatsApp', action: `Invia il file ${r.display_name} su WhatsApp` })
+
+                      return suggestions.map(s => (
+                        <button
+                          key={s.label}
+                          onClick={async () => {
+                            const finalCat = smartUpload.editCategoria === '__new__'
+                              ? (smartUpload.newCategoria || r.categoria)
+                              : (smartUpload.editCategoria || r.categoria)
+
+                            // Update entity category if changed
+                            if (finalCat !== r.categoria && r.entity_id) {
+                              try {
+                                const token = (await import('../../lib/supabase')).getAuthToken()
+                                await fetch('/api/chat/message', {
+                                  method: 'POST',
+                                  headers: { 'Content-Type': 'application/json', ...(token ? { 'Authorization': `Bearer ${token}` } : {}) },
+                                  body: JSON.stringify({
+                                    message: `Aggiorna la categoria del documento "${r.display_name}" (id: ${r.entity_id}) a "${finalCat}"`,
+                                    sessionId: 'system-update',
+                                  }),
+                                })
+                              } catch {}
+                            }
+
+                            // Save new category template if creating new
+                            if (smartUpload.editCategoria === '__new__' && smartUpload.newCategoria) {
+                              try {
+                                const { supabase } = await import('../../lib/supabase')
+                                await supabase.from('entity').insert({
+                                  type: 'category_template',
+                                  display_name: smartUpload.newCategoria,
+                                  slug: smartUpload.newCategoria.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+                                  metadata: JSON.stringify({
+                                    categoria: smartUpload.newCategoria,
+                                    descrizione: smartUpload.newCategoriaDesc || '',
+                                    keywords: smartUpload.newCategoriaDesc?.split(/[\s,;.]+/).filter((w: string) => w.length > 2) || [],
+                                    created_from: r.display_name,
+                                    example_entity_type: r.entity_type,
+                                  }),
+                                  path: `/entity/category-templates/${smartUpload.newCategoria.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+                                })
+                                toast.success(`Template "${smartUpload.newCategoria}" creato`)
+                              } catch {}
+                            }
+
+                            const ctx = `[File: ${r.display_name}] [Tipo: ${r.entity_type}] [Categoria: ${finalCat}] [URL: ${r.file_url}]${r.matched_name ? ` [Name: ${r.matched_name.display_name}]` : ''}`
+                            setSmartUpload(null)
+                            handleSend(`${s.action}\n${ctx}`)
+                          }}
+                          className="px-2.5 py-1.5 text-[11px] bg-bg3 hover:bg-gold/10 hover:text-gold border border-border rounded-lg text-text transition-colors"
+                        >
+                          {s.label}
+                        </button>
+                      ))
+                    })()}
+                  </div>
+
+                  {/* Free text input */}
+                  <input
+                    type="text"
+                    value={smartUpload.request || ''}
+                    onChange={(e) => setSmartUpload(prev => prev ? { ...prev, request: e.target.value } : null)}
+                    placeholder="oppure scrivi cosa fare..."
+                    className="w-full px-3 py-2 text-xs bg-bg3 border border-border rounded-lg text-text placeholder:text-text3 focus:outline-none focus:border-gold/40"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && smartUpload.request?.trim()) {
+                        const req = smartUpload.request.trim()
+                        const r = smartUpload.result!
+                        const ctx = `[File: ${r.display_name}] [Tipo: ${r.entity_type}] [URL: ${r.file_url}]${r.matched_name ? ` [Name: ${r.matched_name.display_name}]` : ''}`
+                        setSmartUpload(null)
+                        handleSend(`${req}\n${ctx}`)
+                      }
+                    }}
+                  />
+                </div>
+
+                <div className="flex gap-2 pt-2">
+                  {smartUpload.request?.trim() && (
+                    <button
+                      onClick={() => {
+                        const req = smartUpload.request!.trim()
+                        const r = smartUpload.result!
+                        const ctx = `[File: ${r.display_name}] [Tipo: ${r.entity_type}] [URL: ${r.file_url}]${r.matched_name ? ` [Name: ${r.matched_name.display_name}]` : ''}`
+                        setSmartUpload(null)
+                        handleSend(`${req}\n${ctx}`)
+                      }}
+                      className="flex-1 px-4 py-2 text-xs bg-gold hover:bg-gold-l text-white rounded-lg font-medium"
+                    >
+                      Invia
+                    </button>
+                  )}
+                  <button
+                    onClick={() => setSmartUpload(null)}
+                    className="px-4 py-2 text-xs text-text3 hover:text-text border border-border rounded-lg"
+                  >
+                    Chiudi
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      )}
+
       {archiveModal && (
         <DocumentArchiveModal
           open={archiveModal.open}

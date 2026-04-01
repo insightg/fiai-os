@@ -22,12 +22,12 @@ router.post('/search', authMiddleware(true), async (req: AuthRequest, res: Respo
     // Step 1: FTS5 full-text search
     try {
       const ftsSql = `
-        SELECT d.id, d.nome, d.categoria, d.descrizione, d.tags, d.file_url, d.file_size, d.tipo_file, d.created_at,
+        SELECT d.id, d.display_name as nome, json_extract(d.metadata,'$.categoria') as categoria, json_extract(d.metadata,'$.descrizione') as descrizione, json_extract(d.metadata,'$.tags') as tags, d.file_url, json_extract(d.metadata,'$.file_size') as file_size, json_extract(d.metadata,'$.tipo_file') as tipo_file, d.created_at,
                rank
-        FROM documenti_fts fts
-        JOIN documenti d ON d.rowid = fts.rowid
-        WHERE documenti_fts MATCH ?
-          AND d.azienda_id = ?
+        FROM entity_fts fts
+        JOIN entity d ON d.rowid = fts.rowid
+        WHERE entity_fts MATCH ?
+          AND d.azienda_id = ? AND d.type = 'documento'
         ORDER BY rank
         LIMIT 20
       `
@@ -44,7 +44,7 @@ router.post('/search', authMiddleware(true), async (req: AuthRequest, res: Respo
     // Step 2: Fallback to AI-powered search
     const allDocsSql = `
       SELECT id, nome, categoria, descrizione, tags
-      FROM documenti
+      FROM v_documenti
       WHERE azienda_id = ?
       ORDER BY created_at DESC
       LIMIT 100
@@ -66,7 +66,7 @@ router.post('/search', authMiddleware(true), async (req: AuthRequest, res: Respo
     const placeholders = matchedIds.map(() => '?').join(', ')
     const resultSql = `
       SELECT id, nome, categoria, descrizione, tags, file_url, file_size, tipo_file, created_at
-      FROM documenti
+      FROM v_documenti
       WHERE id IN (${placeholders})
     `
     const result = db.prepare(resultSql).all(...matchedIds)
@@ -126,11 +126,11 @@ router.post('/search-deep', authMiddleware(true), async (req: AuthRequest, res: 
     for (const q of queries) {
       try {
         const rows = db.prepare(
-          `SELECT d.id, d.nome, d.categoria, d.descrizione, d.tags, d.file_url, d.file_size, d.tipo_file, d.contenuto_testo, d.created_at
-           FROM documenti_fts fts
-           JOIN documenti d ON d.rowid = fts.rowid
-           WHERE documenti_fts MATCH ?
-             AND d.azienda_id = ?
+          `SELECT d.id, d.display_name as nome, json_extract(d.metadata,'$.categoria') as categoria, json_extract(d.metadata,'$.descrizione') as descrizione, json_extract(d.metadata,'$.tags') as tags, d.file_url, json_extract(d.metadata,'$.file_size') as file_size, json_extract(d.metadata,'$.tipo_file') as tipo_file, json_extract(d.metadata,'$.contenuto_testo') as contenuto_testo, d.created_at
+           FROM entity_fts fts
+           JOIN entity d ON d.rowid = fts.rowid
+           WHERE entity_fts MATCH ?
+             AND d.azienda_id = ? AND d.type = 'documento'
            LIMIT 10`
         ).all(q, aziendaId) as Record<string, unknown>[]
         for (const row of rows) allResults.set(row.id as string, row)
@@ -141,7 +141,7 @@ router.post('/search-deep', authMiddleware(true), async (req: AuthRequest, res: 
     const likePattern = `%${query}%`
     const likeRows = db.prepare(
       `SELECT id, nome, categoria, descrizione, tags, file_url, file_size, tipo_file, contenuto_testo, created_at
-       FROM documenti
+       FROM v_documenti
        WHERE azienda_id = ?
          AND (nome LIKE ? OR descrizione LIKE ? OR contenuto_testo LIKE ?)
        LIMIT 10`
@@ -174,7 +174,7 @@ router.post('/summarize', authMiddleware(true), async (req: AuthRequest, res: Re
       return
     }
 
-    const doc = db.prepare('SELECT * FROM documenti WHERE id = ?').get(documentId) as Record<string, unknown> | undefined
+    const doc = db.prepare('SELECT * FROM v_documenti WHERE id = ?').get(documentId) as Record<string, unknown> | undefined
     if (!doc) {
       res.status(404).json({ error: 'Documento non trovato' })
       return
@@ -209,7 +209,7 @@ router.get('/content/:id', authMiddleware(true), async (req: AuthRequest, res: R
   try {
     const { id } = req.params
 
-    const doc = db.prepare('SELECT id, nome, contenuto_testo, file_url, tipo_file FROM documenti WHERE id = ?').get(id) as Record<string, unknown> | undefined
+    const doc = db.prepare('SELECT id, nome, contenuto_testo, file_url, tipo_file FROM v_documenti WHERE id = ?').get(id) as Record<string, unknown> | undefined
     if (!doc) {
       res.status(404).json({ error: 'Documento non trovato' })
       return
@@ -242,8 +242,8 @@ router.post('/compare', authMiddleware(true), async (req: AuthRequest, res: Resp
       return
     }
 
-    const doc1 = db.prepare('SELECT id, nome, contenuto_testo, file_url, tipo_file FROM documenti WHERE id = ?').get(docId1) as Record<string, unknown> | undefined
-    const doc2 = db.prepare('SELECT id, nome, contenuto_testo, file_url, tipo_file FROM documenti WHERE id = ?').get(docId2) as Record<string, unknown> | undefined
+    const doc1 = db.prepare('SELECT id, nome, contenuto_testo, file_url, tipo_file FROM v_documenti WHERE id = ?').get(docId1) as Record<string, unknown> | undefined
+    const doc2 = db.prepare('SELECT id, nome, contenuto_testo, file_url, tipo_file FROM v_documenti WHERE id = ?').get(docId2) as Record<string, unknown> | undefined
 
     if (!doc1 || !doc2) {
       res.status(404).json({ error: 'Uno o entrambi i documenti non trovati' })

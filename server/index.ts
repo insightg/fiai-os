@@ -16,6 +16,9 @@ import signalsRouter from './signals.js'
 import pdfRouter from './pdf.js'
 import { startWhatsApp, whatsappRouter } from './whatsapp.js'
 import chatRouter from './agents/index.js'
+import { startJobWorker } from './jobs.js'
+import { initAutonomousAgents } from './agents/autonomous.js'
+import { initWorkflows } from './agents/workflows.js'
 
 // Run migrations on startup
 const migrationPath = path.join(import.meta.dirname || '.', 'migrations', 'init-sqlite.sql')
@@ -27,6 +30,15 @@ if (fs.existsSync(migrationPath)) {
 
 // Add tts_voice column if missing
 try { db.exec("ALTER TABLE user_profiles ADD COLUMN tts_voice TEXT DEFAULT 'Vivian'") } catch {}
+
+// Run v5 VFS migration (idempotent)
+import { migrateToVFS } from './migrations/migrate-vfs.js'
+try {
+  const migrated = migrateToVFS()
+  if (migrated) console.log('VFS migration completed successfully.')
+} catch (err) {
+  console.warn('VFS migration skipped or failed:', (err as Error).message)
+}
 
 const app = express()
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001
@@ -71,6 +83,9 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
 app.listen(PORT, () => {
   console.log(`FIAI OS server running on http://localhost:${PORT}`)
   startWhatsApp().catch(err => console.error('WhatsApp startup error:', err))
+  initAutonomousAgents()
+  initWorkflows()
+  startJobWorker()
 })
 
 export default app

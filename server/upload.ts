@@ -4,7 +4,8 @@ import path from 'path'
 import fs from 'fs'
 import crypto from 'crypto'
 import { AuthRequest, authMiddleware } from './middleware.js'
-import { analyzeInvoice, analyzeDocument } from './ai.js'
+import { analyzeInvoice, analyzeDocument, analyzeUpload } from './ai.js'
+import { chunkDocument } from './chunker.js'
 import db from './db.js'
 
 const router = Router()
@@ -28,7 +29,7 @@ const upload = multer({
   storage,
   limits: { fileSize: 20 * 1024 * 1024 }, // 20MB
   fileFilter: (_req, file, cb) => {
-    const allowed = ['.pdf', '.png', '.jpg', '.jpeg', '.webp', '.txt', '.doc', '.docx']
+    const allowed = ['.pdf', '.png', '.jpg', '.jpeg', '.webp', '.txt', '.doc', '.docx', '.xls', '.xlsx', '.csv', '.mp3', '.wav', '.ogg', '.m4a', '.webm', '.mp4', '.mov', '.avi', '.zip', '.pptx']
     const ext = path.extname(file.originalname).toLowerCase()
     if (allowed.includes(ext)) {
       cb(null, true)
@@ -274,6 +275,246 @@ router.post('/extract-text', authMiddleware(true), async (req: AuthRequest, res:
   } catch (err) {
     console.error('Extract text error:', err)
     res.status(500).json({ error: { message: (err as Error).message } })
+  }
+})
+
+// ══════════════════════════════════════════════════════════
+// Smart Upload — unified intelligent upload endpoint
+// ══════════════════════════════════════════════════════════
+
+router.post('/smart', authMiddleware(true), upload.single('file'), async (req: AuthRequest, res: Response) => {
+  try {
+    if (!req.file) {
+      res.status(400).json({ error: 'Nessun file caricato' })
+      return
+    }
+
+    const aziendaId = req.aziendaId || 'unknown'
+    const userId = req.userId || 'unknown'
+    const file = req.file
+    const ext = path.extname(file.originalname).toLowerCase()
+    const fileName = file.originalname
+    const analysisMode = (req.body?.mode || 'full') as 'full' | 'compact' | 'none'
+
+    // 1. Move file to permanent location
+    const destDir = path.join(UPLOADS_DIR, aziendaId, userId, 'files')
+    const destFilename = `${crypto.randomUUID()}${ext}`
+    const destPath = moveFile(file.path, destDir, destFilename)
+    const fileUrl = `/api/uploads/${aziendaId}/${userId}/files/${destFilename}`
+    const fileSize = fs.statSync(destPath).size
+
+    // 2. Extract content based on file type
+    let extractedText = ''
+    let isImage = false
+    let imageBase64 = ''
+
+    let isAudio = false
+    let pageCount = 0
+
+    if (ext === '.pdf') {
+      try {
+        const pdfParse = (await import('pdf-parse')).default
+        const pdfBuffer = fs.readFileSync(destPath)
+        const parsed = await pdfParse(pdfBuffer)
+        const fullText = parsed.text || ''
+        pageCount = parsed.numpages || 0
+
+        if (analysisMode === 'compact' && pageCount > 10) {
+          // Sample pages: take ~5 evenly distributed pages for AI classification
+          const pages = fullText.split(/\f/) // form feed = page break in pdf-parse
+          if (pages.length > 5) {
+            const sampleIndices = [0, Math.floor(pages.length * 0.25), Math.floor(pages.length * 0.5), Math.floor(pages.length * 0.75), pages.length - 1]
+            const samples = sampleIndices.map(i => pages[Math.min(i, pages.length - 1)])
+            // extractedText for AI analysis = sampled pages only
+            extractedText = samples.join('\n\n--- [pagina campione] ---\n\n')
+          } else {
+            extractedText = fullText
+          }
+          // But for chunking we always use full text — store it separately
+          ;(req as any).__fullText = fullText
+        } else {
+          extractedText = fullText
+        }
+      } catch { extractedText = '' }
+    } else if (ext === '.txt' || ext === '.csv') {
+      extractedText = fs.readFileSync(destPath, 'utf-8')
+    } else if (['.png', '.jpg', '.jpeg', '.webp'].includes(ext)) {
+      isImage = true
+      const imgBuffer = fs.readFileSync(destPath)
+      imageBase64 = `data:image/${ext.replace('.', '')};base64,${imgBuffer.toString('base64')}`
+    } else if (['.mp3', '.wav', '.ogg', '.m4a', '.webm'].includes(ext)) {
+      isAudio = true
+      extractedText = `[File audio: ${fileName}, ${(fileSize / 1024).toFixed(1)} KB]`
+    } else if (['.mp4', '.mov', '.avi'].includes(ext)) {
+      extractedText = `[File video: ${fileName}, ${(fileSize / (1024 * 1024)).toFixed(1)} MB]`
+    } else if (['.doc', '.docx', '.xls', '.xlsx', '.pptx'].includes(ext)) {
+      extractedText = `[Documento Office: ${fileName}]`
+    } else if (ext === '.zip') {
+      extractedText = `[Archivio: ${fileName}, ${(fileSize / (1024 * 1024)).toFixed(1)} MB]`
+    }
+
+    // 3. AI Analysis
+    let analysis
+    if (analysisMode === 'none') {
+      // No AI — basic classification from extension
+      const typeMap: Record<string, string> = {
+        '.pdf': 'documento', '.doc': 'documento', '.docx': 'documento', '.txt': 'documento',
+        '.png': 'foto', '.jpg': 'foto', '.jpeg': 'foto', '.webp': 'foto',
+        '.mp3': 'audio', '.wav': 'audio', '.ogg': 'audio', '.m4a': 'audio', '.webm': 'audio',
+        '.mp4': 'video', '.mov': 'video', '.avi': 'video',
+        '.xls': 'documento', '.xlsx': 'documento', '.csv': 'documento', '.pptx': 'documento',
+        '.zip': 'documento',
+      }
+      analysis = {
+        entity_type: typeMap[ext] || 'documento',
+        display_name: fileName.replace(/\.[^.]+$/, ''),
+        suggested_name: null,
+        categoria: 'altro',
+        tags: [],
+        descrizione: `File ${ext.replace('.', '').toUpperCase()}, ${(fileSize / 1024).toFixed(0)} KB`,
+        extracted_data: {},
+      }
+    } else if (isAudio) {
+      analysis = {
+        entity_type: 'audio',
+        display_name: fileName.replace(/\.[^.]+$/, ''),
+        suggested_name: null,
+        categoria: 'altro',
+        tags: ['audio'],
+        descrizione: `File audio ${ext.replace('.', '').toUpperCase()}, ${(fileSize / 1024).toFixed(0)} KB`,
+        extracted_data: { formato: ext.replace('.', ''), dimensione_kb: Math.round(fileSize / 1024) },
+      }
+    } else {
+      // Load custom category templates for AI recognition
+      const customTemplates = db.prepare(
+        "SELECT display_name, metadata FROM entity WHERE type = 'category_template' AND azienda_id = ?"
+      ).all(aziendaId) as any[]
+      const customCategories = customTemplates.map((t: any) => {
+        const m = typeof t.metadata === 'string' ? JSON.parse(t.metadata) : t.metadata
+        return { name: t.display_name, description: m.descrizione || '', keywords: m.keywords || [] }
+      })
+
+      analysis = await analyzeUpload(
+        isImage ? imageBase64 : extractedText,
+        fileName,
+        isImage,
+        file.mimetype,
+        customCategories.length > 0 ? customCategories : undefined
+      )
+    }
+
+    // 4. Name matching — try to find related name in DB
+    let matchedNameId: string | null = null
+    let matchedNameDisplay: string | null = null
+
+    const ed = analysis.extracted_data as Record<string, any>
+
+    // Match by P.IVA
+    if (ed.piva) {
+      const byPiva = db.prepare("SELECT id, display_name FROM names WHERE piva = ? AND azienda_id = ?").get(ed.piva, aziendaId) as any
+      if (byPiva) { matchedNameId = byPiva.id; matchedNameDisplay = byPiva.display_name }
+    }
+    // Match by company name
+    if (!matchedNameId && (ed.fornitore || analysis.suggested_name)) {
+      const searchName = ed.fornitore || analysis.suggested_name
+      const byName = db.prepare("SELECT id, display_name FROM names WHERE display_name LIKE ? AND azienda_id = ?").get(`%${searchName}%`, aziendaId) as any
+      if (byName) { matchedNameId = byName.id; matchedNameDisplay = byName.display_name }
+    }
+    // Match by email
+    if (!matchedNameId && ed.email) {
+      const byEmail = db.prepare("SELECT id, display_name FROM names WHERE email = ?").get(ed.email) as any
+      if (byEmail) { matchedNameId = byEmail.id; matchedNameDisplay = byEmail.display_name }
+    }
+
+    // 5. Save as entity in VFS
+    const entityId = crypto.randomUUID()
+    const slug = fileName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').substring(0, 80)
+    const nameSlug = matchedNameId
+      ? (db.prepare("SELECT slug FROM names WHERE id = ?").get(matchedNameId) as any)?.slug || '_'
+      : null
+    const entityPath = nameSlug
+      ? `/names/${nameSlug}/${analysis.entity_type}/${slug}`
+      : `/entity/${analysis.entity_type}/${slug}`
+
+    // 6. Chunk large documents (skip if analysisMode === 'none')
+    // For compact mode: AI analysis used sampled pages, but chunking uses full text
+    const textForChunking = (req as any).__fullText || extractedText
+    const chunks = analysisMode !== 'none' ? chunkDocument(textForChunking, analysis.entity_type, fileName) : []
+    const isChunked = chunks.length > 0
+
+    // Save parent entity
+    // Get uploader name for audit trail
+    const uploaderName = (db.prepare("SELECT display_name FROM names WHERE id = ?").get(userId) as any)?.display_name || userId
+
+    db.prepare(`INSERT INTO entity (id, azienda_id, type, display_name, slug, stato, name_id, parent_id, user_id, file_url, numero, data, totale, metadata, path)
+      VALUES (?, ?, ?, ?, ?, NULL, ?, NULL, ?, ?, ?, ?, ?, ?, ?)`).run(
+      entityId, aziendaId, analysis.entity_type, analysis.display_name, slug,
+      matchedNameId, userId, fileUrl,
+      ed.numero || null, ed.data || null, ed.totale || null,
+      JSON.stringify({
+        tipo_file: file.mimetype,
+        categoria: analysis.categoria,
+        uploaded_by_name: uploaderName,
+        tags: analysis.tags,
+        descrizione: analysis.descrizione,
+        // Only store full text if NOT chunked (small docs)
+        ...(isChunked
+          ? { chunked: true, chunk_count: chunks.length, total_chars: extractedText.length }
+          : { contenuto_testo: extractedText }),
+        file_size: fileSize,
+        original_name: fileName,
+        extracted_data: analysis.extracted_data,
+      }),
+      entityPath
+    )
+
+    // Save chunks as child entities
+    if (isChunked) {
+      const insertChunk = db.prepare(`INSERT INTO entity (id, azienda_id, type, display_name, slug, stato, name_id, parent_id, user_id, file_url, numero, data, totale, metadata, path, ordine)
+        VALUES (?, ?, 'chunk', ?, ?, NULL, NULL, ?, NULL, NULL, NULL, NULL, NULL, ?, ?, ?)`)
+
+      for (const chunk of chunks) {
+        const chunkId = crypto.randomUUID()
+        const chunkSlug = `chunk-${chunk.chunk_index}`
+        insertChunk.run(
+          chunkId, aziendaId,
+          chunk.display_name.substring(0, 200), chunkSlug,
+          entityId,
+          JSON.stringify({
+            contenuto_testo: chunk.content,
+            chunk_index: chunk.chunk_index,
+            chunk_total: chunk.chunk_total,
+            heading_path: chunk.heading_path,
+            char_offset_start: chunk.char_offset_start,
+            char_offset_end: chunk.char_offset_end,
+            ...(chunk.extracted || {}),
+          }),
+          `${entityPath}/chunks/${chunkSlug}`,
+          chunk.chunk_index
+        )
+      }
+      console.log(`[Upload] Chunked "${fileName}" into ${chunks.length} chunks`)
+    }
+
+    res.json({
+      entity_id: entityId,
+      file_url: fileUrl,
+      entity_type: analysis.entity_type,
+      display_name: analysis.display_name,
+      categoria: analysis.categoria,
+      tags: analysis.tags,
+      descrizione: analysis.descrizione,
+      extracted_data: analysis.extracted_data,
+      matched_name: matchedNameId ? { id: matchedNameId, display_name: matchedNameDisplay } : null,
+      suggested_name: analysis.suggested_name,
+      file_size: fileSize,
+      chunked: isChunked,
+      chunk_count: isChunked ? chunks.length : 0,
+      page_count: pageCount || undefined,
+    })
+  } catch (err: any) {
+    console.error('Smart upload error:', err)
+    res.status(500).json({ error: err.message })
   }
 })
 

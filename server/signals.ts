@@ -25,18 +25,15 @@ router.post('/capture', authMiddleware(true), (req: AuthRequest, res: Response) 
   }
 })
 
-// POST /api/signals/rate — Save user rating
-router.post('/rate', authMiddleware(true), (req: AuthRequest, res: Response) => {
+// POST /api/signals/rate — Save user rating + update preferences
+router.post('/rate', authMiddleware(true), async (req: AuthRequest, res: Response) => {
   try {
     const { messageId, sessionId, domain, rating } = req.body
     const aziendaId = req.aziendaId || 'unknown'
     const userId = req.userId || 'unknown'
 
-    const signalsDir = path.join(CONTEXT_DIR, 'aziende', aziendaId, 'users', userId, 'signals')
-    fs.mkdirSync(signalsDir, { recursive: true })
-
-    const line = JSON.stringify({ ts: new Date().toISOString(), messageId, sessionId, domain, rating }) + '\n'
-    fs.appendFileSync(path.join(signalsDir, 'ratings.jsonl'), line)
+    const { captureRating } = await import('./agents/context.js')
+    captureRating(aziendaId, userId, { messageId, sessionId, domain, rating })
 
     res.json({ success: true })
   } catch (err) {
