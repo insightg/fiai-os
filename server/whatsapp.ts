@@ -109,7 +109,7 @@ async function handleIncomingMessage(msg: WAMessage) {
     phone = lidPhoneMap.get(lidId) || ''
     if (!phone) {
       const byLid = db.prepare(
-        "SELECT telefono FROM names WHERE json_extract(metadata, '$.whatsapp_lid') = ? AND telefono IS NOT NULL LIMIT 1"
+        "SELECT telefono FROM entity WHERE json_extract(metadata, '$.whatsapp_lid') = ? AND telefono IS NOT NULL LIMIT 1"
       ).get(lidId) as any
       if (byLid?.telefono) {
         phone = byLid.telefono.replace(/^\+/, '')
@@ -136,7 +136,7 @@ async function handleIncomingMessage(msg: WAMessage) {
       if (match) {
         // Login OK — save LID mapping
         const userPhone = pending.telefono?.replace(/^\+/, '') || lidId
-        db.prepare("UPDATE names SET metadata = json_set(metadata, '$.whatsapp_lid', ?, '$.whatsapp_active', 1) WHERE id = ?").run(lidId, pending.id)
+        db.prepare("UPDATE entity SET metadata = json_set(metadata, '$.whatsapp_lid', ?, '$.whatsapp_active', 1) WHERE id = ?").run(lidId, pending.id)
         lidPhoneMap.set(lidId, userPhone)
         await sock.sendMessage(sender, { text: `✅ Autenticato come *${pending.display_name}*!\n\nOra puoi usare FIAI da WhatsApp.` })
       } else {
@@ -149,7 +149,7 @@ async function handleIncomingMessage(msg: WAMessage) {
     const emailMatch = text.trim().match(/^[^\s@]+@[^\s@]+\.[^\s@]+$/)
     if (emailMatch) {
       const email = emailMatch[0].toLowerCase()
-      const user = db.prepare("SELECT id, display_name, telefono, metadata FROM names WHERE email = ? AND tags LIKE '%\"utente\"%'").get(email) as any
+      const user = db.prepare("SELECT id, display_name, telefono, metadata FROM entity WHERE email = ? AND tags LIKE '%\"utente\"%'").get(email) as any
       if (user) {
         pendingLogins.set(lidId, user)
         await sock.sendMessage(sender, { text: `👤 *${user.display_name}*\n\nInvia la tua password per autenticarti:` })
@@ -173,7 +173,7 @@ async function handleIncomingMessage(msg: WAMessage) {
 
   // VFS: search in names by telefono
   const nameUser = db.prepare(
-    "SELECT id as user_id, display_name as nome, '' as cognome, metadata, azienda_id, email FROM names WHERE (telefono = ? OR telefono = ?) AND tags LIKE '%\"utente\"%'"
+    "SELECT id as user_id, display_name as nome, '' as cognome, metadata, azienda_id, email FROM entity WHERE (telefono = ? OR telefono = ?) AND tags LIKE '%\"utente\"%'"
   ).get(phone, '+' + phone) as any
   if (nameUser) {
     const meta = typeof nameUser.metadata === 'string' ? JSON.parse(nameUser.metadata) : nameUser.metadata
@@ -438,7 +438,7 @@ import { handleChatMessage } from './agents/index.js'
 async function callAgent(userMessage: string, userId: string, sender: string): Promise<{ text: string; toolCalls: any[]; agentName?: string }> {
   // Resolve azienda_id from relation membro_di
   const rel = db.prepare("SELECT to_id FROM relations WHERE from_id = ? AND tipo = 'membro_di' LIMIT 1").get(userId) as any
-  const aziendaId = rel?.to_id || (db.prepare("SELECT azienda_id FROM names WHERE id = ?").get(userId) as any)?.azienda_id || ''
+  const aziendaId = rel?.to_id || (db.prepare("SELECT azienda_id FROM entity WHERE id = ?").get(userId) as any)?.azienda_id || ''
 
   const history = getConversationHistory(sender)
   const sessionId = getSessionId(sender)
@@ -571,7 +571,7 @@ async function handleLinkCommand(sender: string, text: string) {
   const isLid = sender.endsWith('@lid')
 
   // Find user by email in names
-  const user = db.prepare("SELECT id, display_name FROM names WHERE email = ? AND tags LIKE '%\"utente\"%'").get(email) as any
+  const user = db.prepare("SELECT id, display_name FROM entity WHERE email = ? AND tags LIKE '%\"utente\"%'").get(email) as any
 
   if (!user) {
     await sock.sendMessage(sender, { text: `❌ Email "${email}" non trovata nel sistema FIAI.` })
@@ -579,7 +579,7 @@ async function handleLinkCommand(sender: string, text: string) {
   }
 
   // Get user's phone from names
-  const userRec = db.prepare("SELECT telefono FROM names WHERE id = ?").get(user.id) as any
+  const userRec = db.prepare("SELECT telefono FROM entity WHERE id = ?").get(user.id) as any
   const userPhone = userRec?.telefono?.replace(/^\+/, '') || ''
 
   // If LID, save the mapping
@@ -589,7 +589,7 @@ async function handleLinkCommand(sender: string, text: string) {
   }
 
   // Ensure whatsapp_active is set
-  db.prepare("UPDATE names SET metadata = json_set(metadata, '$.whatsapp_active', 1) WHERE id = ?").run(user.id)
+  db.prepare("UPDATE entity SET metadata = json_set(metadata, '$.whatsapp_active', 1) WHERE id = ?").run(user.id)
 
   await sock.sendMessage(sender, {
     text: `✅ Collegato come *${user.display_name}*!\n\nScrivi !help per vedere i comandi disponibili.`

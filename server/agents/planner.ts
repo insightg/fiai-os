@@ -37,7 +37,7 @@ const PLANNER_PROMPT = `Sei il planner di FIAI OS, un gestionale aziendale itali
 Ricevi una richiesta utente e crei un piano di esecuzione tool. Ragiona autonomamente su quali tool usare e in che ordine — non seguire pattern rigidi.
 
 TOOL DISPONIBILI:
-- search(table:"names"|"entity"|"both", type?, tags?:[], stato?, query?, name_id?, limit?) — cerca in names (persone/aziende) o entity (fatture, ordini, progetti, documenti, conti, etc.)
+- find(query?, type?, tags?:[], stato?, name_id?, doc_id?, limit?) — cerca QUALSIASI cosa. Motore automatico: SQL per filtri, FTS5 per contenuto documenti, semantico per similarità. Un solo tool per tutto. — cerca in names (persone/aziende) o entity (fatture, ordini, progetti, documenti, conti, etc.)
 - create(table, type?, tags?:[], display_name, email?, telefono?, stato?, name_id?, parent_id?, metadata?:{}) — crea
 - update(id, table, display_name?, stato?, tags?, metadata?:{}) — aggiorna
 - delete_record(id, table) — elimina
@@ -45,6 +45,10 @@ TOOL DISPONIBILI:
 - get_tree(id) — record + figli + relazioni
 - render_view(layout:{view, title, source, columns, kanban, chart}) — vista dinamica
 - retrieve(query, doc_id?, limit?) — cerca DENTRO il contenuto dei documenti (articoli, clausole, definizioni)
+- list_documents(categoria?) — lista documenti con info chunking e classificazione
+- explore_document(doc_id, limit?) — mostra struttura interna (capitoli, sezioni, heading path)
+- rechunk_document(doc_id) — ri-indicizza un documento (ri-estrae testo e ri-chunka)
+- reclassify_document(doc_id, categoria?, tags?, display_name?) — cambia classificazione
 - send_whatsapp_message(phone, text) — messaggio WhatsApp
 - send_whatsapp_voice(phone, text, voice?) — vocale WhatsApp (TTS + invio)
 - send_whatsapp_image(phone, url, caption?) — immagine WhatsApp
@@ -55,31 +59,42 @@ TOOL DISPONIBILI:
 - generate_pdf(titolo, contenuto) — genera PDF
 - get_datetime(offset?) — data/ora corrente
 - date_diff(from, to) — differenza tra date
-- create_autonomous_agent, create_job, create_workflow, list_autonomous_agents, list_workflows, get_jobs, get_api_costs, get_whatsapp_status
+- create_autonomous_agent(name, promptTemplate, trigger_type:"cron"|"event", cron?, event?, agentDomain?, notify?) — crea agente autonomo.
+  CRON COMUNI: "* * * * *"=ogni minuto, "*/5 * * * *"=ogni 5min, "0 8 * * *"=ogni giorno 8:00, "0 9 * * 1"=lunedì 9:00
+  EVENTI: "entity_created:documento", "name_created:lead", "entity_created:fattura", "name_created:cliente"
+- create_job, create_workflow, list_autonomous_agents, list_workflows, get_jobs, get_api_costs, get_whatsapp_status
 
-DATI:
-- names: persone/aziende con tags (cliente, lead, fornitore, candidato, utente, organizzazione) — hanno email, telefono, piva
-- entity: oggetti con type (fattura, preventivo, ordine, progetto, documento, conto, rimborso, annuncio, board, evento) — hanno name_id, parent_id, numero, data, totale
+DATI (tutto in una sola tabella entity):
+- Persone/aziende: type=persona|utente|organizzazione con tags (cliente, lead, fornitore, candidato) — hanno email, telefono
+- Oggetti: type=fattura|preventivo|ordine|progetto|documento|report|conto|rimborso|annuncio|board|evento — hanno name_id, parent_id, numero, data, totale
 
 REGOLE:
 1. Se serve un dato (telefono, id), cercalo con search prima di usarlo
-2. "lista/mostra X" = search. "cosa dice/definizione/articolo/contenuto" = retrieve
-3. "leggi X" = generate_tts (audio in chat). "invia X a Y" = send_whatsapp_* (invio effettivo)
-4. Referenzia risultati precedenti: {{step_0.0.telefono}} = campo telefono del primo risultato dello step 0
-5. Saluti/chiacchiere = steps:[], domain:"general"
-6. domain = agente: pulse, commerciale, produzione, marketing, amministrazione, hr, legal, infra, general
-7. Rispondi SOLO JSON: {"steps":[...], "domain":"...", "reasoning":"..."}
+2. "lista/mostra X" = search. "cosa dice/definizione/articolo/contenuto/descrivimi/parlami di" = retrieve
+3. IMPORTANTE: se l'utente menziona un documento specifico (bibbia, codice civile, contratto, report, etc.) o chiede informazioni su un argomento che POTREBBE essere in un documento caricato, USA SEMPRE retrieve. NON rispondere da conoscenze generali — cerca nei documenti!
+4. Quando cerchi per NOME (persona, azienda, progetto, etc.), NON specificare type né tags — cerca in modo ampio con find(query="nome"). L'entità potrebbe essere un'organizzazione, un progetto, una persona, etc. Se trovi più risultati, usa get_tree sull'id trovato per vedere il dettaglio completo con figli e relazioni.
+5. "leggi X" = generate_tts (audio in chat). "invia X a Y" = send_whatsapp_* (invio effettivo)
+6. Referenzia risultati precedenti: {{step_0.0.telefono}} = campo telefono del primo risultato dello step 0
+7. Saluti/chiacchiere = steps:[], domain:"general"
+8. domain = agente: pulse, commerciale, produzione, marketing, amministrazione, hr, legal, documentale, it, doctor, whatsapp, tts, general
+   - WhatsApp (invio/ricezione messaggi) → "whatsapp"
+   - Documenti (cerca contenuto, riassumi, confronta, esplora struttura, classificazione) → "documentale"
+   - Legale (analisi giuridica, compliance, interpretazione normativa) → "legal"
+   - Creazione/gestione agenti autonomi, workflow, utenti, configurazione → "it" (anche se l'agente autonomo invierà WhatsApp)
+   - Diagnostica sistema, salute dati, performance, problemi, errori, check-up → "doctor"
+9. "manda/invia a [persona]" = SEMPRE search contatto + send_whatsapp_message. Se l'utente dice "questo testo" o "l'ultimo messaggio", usa il testo dalla conversazione precedente (history assistant)
+10. Rispondi SOLO JSON: {"steps":[...], "domain":"...", "reasoning":"..."}
 
 ESEMPI:
 
 User: "manda messaggio a Gab Ciao"
-{"steps":[{"tool":"search","params":{"table":"names","query":"Gab"},"description":"Cerca Gab"},{"tool":"send_whatsapp_message","params":{"phone":"{{step_0.0.telefono}}","text":"Ciao"},"description":"Invia WhatsApp"}],"domain":"infra","reasoning":"Cerco telefono poi invio"}
+{"steps":[{"tool":"find","params":{"query":"Gab"},"description":"Cerca Gab"},{"tool":"send_whatsapp_message","params":{"phone":"{{step_0.0.telefono}}","text":"Ciao"},"description":"Invia WhatsApp"}],"domain":"whatsapp","reasoning":"Cerco telefono poi invio"}
 
 User: "invia a Brando un immagine di un tramonto con scritto buonasera"
-{"steps":[{"tool":"search","params":{"table":"names","query":"Brando"},"description":"Cerca Brando"},{"tool":"generate_image","params":{"prompt":"tramonto"},"description":"Genera immagine"},{"tool":"send_whatsapp_image","params":{"phone":"{{step_0.0.telefono}}","url":"{{step_1.file_path}}","caption":"buonasera"},"description":"Invia"}],"domain":"infra","reasoning":"Cerca contatto, genera immagine, invia con caption"}
+{"steps":[{"tool":"find","params":{"query":"Brando"},"description":"Cerca Brando"},{"tool":"generate_image","params":{"prompt":"tramonto"},"description":"Genera immagine"},{"tool":"send_whatsapp_image","params":{"phone":"{{step_0.0.telefono}}","url":"{{step_1.file_path}}","caption":"buonasera"},"description":"Invia"}],"domain":"whatsapp","reasoning":"Cerca contatto, genera immagine, invia con caption"}
 
 User: "definizione imprenditore nel codice civile"
-{"steps":[{"tool":"search","params":{"table":"entity","type":"documento","query":"codice civile"},"description":"Trova il documento"},{"tool":"retrieve","params":{"query":"definizione imprenditore","doc_id":"{{step_0.0.id}}"},"description":"Cerca nel contenuto"}],"domain":"legal","reasoning":"Trovo il doc, poi cerco dentro"}
+{"steps":[{"tool":"find","params":{"type":"documento","query":"codice civile"},"description":"Trova il documento"},{"tool":"retrieve","params":{"query":"definizione imprenditore","doc_id":"{{step_0.0.id}}"},"description":"Cerca nel contenuto"}],"domain":"documentale","reasoning":"Trovo il doc, poi cerco dentro"}
 
 User: "ciao"
 {"steps":[],"domain":"general","reasoning":"Saluto"}`
@@ -88,15 +103,21 @@ User: "ciao"
 
 export async function createPlan(
   message: string,
-  conversationHistory?: { role: string; content: string }[]
+  conversationHistory?: { role: string; content: string }[],
+  systemSummary?: string
 ): Promise<Plan> {
   try {
     // Build context with recent conversation
     let contextText = message
     if (conversationHistory && conversationHistory.length > 0) {
-      const recent = conversationHistory.slice(-3)
-      contextText = recent.map(m => `${m.role}: ${m.content}`).join('\n') + '\nuser: ' + message
+      const recent = conversationHistory.slice(-4)
+      contextText = recent.map(m => {
+        const content = typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
+        return `${m.role}: ${content.substring(0, 800)}`
+      }).join('\n') + '\nuser: ' + message
     }
+    // Append system summary so planner knows what data is available
+    if (systemSummary) contextText = systemSummary + '\n\n' + contextText
 
     const res = await fetch(OPENROUTER_API_URL, {
       method: 'POST',
@@ -248,12 +269,22 @@ export function formatPlanResults(plan: Plan, results: StepResult[]): string {
         return `[Step ${i + 1}: ${desc}] ${data.length} risultati:\n${chunks}`
       }
 
-      // For other arrays: show summary
+      // For other arrays: show detailed summary
       const preview = data.slice(0, 8).map((item: any) => {
-        const name = item.display_name || item.nome || item.messaggio || ''
-        const extra = item.stato ? ` (${item.stato})` : ''
-        const val = item.totale != null ? ` € ${item.totale}` : ''
-        return `- ${name}${extra}${val}` || JSON.stringify(item).substring(0, 120)
+        const name = item.display_name || item.name || item.nome || item.action || item.messaggio || ''
+        const extra: string[] = []
+        if (item.stato) extra.push(item.stato)
+        if (item.enabled !== undefined) extra.push(item.enabled ? 'attivo' : 'inattivo')
+        if (item.agentDomain) extra.push(item.agentDomain)
+        if (item.description) extra.push(item.description)
+        if (item.trigger?.cron) extra.push(`cron: ${item.trigger.cron}`)
+        if (item.trigger?.event) extra.push(`event: ${item.trigger.event}`)
+        if (item.runs != null) extra.push(`${item.runs} esecuzioni`)
+        if (item.totale != null) extra.push(`€ ${item.totale}`)
+        if (item.email) extra.push(item.email)
+        if (item.telefono) extra.push(item.telefono)
+        const extraStr = extra.length > 0 ? ` (${extra.join(', ')})` : ''
+        return `- ${name}${extraStr}` || JSON.stringify(item).substring(0, 200)
       }).join('\n')
       return `[Step ${i + 1}: ${desc}] ${data.length} risultati:\n${preview}`
     }

@@ -293,6 +293,39 @@ export async function judgeRetrieval(query: string, chunks: { display_name: stri
 
 // ── Smart Upload Analysis ─────────────────────────────────
 
+// ── Reranker (Retrieve-then-Rerank) ───────────────────────
+
+export async function rerankChunks(
+  query: string,
+  chunks: { id: string; display_name: string; content: string; [key: string]: any }[],
+  topK: number = 5
+): Promise<typeof chunks> {
+  if (chunks.length <= topK) return chunks
+
+  try {
+    const chunkSummary = chunks.map((c, i) =>
+      `[${i}] ${c.display_name}: ${c.content.substring(0, 200)}`
+    ).join('\n')
+
+    const result = await callLLM([{
+      role: 'user',
+      content: `Query: "${query}"\n\nChunk:\n${chunkSummary}\n\nOrdina gli indici per rilevanza rispetto alla query. Rispondi SOLO con un array JSON di indici, dal più rilevante al meno: [2, 0, 4, ...]`
+    }])
+
+    const match = result.match(/\[[\d,\s]+\]/)
+    if (match) {
+      const indices: number[] = JSON.parse(match[0])
+      return indices
+        .filter(i => i >= 0 && i < chunks.length)
+        .slice(0, topK)
+        .map(i => chunks[i])
+    }
+  } catch {}
+
+  // Fallback: return first topK
+  return chunks.slice(0, topK)
+}
+
 export interface UploadAnalysis {
   entity_type: string        // fattura_passiva, contratto, cv, preventivo, report, foto, documento
   display_name: string       // nome suggerito
@@ -347,7 +380,8 @@ Rispondi con questo JSON:
     "piva": "P.IVA se presente",
     "email": "email se presente",
     "telefono": "telefono se presente",
-    "nome_persona": "nome persona se CV/contatto"
+    "nome_persona": "nome persona se CV/contatto",
+    "autore": "autore del documento se identificabile (es. nome scrittore, legislatore, ente)"
   }
 }
 

@@ -26,8 +26,8 @@ export default {
         purple: '#7B1FA2',
       },
       fontFamily: {
-        display: ['Playfair Display', 'serif'],
-        sans: ['DM Sans', 'sans-serif'],
+        display: ['Inter', 'sans-serif'],
+        sans: ['Inter', 'sans-serif'],
       },
     },
   },

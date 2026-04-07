@@ -148,33 +148,62 @@ async function processJobs() {
   }
 }
 
-// ── Simple cron parser (minute hour day month weekday) ─────
+// ── Cron parser ──────────────────────────────────────────
 
 function getNextCronDate(cron: string): string {
-  // Basic implementation: supports "M H D MO WD" format
-  // For now, just add the interval based on common patterns
-  const parts = cron.split(' ')
+  const parts = cron.trim().split(/\s+/)
+  if (parts.length !== 5) return new Date(Date.now() + 60000).toISOString()
+
+  const [minP, hourP, dayP, monthP, dowP] = parts
   const now = new Date()
 
-  if (cron === '0 8 * * 1') {
-    // Every Monday at 8:00
-    const next = new Date(now)
-    next.setDate(next.getDate() + ((7 - next.getDay() + 1) % 7 || 7))
-    next.setHours(8, 0, 0, 0)
-    return next.toISOString()
+  // Fast path for common patterns
+  // Every N minutes: */N * * * * or * * * * *
+  if (hourP === '*' && dayP === '*' && monthP === '*' && dowP === '*') {
+    if (minP === '*') return new Date(Date.now() + 60000).toISOString() // every minute
+    const stepMatch = minP.match(/^\*\/(\d+)$/)
+    if (stepMatch) {
+      const step = parseInt(stepMatch[1])
+      return new Date(Date.now() + step * 60000).toISOString()
+    }
   }
 
-  if (parts[2] === '1' && parts[3] === '*') {
-    // Monthly on the 1st
-    const next = new Date(now.getFullYear(), now.getMonth() + 1, 1)
-    next.setHours(parseInt(parts[1]) || 0, parseInt(parts[0]) || 0, 0, 0)
-    return next.toISOString()
+  // Brute-force: check each minute in the next 48 hours
+  const candidate = new Date(now.getTime() + 60000) // start 1 minute from now
+  candidate.setSeconds(0, 0)
+
+  for (let i = 0; i < 2880; i++) { // 48 hours max
+    if (matchesCron(candidate, parts)) return candidate.toISOString()
+    candidate.setMinutes(candidate.getMinutes() + 1)
   }
 
-  // Default: next day same time
-  const next = new Date(now.getTime() + 86400000)
-  next.setHours(parseInt(parts[1]) || 0, parseInt(parts[0]) || 0, 0, 0)
-  return next.toISOString()
+  // Fallback
+  return new Date(Date.now() + 3600000).toISOString()
+}
+
+function matchesCron(date: Date, parts: string[]): boolean {
+  const [minP, hourP, dayP, monthP, dowP] = parts
+  return matchField(date.getMinutes(), minP, 0, 59)
+    && matchField(date.getHours(), hourP, 0, 23)
+    && matchField(date.getDate(), dayP, 1, 31)
+    && matchField(date.getMonth() + 1, monthP, 1, 12)
+    && matchField(date.getDay(), dowP, 0, 6)
+}
+
+function matchField(value: number, field: string, min: number, max: number): boolean {
+  if (field === '*') return true
+  // Step: */N
+  const stepMatch = field.match(/^\*\/(\d+)$/)
+  if (stepMatch) return value % parseInt(stepMatch[1]) === 0
+  // List: 1,3,5
+  if (field.includes(',')) return field.split(',').map(Number).includes(value)
+  // Range: 1-5
+  if (field.includes('-')) {
+    const [lo, hi] = field.split('-').map(Number)
+    return value >= lo && value <= hi
+  }
+  // Exact
+  return parseInt(field) === value
 }
 
 // ── Worker ────────────────────────────────────────────────

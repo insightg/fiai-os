@@ -1,10 +1,12 @@
 import type { AgentDomain, ClassificationResult, ChatResponse } from './types.js'
 import { AGENTS, AGENT_COLORS } from './config.js'
-import { buildContext, saveSessionContext, captureSignal } from './context.js'
+import { buildContext, saveSessionContext, captureSignal, generatePlannerContext } from './context.js'
 import { runHooks, type HookContext } from './hooks.js'
 import { getSuggestions } from './suggestions.js'
 import { executeAgent, directLLMResponse } from './base-agent.js'
-import { createPlan, executePlan, formatPlanResults } from './planner.js'
+// planner.ts kept for backward compat — no longer used in main pipeline
+// import { createPlan, executePlan, formatPlanResults } from './planner.js'
+import { checkInput, checkOutput } from './safety.js'
 import db from '../db.js'
 
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions'
@@ -12,7 +14,7 @@ const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || ''
 const CLASSIFIER_MODEL = 'anthropic/claude-haiku-4.5'
 const GEMINI_MODEL = 'google/gemini-3.1-flash-image-preview'
 
-const VALID_DOMAINS: AgentDomain[] = ['pulse', 'commerciale', 'produzione', 'marketing', 'amministrazione', 'hr', 'legal', 'documents', 'infra', 'general', 'image', 'tts']
+const VALID_DOMAINS: AgentDomain[] = ['pulse', 'commerciale', 'produzione', 'marketing', 'amministrazione', 'hr', 'legal', 'documents', 'it', 'doctor', 'general', 'image', 'tts']
 
 interface ConversationMessage {
   role: string
@@ -36,7 +38,16 @@ function quickClassifyKeywords(text: string): AgentDomain | null {
   const t = text.toLowerCase().trim()
   // TTS keywords → route to TTS agent
   if (/\btts\b|sintesi vocale|lista voci|imposta voce|clona.*voce|voce predefinita/.test(t)) return 'tts'
-  // Everything else → let the planner decide
+  // WhatsApp keywords → route to WhatsApp agent (MUST have send tools)
+  if (/\bwhatsapp\b|\bwhapp\b|\bwapp\b|manda.*(?:a|via)\s|invia.*(?:a|via)\s.*(?:messaggio|vocale|immagine|documento|video)|manda.*messaggio/i.test(t)) return 'whatsapp'
+  // Document keywords → route to Documentale (has retrieve, list_documents, explore_document)
+  // Catches ANY reference to documents, books, or content search — regardless of topic
+  if (/\bbibbia\b|\bcodice civile\b|\bcontratto\b|\bnormativa\b|\bmanuale\b|\breport\b|\blibro\b/i.test(t)) return 'documentale'
+  if (/analizza.*document|cerca.*document|cerca.*dentro|contenuto.*document|riassumi.*document/i.test(t)) return 'documentale'
+  if (/\barticol[oi]\b|\bclausol[ae]\b|\bcapitolo\b|\bversett[oi]\b|\bvangel[oi]\b|\bsezione\b/i.test(t)) return 'documentale'
+  if (/cosa dice|cosa racconta|parlami di.*nel|racconta.*dal|cerca nel|nel documento|nei documenti|dall[ae].*document/i.test(t)) return 'documentale'
+  if (/document[oi]|archivio|caricato|upload/i.test(t) && /cerca|analizza|riassumi|leggi|mostra|confronta|spiega/i.test(t)) return 'documentale'
+  // Everything else → let the classifier decide
   return null
 }
 
@@ -45,8 +56,14 @@ function quickClassifyKeywords(text: string): AgentDomain | null {
 function detectResponseMode(message: string, historyLength: number): ResponseMode {
   const t = message.trim().toLowerCase()
 
-  // MINIMAL: greetings, thanks, ratings, very short acks
-  if (t.length < 25 && /^(ok|va bene|grazie|thanks|ciao|buon[a-z]*|salve|perfetto|ottimo|capito|chiaro|si|si|no|bene|bravo|fantastico|eccellente)[\s!.]*$/i.test(t)) {
+  // ITERATION: confirmations in an active conversation (si, ok, confermo, procedi, etc.)
+  // Must check BEFORE minimal — "si" in a conversation is a confirmation, not a greeting
+  if (historyLength > 2 && /^(si|sì|ok|confermo|procedi|vai|fallo|manda|invia|elimina|approva|no|annulla)[\s!.]*$/i.test(t)) {
+    return 'iteration'
+  }
+
+  // MINIMAL: greetings, thanks, ratings, very short acks (only at conversation start)
+  if (t.length < 25 && /^(ok|va bene|grazie|thanks|ciao|buon[a-z]*|salve|perfetto|ottimo|capito|chiaro|bene|bravo|fantastico|eccellente)[\s!.]*$/i.test(t)) {
     return 'minimal'
   }
   // Explicit numeric rating — but NOT if in a conversation (likely a menu choice)
@@ -59,7 +76,7 @@ function detectResponseMode(message: string, historyLength: number): ResponseMod
   if (historyLength > 2 && /^\d{1,2}$/.test(t)) {
     return 'iteration'
   }
-  if (historyLength > 2 && /^(ora|adesso|invece|piuttosto|prova|modifica|cambia|aggiungi|togli|rimuovi|rifai|migliora|correggi|aggiorna|continua|e anche|inoltre|poi)/i.test(t)) {
+  if (historyLength > 2 && t.length < 80 && /^(ora|adesso|invece|piuttosto|prova|modifica|cambia|aggiungi|togli|rimuovi|rifai|migliora|correggi|aggiorna|continua|e anche|inoltre|poi|visualizza|mostra|vedi|apri|dettaglio|espandi|fammi vedere|dimmi di più|quali|cosa|come|dove|quando|chi|cerca|elenca|approfondisci)/i.test(t)) {
     return 'iteration'
   }
 
@@ -78,26 +95,33 @@ const CLASSIFICATION_PROMPT =
   '- marketing: contenuti, campagne, lead scoring, brand, social, immagini, grafiche, genera immagine, crea logo, illustra, post, newsletter\n' +
   '- amministrazione: fatture, conti, liquidita, scadenze fiscali, rimborsi, budget, fornitori, cash flow, pagamenti, fatturato\n' +
   '- hr: candidati, annunci lavoro, recruiting, onboarding, costo aziendale, curriculum, selezione\n' +
-  '- legal: contratti, clausole, normative, compliance, documenti legali, privacy, GDPR, analisi contratto, ricerca documenti, riassumi documento, confronta documenti, contenuto documento\n' +
-  '- infra: costi API, performance sistema, monitoring agenti, utenti, ruoli, configurazione, AgentOps\n' +
+  '- legal: analisi giuridica, compliance, interpretazione normativa, GDPR, privacy\n' +
+  '- documentale: QUALSIASI richiesta su documenti caricati nel sistema — cerca dentro documenti, riassumi, confronta, analizza contenuto, articoli, clausole, capitoli, versetti. Vale per QUALSIASI tipo di documento: legale, religioso, letterario, tecnico, scientifico. Se l\'utente menziona un documento specifico (bibbia, codice civile, contratto, report, manuale, libro) → documentale. Se chiede "cosa dice", "cerca dentro", "racconta", "analizza", "riassumi" riferito a un documento → documentale.\n' +
+  '- it: costi API, utenti, ruoli, configurazione, agenti autonomi, workflow, AgentOps\n' +
+  '- doctor: diagnostica sistema, salute dati, problemi, errori, check-up, performance, job falliti, stato servizi\n' +
   '- tts: sintesi vocale, text-to-speech, leggi ad alta voce, pronuncia, voce, audio, parla, clona voce\n' +
   '- general: saluti, domande generiche, conversazione\n\n' +
   'IMPORTANTE: Le richieste di generazione immagini vanno SEMPRE a "marketing".\n' +
-  'Le richieste di leggere, pronunciare o generare audio vanno SEMPRE a "tts".\n\n' +
+  'Le richieste di leggere, pronunciare o generare audio vanno SEMPRE a "tts".\n' +
+  'Le richieste su contenuto di documenti caricati (di QUALSIASI tipo — religioso, letterario, tecnico, legale) vanno SEMPRE a "documentale".\n\n' +
   'MULTI-AGENT: Se la richiesta tocca PIU domini, imposta needsMultiAgent=true e secondaryDomains con i domini aggiuntivi.\n' +
   'Esempi multi-agent:\n' +
   '- "fatturato dei clienti con progetti attivi" → domain="amministrazione", needsMultiAgent=true, secondaryDomains=["commerciale","produzione"]\n' +
   '- "candidati per i ruoli nei nuovi progetti" → domain="hr", needsMultiAgent=true, secondaryDomains=["produzione"]\n' +
   '- "report completo vendite fatture progetti" → domain="pulse", needsMultiAgent=true, secondaryDomains=["commerciale","amministrazione","produzione"]\n' +
   '- "overview con pipeline e scadenze" → domain="pulse", needsMultiAgent=true, secondaryDomains=["commerciale","amministrazione"]\n\n' +
+  'CONTESTO: Se nella conversazione recente l\'utente stava interagendo con un agente specifico (es. documentale per analisi documenti, commerciale per clienti), e il nuovo messaggio sembra un follow-up o approfondimento sullo stesso tema, usa LO STESSO dominio. Non cambiare dominio a meno che il tema sia chiaramente diverso.\n\n' +
   'Rispondi SOLO con un JSON valido: {"domain": "...", "confidence": 0.0-1.0, "needsMultiAgent": false, "secondaryDomains": []}'
 
 async function classifyIntent(message: string, conversationHistory?: ConversationMessage[]): Promise<ClassificationResult> {
   try {
     let contextText = message
     if (conversationHistory && conversationHistory.length > 0) {
-      const recent = conversationHistory.slice(-3)
-      contextText = recent.map(m => `${m.role}: ${m.content}`).join('\n') + '\nuser: ' + message
+      const recent = conversationHistory.slice(-4)
+      contextText = recent.map(m => {
+        const content = typeof m.content === 'string' ? m.content.substring(0, 300) : String(m.content).substring(0, 300)
+        return `${m.role}: ${content}`
+      }).join('\n') + '\nuser: ' + message
     }
 
     const res = await fetch(OPENROUTER_API_URL, {
@@ -109,7 +133,7 @@ async function classifyIntent(message: string, conversationHistory?: Conversatio
           { role: 'system', content: CLASSIFICATION_PROMPT },
           { role: 'user', content: contextText },
         ],
-        max_tokens: 80,
+        max_tokens: 150,
       }),
     })
 
@@ -318,6 +342,8 @@ async function synthesizeResults(
 
 // ── Main Orchestrator ──────────────────────────────────
 
+export type ProgressCallback = (event: { type: string; [key: string]: unknown }) => void
+
 export async function orchestrate(
   message: string,
   userId: string,
@@ -328,6 +354,7 @@ export async function orchestrate(
     history?: ConversationMessage[]
     attachedImageBase64?: string
     attachedAudioBase64?: string
+    onProgress?: ProgressCallback
   }
 ): Promise<ChatResponse> {
   const startTime = Date.now()
@@ -336,13 +363,30 @@ export async function orchestrate(
   const conversationHistory = options?.history
   const attachedImageBase64 = options?.attachedImageBase64
   const attachedAudioBase64 = options?.attachedAudioBase64
+  const onProgress = options?.onProgress || (() => {})
 
   const historyLength = (conversationHistory?.length ?? 0) + 1
+
+  // ── Safety Gate: Input Check ──
+  const inputCheck = checkInput(message)
+  if (!inputCheck.safe) {
+    return {
+      text: inputCheck.reason || 'Richiesta bloccata per motivi di sicurezza.',
+      toolCalls: [], agentName: 'Sistema', agentDomain: 'general', agentColor: AGENT_COLORS.general,
+    }
+  }
 
   // Helper: finalize result with signal capture, hooks, and suggestions
   const finalizeResult = async (result: ChatResponse, classification?: ClassificationResult): Promise<ChatResponse> => {
     const latencyMs = Date.now() - startTime
     const toolsUsed = result.toolCalls.map(t => (t as Record<string, unknown>).tool).filter(Boolean) as string[]
+
+    // ── Safety Gate: Output Check ──
+    const outputCheck = checkOutput(result.text, format)
+    if (outputCheck.masked.length > 0) {
+      result.text = outputCheck.filtered
+      console.log(`[Safety] Masked PII in ${format} output:`, outputCheck.masked.length, 'items')
+    }
 
     // Capture signal (fire-and-forget)
     captureSignal(aziendaId, userId, {
@@ -444,19 +488,25 @@ export async function orchestrate(
     // fallback to full classification
   }
 
-  // ── FULL: Planner LLM → plan + execute + synthesize ──
-  // Quick classify can override domain for specific cases (TTS)
+  // ── FULL: Classify → Agent-Native Tool Calling ──
+  onProgress({ type: 'status', content: 'Classificazione dominio...' })
   const quickDomain = quickClassifyKeywords(message)
 
-  const plan = await createPlan(message, conversationHistory)
-  let planDomain = (quickDomain || plan.domain) as AgentDomain
-  if (planDomain === 'image' as any) planDomain = 'marketing' as AgentDomain
-  if (planDomain === 'documents' as any) planDomain = 'legal' as AgentDomain
+  let classification: ClassificationResult = quickDomain
+    ? { domain: quickDomain as AgentDomain, confidence: 0.95, needsMultiAgent: false }
+    : await classifyIntent(message, conversationHistory)
 
-  const classification: ClassificationResult = {
-    domain: planDomain || 'general',
-    confidence: quickDomain ? 0.95 : 0.9,
-    needsMultiAgent: false,
+  // Normalize domain aliases
+  if (classification.domain === 'image' as any) classification.domain = 'marketing' as AgentDomain
+  if (classification.domain === 'documents' as any) classification.domain = 'documentale' as AgentDomain
+
+  // Low confidence + session has previous domain → prefer session domain (contextual continuity)
+  if (classification.confidence < 0.7 && sessionId) {
+    const lastDomain = sessionDomainCache.get(sessionId)
+    if (lastDomain && lastDomain !== 'general') {
+      console.log(`[Classify] Low confidence (${classification.confidence}), using session domain: ${lastDomain}`)
+      classification = { domain: lastDomain, confidence: 0.8, needsMultiAgent: false }
+    }
   }
 
   // Run post_classify hook
@@ -468,12 +518,8 @@ export async function orchestrate(
   }
   await runHooks('post_classify', hookCtx)
 
-  // ── TTS — handled by TTS agent (no hardcoded logic) ──
-  // (The TTS agent in config.ts has tools: list_voices, set_voice, get_current_voice, clone_voice, generate_tts)
-  // It goes through the standard agent execution path below.
-
-  // ── General — direct LLM response (but execute plan steps if any) ──
-  if (classification.domain === 'general' && plan.steps.length === 0) {
+  // ── General — direct LLM response (no tools needed) ──
+  if (classification.domain === 'general') {
     const context = buildContext('pulse', aziendaId, userId, sessionId)
     const text = await directLLMResponse(message, context, conversationHistory)
     const result: ChatResponse = {
@@ -519,63 +565,28 @@ export async function orchestrate(
     return finalizeResult(result, classification)
   }
 
-  // ── Execute plan + synthesize with domain agent ──
+  // ── Single agent — direct execution with native tool calling ──
   const agent = AGENTS[classification.domain] || AGENTS.pulse
+  onProgress({ type: 'agent', content: `${agent.name} sta elaborando...`, domain: classification.domain, agentName: agent.name, agentColor: agent.color })
 
-  // Context with 60s cache
+  // Context with 60s cache + system summary
   const cacheKey = `${classification.domain}:${aziendaId}:${sessionId}`
   const cached = contextCache.get(cacheKey)
   let context: string
   if (cached && Date.now() - cached.ts < 60000) {
     context = cached.content
   } else {
-    context = buildContext(classification.domain, aziendaId, userId, sessionId)
+    const systemSummary = generatePlannerContext(aziendaId)
+    context = buildContext(classification.domain, aziendaId, userId, sessionId) + '\n\n' + systemSummary
     contextCache.set(cacheKey, { content: context, ts: Date.now() })
   }
 
-  // Execute plan steps (if any)
-  let planContext = ''
-  const allToolCalls: Record<string, unknown>[] = []
-  const reasoningSteps: { tool: string; description: string; result_summary: string }[] = []
+  // Agent calls tools natively — no pre-execution, no planner
+  const result = await executeAgent(message, agent, aziendaId, userId, context, format, conversationHistory, onProgress)
 
-  if (plan.steps.length > 0) {
-    const planResults = await executePlan(plan, aziendaId)
-    planContext = '\n\nRISULTATI TOOL (già eseguiti dal planner):\n' + formatPlanResults(plan, planResults)
-
-    for (const pr of planResults) {
-      allToolCalls.push({ tool: pr.step.tool, result: pr.result })
-      // Build reasoning step summary
-      let summary = ''
-      if (pr.error) summary = `Errore: ${pr.error}`
-      else if (Array.isArray(pr.result)) summary = `${pr.result.length} risultati`
-      else if (pr.result && typeof pr.result === 'object') {
-        const r = pr.result as any
-        if (r.successo) summary = r.messaggio || 'OK'
-        else if (r.errore) summary = r.errore
-        else summary = Object.keys(r).slice(0, 3).join(', ')
-      } else summary = String(pr.result || '').substring(0, 60)
-      reasoningSteps.push({ tool: pr.step.tool, description: pr.step.description, result_summary: summary })
-    }
-  }
-
-  // Agent synthesizes: gets the message + plan results as context
-  const agentMessage = plan.steps.length > 0
-    ? message + planContext
-    : message
-
-  const result = await executeAgent(agentMessage, agent, aziendaId, userId, context, format, conversationHistory)
-
-  // Planner tool calls go into reasoning only (not shown as visible cards)
-  // Only the agent's own tool calls (if any) stay in toolCalls for rendering
-
-  // Attach reasoning info with planner results
-  if (plan.steps.length > 0) {
-    result.reasoning = {
-      steps: reasoningSteps,
-      domain: plan.domain,
-      thinking: plan.reasoning,
-      latencyMs: Date.now() - startTime,
-    }
+  // Reasoning comes directly from agent's native tool loop
+  if (result.reasoning) {
+    result.reasoning.latencyMs = Date.now() - startTime
   }
 
   return finalizeResult(result, classification)

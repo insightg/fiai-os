@@ -17,6 +17,7 @@ import pdfRouter from './pdf.js'
 import { startWhatsApp, whatsappRouter } from './whatsapp.js'
 import chatRouter from './agents/index.js'
 import { startJobWorker } from './jobs.js'
+import { initEmbeddings } from './embeddings.js'
 import { initAutonomousAgents } from './agents/autonomous.js'
 import { initWorkflows } from './agents/workflows.js'
 
@@ -30,6 +31,41 @@ if (fs.existsSync(migrationPath)) {
 
 // Add tts_voice column if missing
 try { db.exec("ALTER TABLE user_profiles ADD COLUMN tts_voice TEXT DEFAULT 'Vivian'") } catch {}
+
+// Fix FTS triggers: use UPDATE OF to avoid firing on embedding updates
+try {
+  db.exec("DROP TRIGGER IF EXISTS chunk_fts_au")
+  db.exec("DROP TRIGGER IF EXISTS entity_fts_au")
+  db.exec(`CREATE TRIGGER chunk_fts_au AFTER UPDATE OF body, display_name ON entity WHEN OLD.type = 'chunk' BEGIN
+    INSERT INTO chunk_fts(chunk_fts, rowid, body, display_name) VALUES ('delete', OLD.rowid, OLD.body, OLD.display_name);
+    INSERT INTO chunk_fts(rowid, body, display_name) VALUES (NEW.rowid, NEW.body, NEW.display_name);
+  END`)
+  db.exec(`CREATE TRIGGER entity_fts_au AFTER UPDATE OF display_name, type, metadata ON entity BEGIN
+    INSERT INTO entity_fts(entity_fts, rowid, display_name, type, metadata) VALUES ('delete', OLD.rowid, OLD.display_name, OLD.type, OLD.metadata);
+    INSERT INTO entity_fts(rowid, display_name, type, metadata) VALUES (NEW.rowid, NEW.display_name, NEW.type, NEW.metadata);
+  END`)
+  console.log('FTS triggers fixed (UPDATE OF filter).')
+} catch {}
+
+// Create vec0 vector index for semantic chunk search (sqlite-vec)
+try {
+  db.exec('CREATE VIRTUAL TABLE IF NOT EXISTS chunk_vec USING vec0(chunk_id TEXT PRIMARY KEY, embedding float[1536])')
+  // Sync existing embeddings into vec0 index
+  const embeddedChunks = db.prepare("SELECT id, embedding FROM entity WHERE type = 'chunk' AND embedding IS NOT NULL").all() as any[]
+  if (embeddedChunks.length > 0) {
+    // Drop and recreate to ensure clean state
+    try { db.exec('DROP TABLE IF EXISTS chunk_vec') } catch {}
+    db.exec('CREATE VIRTUAL TABLE chunk_vec USING vec0(chunk_id TEXT PRIMARY KEY, embedding float[1536])')
+    const insert = db.prepare('INSERT INTO chunk_vec(chunk_id, embedding) VALUES (?, ?)')
+    const tx = db.transaction(() => {
+      for (const c of embeddedChunks) insert.run(c.id, c.embedding)
+    })
+    tx()
+    console.log(`[VecIndex] Synced ${embeddedChunks.length} chunk embeddings to vec0 index`)
+  }
+} catch (err) {
+  console.warn('[VecIndex] Vec index setup skipped:', (err as Error).message)
+}
 
 // Run v5 VFS migration (idempotent)
 import { migrateToVFS } from './migrations/migrate-vfs.js'
@@ -85,7 +121,26 @@ app.listen(PORT, () => {
   startWhatsApp().catch(err => console.error('WhatsApp startup error:', err))
   initAutonomousAgents()
   initWorkflows()
+  initEmbeddings()
   startJobWorker()
+
+  // Auto-create embedding job if unembedded entities exist
+  setTimeout(() => {
+    try {
+      const unembedded = db.prepare("SELECT COUNT(*) as c FROM entity WHERE embedding IS NULL AND type NOT IN ('chat_message','chat_session','agent_log','job','workflow_log','chunk','board','board_column','category_template','skill','agent_memory')").get() as any
+      if (unembedded?.c > 0) {
+        const existingJob = db.prepare("SELECT id FROM entity WHERE type = 'job' AND json_extract(metadata, '$.action') = 'generate_embeddings' AND stato = 'queued'").get()
+        if (!existingJob) {
+          const { createJob } = require('./jobs.js')
+          const azId = db.prepare("SELECT id FROM entity WHERE type = 'organizzazione' LIMIT 1").get() as any
+          if (azId) {
+            createJob(azId.id, 'generate_embeddings', {}, {})
+            console.log(`[Embedding] Scheduled batch embedding for ${unembedded.c} unembedded entities`)
+          }
+        }
+      }
+    } catch {}
+  }, 5000)
 })
 
 export default app

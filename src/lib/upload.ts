@@ -50,7 +50,7 @@ export async function uploadGeneric(file: File) {
 // ── Smart Upload (unified, AI-powered) ──
 
 export interface SmartUploadResult {
-  entity_id: string
+  upload_id: string
   file_url: string
   entity_type: string
   display_name: string
@@ -61,8 +61,9 @@ export interface SmartUploadResult {
   matched_name: { id: string; display_name: string } | null
   suggested_name: string | null
   file_size: number
-  chunked?: boolean
-  chunk_count?: number
+  page_count?: number
+  // Set after confirmation
+  entity_id?: string
 }
 
 export async function uploadSmart(file: File, mode: 'full' | 'compact' | 'none' = 'full'): Promise<SmartUploadResult> {
@@ -86,4 +87,33 @@ export async function uploadSmart(file: File, mode: 'full' | 'compact' | 'none' 
   }
 
   return res.json()
+}
+
+export async function confirmUpload(uploadId: string, categoria?: string, displayName?: string, autore?: string): Promise<{ entity_id: string; status: string }> {
+  const token = getAuthToken()
+  const res = await fetch('/api/upload/confirm', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ upload_id: uploadId, categoria, display_name: displayName, autore }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Conferma fallita' }))
+    throw new Error(err.error || 'Conferma fallita')
+  }
+  return res.json()
+}
+
+export async function cancelUpload(uploadId: string): Promise<void> {
+  const token = getAuthToken()
+  await fetch('/api/upload/cancel', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ upload_id: uploadId }),
+  }).catch(() => {})
 }

@@ -51,7 +51,8 @@ const DOMAIN_SUGGESTIONS: Record<string, string[]> = {
   amministrazione: ['Riepilogo finanziario', 'Fatture scadute', 'Saldo conti', 'Rimborsi'],
   hr: ['Candidati attivi', 'Annunci lavoro', 'Simula costo', 'Screening CV'],
   legal: ['Cerca contratto', 'Analizza clausole', 'Normative', 'Scadenze contratti'],
-  infra: ['Performance agenti', 'Costi API', 'Gestione utenti', 'System health'],
+  it: ['Costi API', 'Gestione utenti', 'Agenti autonomi', 'Workflow'],
+  doctor: ['Salute sistema', 'Check-up dati', 'Job falliti', 'Diagnostica'],
   general: ['Overview aziendale', 'Lista clienti', 'Fatturato', 'Progetti attivi'],
 }
 

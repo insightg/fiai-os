@@ -1,5 +1,7 @@
 import fs from 'fs'
 import path from 'path'
+import crypto from 'crypto'
+import db from '../db.js'
 
 const CONTEXT_DIR = process.env.CONTEXT_DIR || '/app/data/context'
 
@@ -50,7 +52,129 @@ export function buildContext(domain: string, aziendaId: string, userId: string, 
   const steeringCtx = readContextFile(steeringPath)
   if (steeringCtx) parts.push('--- REGOLE DI STEERING ---\n' + steeringCtx)
 
+  // 7. Agent memory (lessons learned from interactions)
+  try {
+    const memory = db.prepare(
+      "SELECT metadata FROM entity WHERE type = 'agent_memory' AND json_extract(metadata, '$.domain') = ? AND azienda_id = ? LIMIT 1"
+    ).get(domain, aziendaId) as any
+    if (memory) {
+      const m = typeof memory.metadata === 'string' ? JSON.parse(memory.metadata) : memory.metadata
+      if (m.lessons?.length > 0) {
+        const lessonsText = m.lessons.slice(-10).map((l: any) => `- ${l.rule}`).join('\n')
+        parts.push('--- MEMORIA AGENTE (lezioni apprese) ---\n' + lessonsText)
+      }
+    }
+  } catch {}
+
   return parts.join('\n\n')
+}
+
+// ── Planner Context (compact system summary) ─────────────
+
+export function generatePlannerContext(aziendaId: string): string {
+  try {
+    const namesByTag: Record<string, number> = {}
+    const nameRows = db.prepare("SELECT tags FROM entity WHERE azienda_id = ?").all(aziendaId) as any[]
+    for (const n of nameRows) {
+      const tags = typeof n.tags === 'string' ? JSON.parse(n.tags) : (n.tags || [])
+      for (const t of tags) namesByTag[t] = (namesByTag[t] || 0) + 1
+    }
+
+    const entityByType: Record<string, number> = {}
+    const entityRows = db.prepare(
+      "SELECT type, COUNT(*) as c FROM entity WHERE azienda_id = ? AND type NOT IN ('chunk','chat_message','chat_session','agent_log','job','workflow_log','category_template') GROUP BY type"
+    ).all(aziendaId) as any[]
+    for (const e of entityRows) entityByType[e.type] = e.c
+
+    const docs = db.prepare(
+      "SELECT display_name, json_extract(metadata,'$.chunk_count') as chunks FROM entity WHERE azienda_id = ? AND json_extract(metadata,'$.chunked') = 1"
+    ).all(aziendaId) as any[]
+
+    const autonomousCount = db.prepare(
+      "SELECT COUNT(*) as c FROM entity WHERE type = 'autonomous_agent' AND azienda_id = ? AND stato = 'active'"
+    ).get(aziendaId) as any
+
+    const namesSummary = Object.entries(namesByTag).map(([t, c]) => `${c} ${t}`).join(', ')
+    const entitySummary = Object.entries(entityByType).filter(([t]) => !['autonomous_agent','agent_memory','skill'].includes(t)).map(([t, c]) => `${c} ${t}`).join(', ')
+    const docsSummary = docs.map((d: any) => `${d.display_name} (${d.chunks} chunk)`).join(', ')
+
+    return `\nSTATO SISTEMA:\n` +
+      `- Names: ${nameRows.length} (${namesSummary || 'nessuno'})\n` +
+      `- Entity: ${entitySummary || 'nessuna'}\n` +
+      `- Documenti indicizzati: ${docsSummary || 'nessuno'}\n` +
+      `- Agenti autonomi attivi: ${autonomousCount?.c || 0}`
+  } catch {
+    return ''
+  }
+}
+
+// ── Autonomous Agent Context ─────────────────────────────
+
+export function buildAutonomousContext(domain: string, aziendaId: string): string {
+  const parts: string[] = []
+
+  // 1. Global context
+  const globalPath = path.join(CONTEXT_DIR, 'aziende', aziendaId, 'CONTEXT.md')
+  const globalCtx = readContextFile(globalPath)
+  if (globalCtx) parts.push('--- CONTESTO AZIENDALE ---\n' + globalCtx)
+
+  // 2. Skill context
+  const agentPath = path.join(CONTEXT_DIR, 'aziende', aziendaId, 'skills', `${domain}.md`)
+  let agentCtx = readContextFile(agentPath)
+  if (!agentCtx) {
+    const templatePath = path.join(CONTEXT_DIR, '_templates', 'skills', `${domain}.md`)
+    agentCtx = readContextFile(templatePath)
+  }
+  if (agentCtx) parts.push('--- CONTESTO AGENTE ---\n' + agentCtx)
+
+  // 3. Agent memory
+  try {
+    const memory = db.prepare(
+      "SELECT metadata FROM entity WHERE type = 'agent_memory' AND json_extract(metadata, '$.domain') = ? AND azienda_id = ? LIMIT 1"
+    ).get(domain, aziendaId) as any
+    if (memory) {
+      const m = typeof memory.metadata === 'string' ? JSON.parse(memory.metadata) : memory.metadata
+      if (m.lessons?.length > 0) {
+        parts.push('--- MEMORIA AGENTE ---\n' + m.lessons.slice(-10).map((l: any) => `- ${l.rule}`).join('\n'))
+      }
+    }
+  } catch {}
+
+  // 4. Steering rules
+  const steeringPath = path.join(CONTEXT_DIR, 'aziende', aziendaId, 'steering-rules.md')
+  const steeringCtx = readContextFile(steeringPath)
+  if (steeringCtx) parts.push('--- REGOLE ---\n' + steeringCtx)
+
+  return parts.join('\n\n')
+}
+
+// ── Agent Memory: add lesson ─────────────────────────────
+
+export function addAgentLesson(aziendaId: string, domain: string, rule: string, source: string): void {
+  try {
+    const existing = db.prepare(
+      "SELECT id, metadata FROM entity WHERE type = 'agent_memory' AND json_extract(metadata, '$.domain') = ? AND azienda_id = ?"
+    ).get(domain, aziendaId) as any
+
+    const lesson = { rule, source, date: new Date().toISOString().split('T')[0] }
+
+    if (existing) {
+      const m = typeof existing.metadata === 'string' ? JSON.parse(existing.metadata) : existing.metadata
+      m.lessons = [...(m.lessons || []), lesson].slice(-20) // keep last 20 lessons
+      db.prepare("UPDATE entity SET metadata = ?, updated_at = datetime('now') WHERE id = ?").run(JSON.stringify(m), existing.id)
+    } else {
+      db.prepare(
+        "INSERT INTO entity (id, azienda_id, type, display_name, slug, metadata, path, created_at, updated_at) VALUES (?, ?, 'agent_memory', ?, ?, ?, ?, datetime('now'), datetime('now'))"
+      ).run(
+        crypto.randomUUID(), aziendaId,
+        `Memory: ${domain}`, `memory-${domain}`,
+        JSON.stringify({ domain, lessons: [lesson] }),
+        `/entity/agent-memory/${domain}`
+      )
+    }
+  } catch (err) {
+    console.error('Add agent lesson error:', err)
+  }
 }
 
 export function saveSessionContext(aziendaId: string, userId: string, sessionId: string, summary: string): void {

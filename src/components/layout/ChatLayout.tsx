@@ -21,8 +21,6 @@ import {
   MessageSquare,
   PanelLeftClose,
   PanelLeft,
-  PanelRightClose,
-  PanelRight,
   Users,
   UserCheck,
   FileText,
@@ -49,6 +47,9 @@ import {
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import VoiceChat from '../VoiceChat'
+import ContextPanel from './ContextPanel'
+import ArtifactOverlay from './ArtifactOverlay'
+import JobMonitor from '../JobMonitor'
 import AudioRecorder from '../AudioRecorder'
 import Badge from '../ui/Badge'
 import { renderToolResult, toolNameMapExtended } from '../ChatToolRenderers'
@@ -80,7 +81,7 @@ async function rateMessageFn(messageId: string, sessionId: string, domain: strin
   } catch { /* fire-and-forget */ }
 }
 import UserFilesModal from '../UserFilesModal'
-import PanelRouter from '../panels/PanelRouter'
+// PanelRouter removed — sidebar is now dynamic
 import DocumentArchiveModal from '../DocumentArchiveModal'
 
 // ── Types ───────────────────────────────────────────────
@@ -268,7 +269,7 @@ function renderMarkdown(text: string): JSX.Element[] {
   return elements
 }
 
-// ── Reasoning Block (collapsed by default) ──────────────
+// ── Reasoning Block (collapsed by default, verbose when expanded) ──
 function ReasoningBlock({ reasoning }: { reasoning: NonNullable<DisplayMessage['reasoning']> }) {
   const [expanded, setExpanded] = useState(false)
   return (
@@ -284,26 +285,44 @@ function ReasoningBlock({ reasoning }: { reasoning: NonNullable<DisplayMessage['
         <span className="text-text3 group-hover:text-text3">
           {reasoning.steps.length} step{reasoning.steps.length > 1 ? '' : ''}
           {reasoning.latencyMs ? ` · ${(reasoning.latencyMs / 1000).toFixed(1)}s` : ''}
+          {reasoning.domain && ` · ${reasoning.domain}`}
         </span>
       </button>
       {expanded && (
-        <div className="mt-2 ml-4 pl-3 border-l-2 border-gold/20 space-y-1.5">
+        <div className="mt-2 ml-4 pl-3 border-l-2 border-gold/20 space-y-2">
+          {/* Planner thinking */}
           {reasoning.thinking && (
-            <p className="text-[10px] text-text3 italic mb-2">{reasoning.thinking}</p>
+            <div className="bg-bg3/50 rounded px-2.5 py-1.5">
+              <p className="text-[9px] text-text3 font-medium mb-0.5">Pensiero del planner:</p>
+              <p className="text-[10px] text-text2 italic">{reasoning.thinking}</p>
+            </div>
           )}
+
+          {/* Steps with verbose results */}
           {reasoning.steps.map((step, i) => (
-            <div key={i} className="flex items-start gap-2 text-[11px]">
-              <span className="text-gold font-mono shrink-0">{i + 1}.</span>
-              <div className="min-w-0">
-                <span className="text-text2">{step.description}</span>
-                <span className="text-text3 ml-1.5">
-                  <span className="font-mono text-[10px] bg-bg3 px-1 py-0.5 rounded">{step.tool}</span>
-                  {' → '}
-                  <span className="text-text3">{step.result_summary}</span>
-                </span>
+            <div key={i} className="space-y-0.5">
+              <div className="flex items-start gap-2 text-[11px]">
+                <span className="text-gold font-mono shrink-0 mt-0.5">{i + 1}.</span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-text2 font-medium">{step.description}</p>
+                  <div className="flex items-center gap-1.5 mt-0.5">
+                    <span className="font-mono text-[9px] bg-bg3 px-1.5 py-0.5 rounded text-text3">{step.tool}</span>
+                    <span className="text-[10px] text-text3">→</span>
+                    <span className="text-[10px] text-text3">{step.result_summary}</span>
+                  </div>
+                </div>
               </div>
             </div>
           ))}
+
+          {/* Profiling */}
+          {reasoning.latencyMs && (
+            <div className="text-[9px] text-text3 pt-1 border-t border-border/30 flex gap-3">
+              <span>Totale: {(reasoning.latencyMs / 1000).toFixed(1)}s</span>
+              {(reasoning as any).plannerMs && <span>Planner: {((reasoning as any).plannerMs / 1000).toFixed(1)}s</span>}
+              {(reasoning as any).execMs && <span>Tool: {((reasoning as any).execMs / 1000).toFixed(1)}s</span>}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -510,22 +529,65 @@ export default function ChatLayout() {
   // Sidebar state
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [rightSidebarOpen, setRightSidebarOpen] = useState(false)
-  const [activePanel, setActivePanel] = useState<string | null>(null)
+  // activePanel removed — sidebar is now dynamic
   const [filesModalOpen, setFilesModalOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
 
   // Agent panel buttons config
-  const agentButtons = [
-    { domain: 'pulse', label: 'Pulse', initial: 'P', color: '#C41E3A' },
-    { domain: 'commerciale', label: 'Commerciale', initial: 'C', color: '#1976D2' },
-    { domain: 'produzione', label: 'Produzione', initial: 'Pr', color: '#E68A00' },
-    { domain: 'marketing', label: 'Marketing', initial: 'M', color: '#9C27B0' },
-    { domain: 'amministrazione', label: 'Amministrazione', initial: 'A', color: '#2D8B56' },
-    { domain: 'hr', label: 'HR', initial: 'HR', color: '#7B1FA2' },
-    { domain: 'legal', label: 'Legal', initial: 'L', color: '#D32F2F' },
-    { domain: 'infra', label: 'IT/Infra', initial: 'IT', color: '#455A64' },
-    { domain: 'personal', label: 'Personale', initial: 'Pe', color: '#6B7280' },
+  // Quick actions for sidebar
+  const quickActions = [
+    { label: 'Overview aziendale', command: 'overview aziendale' },
+    { label: 'Lista clienti', command: 'lista clienti' },
+    { label: 'Pipeline leads', command: 'pipeline leads' },
+    { label: 'Fatture scadute', command: 'fatture scadute' },
+    { label: 'Stato progetti', command: 'stato progetti' },
+    { label: 'Documenti', command: 'lista documenti' },
+    { label: 'Utenti sistema', command: 'lista utenti' },
+    { label: 'Agenti autonomi', command: 'lista agenti autonomi' },
   ]
+
+  // Context panel state — tracks current agent for right panel
+  const [currentAgentDomain, setCurrentAgentDomain] = useState<string | null>(null)
+  const [currentAgentName, setCurrentAgentName] = useState<string | null>(null)
+  const [currentAgentColor, setCurrentAgentColor] = useState<string | null>(null)
+  const [lastToolCalls, setLastToolCalls] = useState<Record<string, unknown>[]>([])
+  const [artifactView, setArtifactView] = useState<any>(null)
+
+  // Load autonomous agents for sidebar
+  const [sidebarAgents, setSidebarAgents] = useState<any[]>([])
+  const [sidebarStats, setSidebarStats] = useState<{ docs: number; chunks: number } | null>(null)
+
+  useEffect(() => {
+    if (!user) return
+    // Load autonomous agents
+    const loadSidebar = async () => {
+      try {
+        const token = getAuthToken()
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+        if (token) headers['Authorization'] = `Bearer ${token}`
+
+        const res = await fetch('/api/chat/message', {
+          method: 'POST', headers,
+          body: JSON.stringify({ message: 'lista agenti autonomi', sessionId: 'sidebar-load' }),
+        })
+        const data = await res.json()
+        // Extract agent list from tool calls
+        const agentResult = data.toolCalls?.find((tc: any) => tc.tool === 'list_autonomous_agents')
+        if (agentResult?.result && Array.isArray(agentResult.result)) {
+          setSidebarAgents(agentResult.result)
+        }
+      } catch {}
+
+      // Load doc/chunk counts
+      try {
+        const { supabase } = await import('../../lib/supabase')
+        const { data: docs } = await supabase.from('entity').select('id', { count: 'exact', head: true }).eq('type', 'documento')
+        const { data: chunks } = await supabase.from('entity').select('id', { count: 'exact', head: true }).eq('type', 'chunk')
+        setSidebarStats({ docs: (docs as any)?.length || 0, chunks: (chunks as any)?.length || 0 })
+      } catch {}
+    }
+    loadSidebar()
+  }, [user])
 
   // Session state
   const [sessions, setSessions] = useState<SessionItem[]>([])
@@ -540,17 +602,10 @@ export default function ChatLayout() {
   const [suggestions, setSuggestions] = useState<string[]>([])
   const [loadingSuggestions, setLoadingSuggestions] = useState(false)
 
-  // Prompt history state — persisted in localStorage
-  const [promptHistory, setPromptHistory] = useState<string[]>(() => {
-    try { return JSON.parse(localStorage.getItem('fiai_prompt_history') || '[]') } catch { return [] }
-  })
+  // Prompt history state — per session, built from loaded messages
+  const [promptHistory, setPromptHistory] = useState<string[]>([])
   const [historyIndex, setHistoryIndex] = useState(-1)
   const [savedInput, setSavedInput] = useState('')
-
-  // Persist history changes
-  useEffect(() => {
-    try { localStorage.setItem('fiai_prompt_history', JSON.stringify(promptHistory.slice(-100))) } catch {}
-  }, [promptHistory])
 
   // Rename session state
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null)
@@ -580,10 +635,13 @@ export default function ChatLayout() {
     fileSize?: number
     file?: File
     result?: import('../../lib/upload').SmartUploadResult
-    request?: string
+    editNome?: string
+    editAutore?: string
     editCategoria?: string
     newCategoria?: string
-    newCategoriaDesc?: string  // description for template recognition
+    newCategoriaDesc?: string
+    suggestingDesc?: boolean
+    actionLoading?: boolean
   } | null>(null)
 
   // Legacy archive modal (kept for backward compat)
@@ -833,6 +891,10 @@ export default function ChatLayout() {
         content: m.contenuto,
       }))
       setConversationHistory(history)
+      // Build prompt history from user messages in this session
+      const userPrompts = data.filter((m: ChatMessage) => m.ruolo === 'user').map((m: ChatMessage) => m.contenuto)
+      setPromptHistory(userPrompts)
+      setHistoryIndex(-1)
     } catch {
       toast.error('Errore nel caricamento dei messaggi')
     }
@@ -843,6 +905,8 @@ export default function ChatLayout() {
     setActiveSessionId(null)
     setMessages([])
     setConversationHistory([])
+    setPromptHistory([])
+    setHistoryIndex(-1)
     setInputValue('')
   }, [])
 
@@ -1165,6 +1229,16 @@ export default function ChatLayout() {
             reasoning: result.reasoning,
           }])
         }
+        // Update context panel with current agent
+        if (result.agentDomain && result.agentDomain !== 'general') {
+          setCurrentAgentDomain(result.agentDomain)
+          setCurrentAgentName(result.agentName || null)
+          setCurrentAgentColor(result.agentColor || null)
+        }
+        if (result.toolCalls?.length > 0) {
+          setLastToolCalls(result.toolCalls)
+        }
+
         // Save response for voice chat
         lastResponseRef.current = result.text
 
@@ -1301,15 +1375,6 @@ export default function ChatLayout() {
         </div>
 
         <div className="flex items-center gap-2">
-          {activePanel && (
-            <button
-              onClick={() => setActivePanel(null)}
-              className="p-1.5 rounded-lg bg-gold/10 text-gold transition-colors"
-              title="Chiudi panel"
-            >
-              <PanelRightClose size={20} />
-            </button>
-          )}
           <button
             onClick={() => setFilesModalOpen(true)}
             className="p-1.5 rounded-lg text-text2 hover:bg-bg3 hover:text-text transition-colors"
@@ -1693,43 +1758,11 @@ export default function ChatLayout() {
           </div>
         </div>
 
-        {/* Right Sidebar — Agent navigation + panel */}
-        <aside
-          className={`bg-bg2 border-l border-border flex flex-col shrink-0 transition-all duration-200 overflow-hidden ${
-            activePanel ? 'w-[45%]' : 'w-[220px]'
-          }`}
-        >
-          {activePanel ? (
-            /* Agent Panel expanded */
-            <PanelRouter domain={activePanel} onClose={() => setActivePanel(null)} />
-          ) : (
-            /* Agent navigation list */
-            <>
-              <div className="px-4 py-3 border-b border-border shrink-0">
-                <span className="text-xs font-semibold text-text3 uppercase tracking-wider">Agenti</span>
-              </div>
-              <nav className="flex-1 overflow-y-auto py-2 px-2 space-y-0.5">
-                {agentButtons.map((btn) => (
-                  <button
-                    key={btn.domain}
-                    onClick={() => setActivePanel(btn.domain)}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs text-text2 hover:text-text hover:bg-bg3 transition-colors"
-                  >
-                    <div
-                      className="w-6 h-6 rounded flex items-center justify-center text-[9px] font-bold text-white shrink-0"
-                      style={{ backgroundColor: btn.color }}
-                    >
-                      {btn.initial}
-                    </div>
-                    <span className="truncate">{btn.label}</span>
-                  </button>
-                ))}
-              </nav>
-            </>
-          )}
-        </aside>
+        {/* Right Panel — disabled for now, will be re-enabled when stable */}
       </div>
       <UserFilesModal open={filesModalOpen} onClose={() => setFilesModalOpen(false)} />
+
+      {/* Artifact Overlay — disabled for now */}
 
       {/* Smart Upload Overlay */}
       {smartUpload && (
@@ -1755,12 +1788,15 @@ export default function ChatLayout() {
               </div>
             ) : smartUpload.result ? (
               <div className="space-y-4">
+                {/* Header */}
                 <div className="flex items-center justify-between">
-                  <h3 className="text-sm font-semibold text-text">File Analizzato</h3>
+                  <h3 className="text-sm font-semibold text-text">Conferma catalogazione</h3>
                   <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-gold/10 text-gold">
                     {smartUpload.result.entity_type}
                   </span>
                 </div>
+
+                <p className="text-xs text-text2">Il sistema ha classificato il documento come segue. Verifica e conferma o modifica.</p>
 
                 {/* Preview: image or audio */}
                 {smartUpload.result.entity_type === 'foto' && smartUpload.result.file_url && (
@@ -1771,8 +1807,32 @@ export default function ChatLayout() {
                 )}
 
                 <div className="space-y-2 text-xs">
-                  <div className="bg-bg3 rounded-lg p-3 space-y-1.5">
-                    <p><span className="text-text3">Nome:</span> <span className="text-text font-medium">{smartUpload.result.display_name}</span></p>
+                  {/* Editable fields */}
+                  <div className="bg-bg3 rounded-lg p-3 space-y-2.5">
+                    {/* Nome — editable */}
+                    <div className="flex items-center gap-2">
+                      <span className="text-text3 shrink-0 w-16">Nome:</span>
+                      <input
+                        type="text"
+                        value={smartUpload.editNome ?? smartUpload.result.display_name}
+                        onChange={(e) => setSmartUpload(prev => prev ? { ...prev, editNome: e.target.value } : null)}
+                        className="flex-1 px-2 py-1 text-xs bg-bg2 border border-border rounded text-text focus:outline-none focus:border-gold/40 font-medium"
+                      />
+                    </div>
+
+                    {/* Autore — editable */}
+                    <div className="flex items-center gap-2">
+                      <span className="text-text3 shrink-0 w-16">Autore:</span>
+                      <input
+                        type="text"
+                        value={smartUpload.editAutore ?? (smartUpload.result.extracted_data as any)?.autore ?? ''}
+                        onChange={(e) => setSmartUpload(prev => prev ? { ...prev, editAutore: e.target.value } : null)}
+                        placeholder="Autore del documento..."
+                        className="flex-1 px-2 py-1 text-xs bg-bg2 border border-border rounded text-text placeholder:text-text3 focus:outline-none focus:border-gold/40"
+                      />
+                    </div>
+
+                    {/* Categoria — editable select */}
                     <div className="flex items-center gap-2">
                       <span className="text-text3 shrink-0">Categoria:</span>
                       <select
@@ -1780,226 +1840,165 @@ export default function ChatLayout() {
                         onChange={(e) => setSmartUpload(prev => prev ? { ...prev, editCategoria: e.target.value, newCategoria: e.target.value === '__new__' ? '' : undefined } : null)}
                         className="flex-1 px-2 py-1 text-xs bg-bg2 border border-border rounded text-text focus:outline-none focus:border-gold/40"
                       >
-                        {['legale', 'amministrazione', 'commerciale', 'hr', 'marketing', 'produzione', 'documentazione_tecnica', 'normative', 'contratti', 'altro'].map(cat => (
+                        {['legale', 'amministrazione', 'commerciale', 'hr', 'marketing', 'produzione', 'documentazione_tecnica', 'normative', 'contratti', 'letteratura', 'religione', 'altro'].map(cat => (
                           <option key={cat} value={cat}>{cat}</option>
                         ))}
-                        {/* Add current AI suggestion if not in list */}
-                        {!['legale', 'amministrazione', 'commerciale', 'hr', 'marketing', 'produzione', 'documentazione_tecnica', 'normative', 'contratti', 'altro'].includes(smartUpload.result.categoria) && (
-                          <option value={smartUpload.result.categoria}>{smartUpload.result.categoria}</option>
+                        {/* AI suggestion if not in standard list */}
+                        {!['legale', 'amministrazione', 'commerciale', 'hr', 'marketing', 'produzione', 'documentazione_tecnica', 'normative', 'contratti', 'letteratura', 'religione', 'altro'].includes(smartUpload.result.categoria) && (
+                          <option value={smartUpload.result.categoria}>{smartUpload.result.categoria} (suggerita)</option>
+                        )}
+                        {/* User-created category */}
+                        {smartUpload.editCategoria && smartUpload.editCategoria !== '__new__' && !['legale', 'amministrazione', 'commerciale', 'hr', 'marketing', 'produzione', 'documentazione_tecnica', 'normative', 'contratti', 'letteratura', 'religione', 'altro'].includes(smartUpload.editCategoria) && smartUpload.editCategoria !== smartUpload.result.categoria && (
+                          <option value={smartUpload.editCategoria}>✓ {smartUpload.editCategoria}</option>
                         )}
                         <option value="__new__">+ Nuova categoria...</option>
                       </select>
                     </div>
+
+                    {/* New category form */}
                     {(smartUpload.editCategoria === '__new__' || smartUpload.newCategoria !== undefined) && (
                       <div className="space-y-2 bg-bg3/50 rounded-lg p-2.5 border border-border">
-                        <input
-                          type="text"
-                          value={smartUpload.newCategoria || ''}
-                          onChange={(e) => setSmartUpload(prev => prev ? { ...prev, newCategoria: e.target.value } : null)}
-                          placeholder="Nome nuova categoria..."
-                          autoFocus
-                          className="w-full px-2 py-1.5 text-xs bg-bg2 border border-border rounded text-text placeholder:text-text3 focus:outline-none focus:border-gold/40"
-                        />
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            value={smartUpload.newCategoria || ''}
+                            onChange={(e) => setSmartUpload(prev => prev ? { ...prev, newCategoria: e.target.value } : null)}
+                            placeholder="Nome nuova categoria..."
+                            autoFocus
+                            className="flex-1 px-2 py-1.5 text-xs bg-bg2 border border-border rounded text-text placeholder:text-text3 focus:outline-none focus:border-gold/40"
+                          />
+                          {smartUpload.newCategoria && smartUpload.newCategoria.length > 2 && !smartUpload.newCategoriaDesc && (
+                            <button
+                              type="button"
+                              disabled={smartUpload.suggestingDesc}
+                              onClick={async () => {
+                                setSmartUpload(prev => prev ? { ...prev, suggestingDesc: true } : null)
+                                try {
+                                  const token = (await import('../../lib/supabase')).getAuthToken()
+                                  const res = await fetch('/api/chat/message', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json', ...(token ? { 'Authorization': `Bearer ${token}` } : {}) },
+                                    body: JSON.stringify({
+                                      message: `Genera una breve descrizione (max 2 frasi) per la categoria "${smartUpload.newCategoria}" per il riconoscimento automatico di documenti simili. Rispondi SOLO con la descrizione.`,
+                                      sessionId: 'system-suggest',
+                                    }),
+                                  })
+                                  const data = await res.json()
+                                  if (data.text) {
+                                    setSmartUpload(prev => prev ? { ...prev, newCategoriaDesc: data.text.substring(0, 300), suggestingDesc: false } : null)
+                                  } else {
+                                    setSmartUpload(prev => prev ? { ...prev, suggestingDesc: false } : null)
+                                  }
+                                } catch {
+                                  setSmartUpload(prev => prev ? { ...prev, suggestingDesc: false } : null)
+                                }
+                              }}
+                              className="px-3 py-1.5 text-[10px] bg-gold/10 hover:bg-gold/20 text-gold rounded border border-gold/20 whitespace-nowrap disabled:opacity-50"
+                            >
+                              {smartUpload.suggestingDesc ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Suggerisci'}
+                            </button>
+                          )}
+                        </div>
                         <textarea
                           value={smartUpload.newCategoriaDesc || ''}
                           onChange={(e) => setSmartUpload(prev => prev ? { ...prev, newCategoriaDesc: e.target.value } : null)}
-                          placeholder="Descrivi questa categoria per il riconoscimento automatico futuro (es. parole chiave, tipo di contenuto, struttura tipica...)"
+                          placeholder="Descrivi questa categoria per il riconoscimento automatico futuro..."
                           rows={2}
                           className="w-full px-2 py-1.5 text-[10px] bg-bg2 border border-border rounded text-text placeholder:text-text3 focus:outline-none focus:border-gold/40 resize-none"
                         />
-                        <p className="text-[9px] text-text3">Questo template sarà usato per riconoscere automaticamente documenti simili in futuro.</p>
+                        <div className="flex justify-end">
+                          {smartUpload.newCategoria && smartUpload.newCategoria.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => setSmartUpload(prev => prev ? { ...prev, editCategoria: prev.newCategoria, newCategoria: undefined } : null)}
+                              className="px-3 py-1 text-[10px] bg-gold hover:bg-gold-l text-white rounded font-medium"
+                            >
+                              Usa questa categoria
+                            </button>
+                          )}
+                        </div>
                       </div>
                     )}
+
+                    {/* Tags */}
                     {smartUpload.result.tags.length > 0 && (
-                      <div className="flex gap-1 flex-wrap">
+                      <div className="flex gap-1 flex-wrap items-center">
                         <span className="text-text3">Tags:</span>
-                        {smartUpload.result.tags.map(t => (
+                        {smartUpload.result.tags.map((t: string) => (
                           <span key={t} className="px-1.5 py-0.5 rounded bg-bg2 text-text2 text-[10px]">{t}</span>
                         ))}
                       </div>
                     )}
+
                     {smartUpload.result.descrizione && (
                       <p><span className="text-text3">Descrizione:</span> <span className="text-text">{smartUpload.result.descrizione}</span></p>
                     )}
                   </div>
 
+                  {/* Info & Statistics */}
+                  <div className="bg-bg3 rounded-lg p-3 space-y-1">
+                    <p className="text-text3 text-[10px] font-semibold uppercase tracking-wider mb-1.5">Informazioni</p>
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                      <p className="text-[11px]"><span className="text-text3">File:</span> <span className="text-text">{smartUpload.fileName}</span></p>
+                      <p className="text-[11px]"><span className="text-text3">Dimensione:</span> <span className="text-text">{smartUpload.fileSize ? (smartUpload.fileSize < 1024 * 1024 ? `${(smartUpload.fileSize / 1024).toFixed(0)} KB` : `${(smartUpload.fileSize / (1024 * 1024)).toFixed(1)} MB`) : '—'}</span></p>
+                      {smartUpload.result.page_count && (
+                        <p className="text-[11px]"><span className="text-text3">Pagine:</span> <span className="text-text">{smartUpload.result.page_count}</span></p>
+                      )}
+                      <p className="text-[11px]"><span className="text-text3">Tipo file:</span> <span className="text-text">{smartUpload.result.entity_type}</span></p>
+                      <p className="text-[11px]"><span className="text-text3">Caricato da:</span> <span className="text-text">{profile?.nome || user?.email || '—'}</span></p>
+                      <p className="text-[11px]"><span className="text-text3">Data:</span> <span className="text-text">{new Date().toLocaleDateString('it-IT')}</span></p>
+                    </div>
+                  </div>
+
+                  {/* Matched name */}
                   {smartUpload.result.matched_name && (
-                    <div className="bg-green/10 border border-green/20 rounded-lg p-3">
-                      <p className="text-green text-[11px] font-medium">Collegato automaticamente a:</p>
-                      <p className="text-text font-medium mt-0.5">{smartUpload.result.matched_name.display_name}</p>
-                    </div>
-                  )}
-
-                  {smartUpload.result.suggested_name && !smartUpload.result.matched_name && (
-                    <div className="bg-amber/10 border border-amber/20 rounded-lg p-3">
-                      <p className="text-amber text-[11px]">Nome suggerito (non trovato nel DB):</p>
-                      <p className="text-text font-medium mt-0.5">{smartUpload.result.suggested_name}</p>
-                    </div>
-                  )}
-
-                  {smartUpload.result.chunked && (
-                  <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3">
-                    <p className="text-blue-400 text-[11px] font-medium">Documento analizzato in profondità</p>
-                    <p className="text-text text-xs mt-0.5">{smartUpload.result.chunk_count} sezioni indicizzate per ricerca</p>
-                  </div>
-                )}
-
-                {Object.keys(smartUpload.result.extracted_data).length > 0 && (
-                    <div className="bg-bg3 rounded-lg p-3">
-                      <p className="text-text3 text-[10px] font-medium mb-1">Dati estratti:</p>
-                      {Object.entries(smartUpload.result.extracted_data)
-                        .filter(([, v]) => v !== null && v !== '' && v !== 0)
-                        .map(([k, v]) => (
-                          <p key={k} className="text-[11px]">
-                            <span className="text-text3">{k}:</span>{' '}
-                            <span className="text-text">{typeof v === 'number' ? `€ ${v.toLocaleString('it-IT')}` : String(v)}</span>
-                          </p>
-                        ))}
+                    <div className="bg-green/10 border border-green/20 rounded-lg p-2.5">
+                      <p className="text-green text-[11px] font-medium">Collegato a: {smartUpload.result.matched_name.display_name}</p>
                     </div>
                   )}
                 </div>
 
-                {/* Contextual suggestions */}
-                <div className="pt-1">
-                  <p className="text-[10px] text-text3 mb-2">Cosa vuoi fare?</p>
-                  <div className="flex flex-wrap gap-1.5 mb-3">
-                    {(() => {
-                      const r = smartUpload.result!
-                      const type = r.entity_type
-                      const suggestions: { label: string; action: string }[] = []
-
-                      // Common
-                      suggestions.push({ label: 'Archivia', action: `Archivia il file ${r.display_name}` })
-
-                      // Type-specific
-                      if (type === 'fattura_passiva') {
-                        suggestions.push({ label: 'Registra fattura', action: `Registra la fattura ${r.display_name} con i dati estratti` })
-                        if (r.matched_name) suggestions.push({ label: `Collega a ${r.matched_name.display_name}`, action: `Collega la fattura a ${r.matched_name.display_name}` })
-                        if (!r.matched_name && r.suggested_name) suggestions.push({ label: `Crea fornitore ${r.suggested_name}`, action: `Crea il fornitore ${r.suggested_name} e collega la fattura` })
-                      } else if (type === 'contratto') {
-                        suggestions.push({ label: 'Analizza clausole', action: `Analizza le clausole del contratto ${r.display_name}` })
-                        suggestions.push({ label: 'Riassumi', action: `Riassumi il contratto ${r.display_name}` })
-                      } else if (type === 'cv') {
-                        suggestions.push({ label: 'Crea candidato', action: `Crea un candidato dai dati del CV ${r.display_name}` })
-                        suggestions.push({ label: 'Valuta competenze', action: `Valuta le competenze nel CV ${r.display_name}` })
-                      } else if (type === 'preventivo') {
-                        suggestions.push({ label: 'Registra preventivo', action: `Registra il preventivo ${r.display_name}` })
-                      } else if (type === 'foto') {
-                        suggestions.push({ label: 'Analizza immagine', action: `Analizza l'immagine ${r.display_name}` })
-                        suggestions.push({ label: 'Invia su WhatsApp', action: `Invia l'immagine ${r.display_name} su WhatsApp` })
-                      } else if (type === 'audio') {
-                        suggestions.push({ label: 'Trascrivi', action: `Trascrivi l'audio ${r.display_name}` })
-                        suggestions.push({ label: 'Clona voce', action: `Clona la voce dall'audio ${r.display_name}` })
-                      } else if (type === 'report') {
-                        suggestions.push({ label: 'Riassumi', action: `Riassumi il report ${r.display_name}` })
-                        suggestions.push({ label: 'Estrai KPI', action: `Estrai i KPI dal report ${r.display_name}` })
-                      } else {
-                        suggestions.push({ label: 'Riassumi', action: `Riassumi il documento ${r.display_name}` })
-                      }
-
-                      // Chunked document: explore
-                      if (r.chunked) {
-                        suggestions.unshift({ label: 'Esplora documento', action: `Apri il documento ${r.display_name} e preparati a rispondere alle mie domande sul suo contenuto` })
-                      }
-
-                      // Universal
-                      suggestions.push({ label: 'Invia su WhatsApp', action: `Invia il file ${r.display_name} su WhatsApp` })
-
-                      return suggestions.map(s => (
-                        <button
-                          key={s.label}
-                          onClick={async () => {
-                            const finalCat = smartUpload.editCategoria === '__new__'
-                              ? (smartUpload.newCategoria || r.categoria)
-                              : (smartUpload.editCategoria || r.categoria)
-
-                            // Update entity category if changed
-                            if (finalCat !== r.categoria && r.entity_id) {
-                              try {
-                                const token = (await import('../../lib/supabase')).getAuthToken()
-                                await fetch('/api/chat/message', {
-                                  method: 'POST',
-                                  headers: { 'Content-Type': 'application/json', ...(token ? { 'Authorization': `Bearer ${token}` } : {}) },
-                                  body: JSON.stringify({
-                                    message: `Aggiorna la categoria del documento "${r.display_name}" (id: ${r.entity_id}) a "${finalCat}"`,
-                                    sessionId: 'system-update',
-                                  }),
-                                })
-                              } catch {}
-                            }
-
-                            // Save new category template if creating new
-                            if (smartUpload.editCategoria === '__new__' && smartUpload.newCategoria) {
-                              try {
-                                const { supabase } = await import('../../lib/supabase')
-                                await supabase.from('entity').insert({
-                                  type: 'category_template',
-                                  display_name: smartUpload.newCategoria,
-                                  slug: smartUpload.newCategoria.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
-                                  metadata: JSON.stringify({
-                                    categoria: smartUpload.newCategoria,
-                                    descrizione: smartUpload.newCategoriaDesc || '',
-                                    keywords: smartUpload.newCategoriaDesc?.split(/[\s,;.]+/).filter((w: string) => w.length > 2) || [],
-                                    created_from: r.display_name,
-                                    example_entity_type: r.entity_type,
-                                  }),
-                                  path: `/entity/category-templates/${smartUpload.newCategoria.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
-                                })
-                                toast.success(`Template "${smartUpload.newCategoria}" creato`)
-                              } catch {}
-                            }
-
-                            const ctx = `[File: ${r.display_name}] [Tipo: ${r.entity_type}] [Categoria: ${finalCat}] [URL: ${r.file_url}]${r.matched_name ? ` [Name: ${r.matched_name.display_name}]` : ''}`
-                            setSmartUpload(null)
-                            handleSend(`${s.action}\n${ctx}`)
-                          }}
-                          className="px-2.5 py-1.5 text-[11px] bg-bg3 hover:bg-gold/10 hover:text-gold border border-border rounded-lg text-text transition-colors"
-                        >
-                          {s.label}
-                        </button>
-                      ))
-                    })()}
-                  </div>
-
-                  {/* Free text input */}
-                  <input
-                    type="text"
-                    value={smartUpload.request || ''}
-                    onChange={(e) => setSmartUpload(prev => prev ? { ...prev, request: e.target.value } : null)}
-                    placeholder="oppure scrivi cosa fare..."
-                    className="w-full px-3 py-2 text-xs bg-bg3 border border-border rounded-lg text-text placeholder:text-text3 focus:outline-none focus:border-gold/40"
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && smartUpload.request?.trim()) {
-                        const req = smartUpload.request.trim()
-                        const r = smartUpload.result!
-                        const ctx = `[File: ${r.display_name}] [Tipo: ${r.entity_type}] [URL: ${r.file_url}]${r.matched_name ? ` [Name: ${r.matched_name.display_name}]` : ''}`
-                        setSmartUpload(null)
-                        handleSend(`${req}\n${ctx}`)
-                      }
-                    }}
-                  />
-                </div>
-
-                <div className="flex gap-2 pt-2">
-                  {smartUpload.request?.trim() && (
-                    <button
-                      onClick={() => {
-                        const req = smartUpload.request!.trim()
-                        const r = smartUpload.result!
-                        const ctx = `[File: ${r.display_name}] [Tipo: ${r.entity_type}] [URL: ${r.file_url}]${r.matched_name ? ` [Name: ${r.matched_name.display_name}]` : ''}`
-                        setSmartUpload(null)
-                        handleSend(`${req}\n${ctx}`)
-                      }}
-                      className="flex-1 px-4 py-2 text-xs bg-gold hover:bg-gold-l text-white rounded-lg font-medium"
-                    >
-                      Invia
-                    </button>
-                  )}
+                {/* Actions: Conferma or Annulla */}
+                <div className="flex gap-2 pt-1">
                   <button
-                    onClick={() => setSmartUpload(null)}
-                    className="px-4 py-2 text-xs text-text3 hover:text-text border border-border rounded-lg"
+                    disabled={smartUpload.actionLoading}
+                    onClick={async () => {
+                      setSmartUpload(prev => prev ? { ...prev, actionLoading: true } : null)
+                      const r = smartUpload.result!
+                      const finalCat = smartUpload.editCategoria && smartUpload.editCategoria !== '__new__'
+                        ? smartUpload.editCategoria
+                        : r.categoria
+
+                      try {
+                        // Confirm upload → saves entity + launches background job (chunk + tag + embed)
+                        const { confirmUpload } = await import('../../lib/upload')
+                        const finalNome = smartUpload.editNome || r.display_name
+                        const finalAutore = smartUpload.editAutore || (r.extracted_data as any)?.autore || undefined
+                        await confirmUpload(r.upload_id, finalCat, finalNome, finalAutore)
+                        toast.success(`"${r.display_name}" — catalogazione in corso`)
+                      } catch (err: any) {
+                        toast.error(err.message || 'Errore nella conferma')
+                      }
+                      setSmartUpload(null)
+                    }}
+                    className="flex-1 px-4 py-2 text-xs bg-gold hover:bg-gold-l text-white rounded-lg font-medium disabled:opacity-50"
                   >
-                    Chiudi
+                    {smartUpload.actionLoading ? <Loader2 className="w-3 h-3 animate-spin inline mr-1" /> : null}
+                    Conferma e cataloga
+                  </button>
+                  <button
+                    onClick={async () => {
+                      const r = smartUpload.result!
+                      try {
+                        const { cancelUpload } = await import('../../lib/upload')
+                        await cancelUpload(r.upload_id)
+                      } catch {}
+                      toast('Upload annullato')
+                      setSmartUpload(null)
+                    }}
+                    className="px-4 py-2 text-xs text-text3 hover:text-red border border-border rounded-lg"
+                  >
+                    Annulla
                   </button>
                 </div>
               </div>
@@ -2039,6 +2038,9 @@ export default function ChatLayout() {
           }}
         />
       )}
+
+      {/* Job Monitor — floating badge */}
+      <JobMonitor />
     </div>
   )
 }

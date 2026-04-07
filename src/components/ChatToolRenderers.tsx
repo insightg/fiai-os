@@ -873,17 +873,59 @@ function renderSearchResults(result: any): JSX.Element {
   if (!Array.isArray(result)) return renderCreateResult(result)
   if (result.length === 0) return <p className="text-xs text-text3 italic">Nessun risultato trovato</p>
   return (
-    <div className="space-y-1">
-      {result.slice(0, 15).map((item: any, i: number) => (
-        <div key={item.id || i} className="flex items-center gap-2 px-2 py-1.5 bg-bg3 rounded text-xs">
-          {item.tags && <span className="text-[10px] text-gold">{(Array.isArray(item.tags) ? item.tags : []).join(', ')}</span>}
-          {item.type && <span className="text-[10px] px-1.5 py-0.5 bg-bg2 rounded text-text3">{item.type}</span>}
-          <span className="font-medium text-text">{item.display_name}</span>
-          {item.stato && <span className="text-[10px] text-text3">({item.stato})</span>}
-          {item.totale != null && <span className="ml-auto text-[11px] font-semibold text-gold">€ {Number(item.totale).toLocaleString('it-IT')}</span>}
-          {item.email && <span className="text-[10px] text-text3 ml-auto">{item.email}</span>}
-        </div>
-      ))}
+    <div className="space-y-1.5">
+      {result.slice(0, 15).map((item: any, i: number) => {
+        const fileUrl = item.file_url || item.metadata?.file_url
+        const isDoc = item.type === 'documento' || fileUrl
+        return (
+          <div key={item.id || i} className="flex items-center gap-2 px-2.5 py-2 bg-bg3 rounded-lg text-xs">
+            {item.tags && <span className="text-[10px] text-gold">{(Array.isArray(item.tags) ? item.tags : []).join(', ')}</span>}
+            {item.type && <span className="text-[10px] px-1.5 py-0.5 bg-bg2 rounded text-text3">{item.type}</span>}
+            <span className="font-medium text-text flex-1 truncate">{item.display_name}</span>
+            {item.stato && <span className="text-[10px] text-text3">({item.stato})</span>}
+            {item.totale != null && <span className="text-[11px] font-semibold text-gold">€ {Number(item.totale).toLocaleString('it-IT')}</span>}
+            {item.email && <span className="text-[10px] text-text3">{item.email}</span>}
+            {isDoc && fileUrl && (
+              <div className="flex gap-1 shrink-0">
+                <button
+                  onClick={async () => {
+                    try {
+                      const { getAuthToken } = await import('../lib/supabase')
+                      const token = getAuthToken()
+                      const res = await fetch(fileUrl, { headers: token ? { 'Authorization': `Bearer ${token}` } : {} })
+                      if (!res.ok) throw new Error('Errore')
+                      const blob = await res.blob()
+                      const url = URL.createObjectURL(blob)
+                      window.open(url, '_blank')
+                    } catch { window.open(fileUrl, '_blank') }
+                  }}
+                  className="px-1.5 py-0.5 text-[9px] bg-gold/10 text-gold rounded hover:bg-gold/20 transition-colors"
+                >
+                  Vedi
+                </button>
+                <button
+                  onClick={async () => {
+                    try {
+                      const { getAuthToken } = await import('../lib/supabase')
+                      const token = getAuthToken()
+                      const res = await fetch(fileUrl, { headers: token ? { 'Authorization': `Bearer ${token}` } : {} })
+                      if (!res.ok) throw new Error('Errore')
+                      const blob = await res.blob()
+                      const url = URL.createObjectURL(blob)
+                      const a = document.createElement('a')
+                      a.href = url; a.download = item.display_name || 'file'; a.click()
+                      URL.revokeObjectURL(url)
+                    } catch {}
+                  }}
+                  className="px-1.5 py-0.5 text-[9px] bg-bg2 text-text3 rounded hover:text-text hover:bg-bg transition-colors"
+                >
+                  <Download size={10} className="inline" />
+                </button>
+              </div>
+            )}
+          </div>
+        )
+      })}
       {result.length > 15 && <p className="text-[10px] text-text3">...e altri {result.length - 15}</p>}
     </div>
   )
@@ -908,6 +950,74 @@ function renderTreeResult(result: any): JSX.Element {
               {c.totale != null && <span className="text-gold ml-1">€ {Number(c.totale).toLocaleString('it-IT')}</span>}
             </div>
           ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function renderStructuredList(result: any): JSX.Element {
+  if (!Array.isArray(result) || result.length === 0) {
+    return <p className="text-xs text-text3 italic">Nessun elemento trovato.</p>
+  }
+  return (
+    <div className="space-y-1.5">
+      {result.map((item: any, i: number) => (
+        <div key={item.id || i} className="flex items-center gap-2 px-3 py-2 bg-bg3 rounded-lg text-xs">
+          <div className={`w-2 h-2 rounded-full shrink-0 ${item.enabled || item.stato === 'active' || item.stato === 'completed' ? 'bg-green' : item.stato === 'failed' || item.stato === 'dead' ? 'bg-red' : 'bg-text3'}`} />
+          <div className="min-w-0 flex-1">
+            <p className="font-medium text-text truncate">{item.name || item.display_name || item.action || `#${i + 1}`}</p>
+            <p className="text-[10px] text-text3 truncate">
+              {item.description || item.agentDomain || item.stato || ''}
+              {item.trigger?.cron ? ` · cron: ${item.trigger.cron}` : ''}
+              {item.trigger?.event ? ` · event: ${item.trigger.event}` : ''}
+              {item.last_run ? ` · ultimo: ${new Date(item.last_run).toLocaleString('it-IT')}` : ''}
+              {item.runs != null ? ` · ${item.runs} esecuzioni` : ''}
+            </p>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function renderDocumentList(result: any): JSX.Element {
+  if (!Array.isArray(result) || result.length === 0) return <p className="text-xs text-text3 italic">Nessun documento trovato.</p>
+  return (
+    <div className="space-y-1.5">
+      {result.map((doc: any, i: number) => (
+        <div key={doc.id || i} className="flex items-center gap-3 px-3 py-2 bg-bg3 rounded-lg text-xs">
+          <FileText size={14} className="text-gold shrink-0" />
+          <div className="min-w-0 flex-1">
+            <p className="font-medium text-text truncate">{doc.nome}</p>
+            <p className="text-[10px] text-text3">
+              {doc.categoria || 'altro'}
+              {doc.chunkato && doc.chunkato !== 'No' ? ` · ${doc.chunkato}` : ''}
+              {doc.dimensione && doc.dimensione !== 'N/D' ? ` · ${doc.dimensione}` : ''}
+              {doc.data ? ` · ${doc.data}` : ''}
+            </p>
+          </div>
+          <div className={`w-2 h-2 rounded-full shrink-0 ${doc.chunkato && doc.chunkato !== 'No' ? 'bg-green' : 'bg-text3'}`} />
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function renderDocumentStructure(result: any): JSX.Element {
+  if (!result || result.errore) return <p className="text-xs text-red">{result?.errore || 'Errore'}</p>
+  return (
+    <div className="space-y-2">
+      <div className="px-3 py-2 bg-bg3 rounded-lg">
+        <p className="text-xs font-medium text-text">{result.documento}</p>
+        <p className="text-[10px] text-text3">{result.categoria} · {result.chunk_count} sezioni · {result.total_chars ? (result.total_chars / 1000).toFixed(0) + 'K chars' : ''}</p>
+      </div>
+      {result.struttura && result.struttura.length > 0 && (
+        <div className="pl-3 border-l-2 border-gold/20 space-y-0.5 max-h-60 overflow-y-auto">
+          {result.struttura.slice(0, 50).map((heading: string, i: number) => (
+            <p key={i} className="text-[10px] text-text2">{heading}</p>
+          ))}
+          {result.struttura.length > 50 && <p className="text-[10px] text-text3">...e altre {result.struttura.length - 50} sezioni</p>}
         </div>
       )}
     </div>
@@ -1050,6 +1160,12 @@ export function renderToolResult(toolName: string, result: any, context?: Action
       case 'relate': return renderCreateResult(result)
       case 'get_tree': return renderTreeResult(result)
       case 'retrieve': return renderRetrieveResults(result)
+      case 'list_autonomous_agents':
+      case 'list_workflows':
+      case 'get_jobs':
+      case 'get_agent_logs': return renderStructuredList(result)
+      case 'list_documents': return renderDocumentList(result)
+      case 'explore_document': return renderDocumentStructure(result)
       case 'generate_tts': return renderGeneratedAudio(result)
       case 'render_view': return renderDynamicView(result)
       default: return null

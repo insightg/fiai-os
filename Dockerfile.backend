@@ -1,4 +1,4 @@
-FROM node:20-alpine
+FROM node:20-slim
 
 WORKDIR /app
 
@@ -10,16 +10,16 @@ COPY . .
 ENV NODE_ENV=production
 ENV PORT=3001
 
-# Install Typst + ffmpeg for PDF generation and audio conversion
-RUN apk add --no-cache curl ffmpeg && \
-    curl -sSL https://github.com/typst/typst/releases/latest/download/typst-x86_64-unknown-linux-musl.tar.xz | tar xJ --strip-components=1 -C /usr/local/bin/ && \
-    typst --version
+# Install ffmpeg + typst (optional, for PDF generation)
+RUN apt-get update && apt-get install -y --no-install-recommends curl ffmpeg xz-utils ca-certificates && \
+    (curl -sSL --connect-timeout 10 https://github.com/typst/typst/releases/latest/download/typst-x86_64-unknown-linux-musl.tar.xz | tar xJ --strip-components=1 -C /usr/local/bin/ && typst --version || echo "Typst not installed — PDF generation disabled") && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /app/data/uploads /app/data/context
 
 EXPOSE 3001
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:3001/api/health || exit 1
+  CMD curl -sf http://localhost:3001/api/health || exit 1
 
 CMD ["npx", "tsx", "server/index.ts"]

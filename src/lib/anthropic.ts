@@ -20,7 +20,7 @@ export async function sendMessage(
   _onTextChunk?: (chunk: string) => void,
   attachedImageBase64?: string,
   attachedAudioBase64?: string
-): Promise<{ text: string; toolCalls: Record<string, unknown>[]; agentName?: string; agentDomain?: string; agentColor?: string; suggestions?: string[] }> {
+): Promise<{ text: string; toolCalls: Record<string, unknown>[]; agentName?: string; agentDomain?: string; agentColor?: string; suggestions?: string[]; reasoning?: any }> {
   const token = getAuthToken()
   const lastMsg = messages[messages.length - 1]
   const message = typeof lastMsg.content === 'string' ? lastMsg.content : JSON.stringify(lastMsg.content)
@@ -50,7 +50,7 @@ export async function sendMessage(
 
   const result = await res.json()
 
-  // Save messages to DB (session management stays frontend-side for now)
+  // Save messages to DB
   try {
     const userContent = typeof lastMsg.content === 'string' ? lastMsg.content : JSON.stringify(lastMsg.content)
     await supabase.from('chat_messages').insert({

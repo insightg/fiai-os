@@ -209,15 +209,15 @@ function generateGlobalContext(aziendaId: string): string {
   const yearStart = new Date().getFullYear() + '-01-01'
 
   // Company info from names (VFS)
-  const azienda = db.prepare("SELECT display_name as nome, piva, email, metadata FROM names WHERE id = ? AND tags LIKE '%\"organizzazione\"%'").get(aziendaId) as any
+  const azienda = db.prepare("SELECT display_name as nome, piva, email, metadata FROM entity WHERE id = ? AND tags LIKE '%\"organizzazione\"%'").get(aziendaId) as any
   const aziendaMeta = azienda?.metadata ? (typeof azienda.metadata === 'string' ? JSON.parse(azienda.metadata) : azienda.metadata) : {}
 
   // Names counts
-  const clienti = queryScalar("SELECT COUNT(*) as c FROM names WHERE azienda_id = ? AND tags LIKE '%\"cliente\"%'", [aziendaId])
-  const leadTotali = queryScalar("SELECT COUNT(*) as c FROM names WHERE azienda_id = ? AND tags LIKE '%\"lead\"%'", [aziendaId])
-  const leadProposta = queryScalar("SELECT COUNT(*) as c FROM names WHERE azienda_id = ? AND tags LIKE '%\"lead\"%' AND stato = 'proposta'", [aziendaId])
-  const leadNuovi = queryScalar("SELECT COUNT(*) as c FROM names WHERE azienda_id = ? AND tags LIKE '%\"lead\"%' AND stato = 'nuovo'", [aziendaId])
-  const candidatiInCorso = queryScalar("SELECT COUNT(*) as c FROM names WHERE azienda_id = ? AND tags LIKE '%\"candidato\"%' AND stato IN ('nuovo','screening','colloquio','offerta')", [aziendaId])
+  const clienti = queryScalar("SELECT COUNT(*) as c FROM entity WHERE azienda_id = ? AND tags LIKE '%\"cliente\"%'", [aziendaId])
+  const leadTotali = queryScalar("SELECT COUNT(*) as c FROM entity WHERE azienda_id = ? AND tags LIKE '%\"lead\"%'", [aziendaId])
+  const leadProposta = queryScalar("SELECT COUNT(*) as c FROM entity WHERE azienda_id = ? AND tags LIKE '%\"lead\"%' AND stato = 'proposta'", [aziendaId])
+  const leadNuovi = queryScalar("SELECT COUNT(*) as c FROM entity WHERE azienda_id = ? AND tags LIKE '%\"lead\"%' AND stato = 'nuovo'", [aziendaId])
+  const candidatiInCorso = queryScalar("SELECT COUNT(*) as c FROM entity WHERE azienda_id = ? AND tags LIKE '%\"candidato\"%' AND stato IN ('nuovo','screening','colloquio','offerta')", [aziendaId])
 
   // Entity counts
   const fatturatoYTD = queryScalar("SELECT COALESCE(SUM(totale), 0) as c FROM entity WHERE azienda_id = ? AND type = 'fattura' AND stato = 'pagata' AND data >= ?", [aziendaId, yearStart])
@@ -271,7 +271,7 @@ Aggiornato: ${now}
 }
 
 function generateUserProfile(aziendaId: string, userId: string): string {
-  const name = db.prepare("SELECT display_name, email, telefono, tags, metadata FROM names WHERE id = ?").get(userId) as any
+  const name = db.prepare("SELECT display_name, email, telefono, tags, metadata FROM entity WHERE id = ?").get(userId) as any
   if (!name) return '# Profilo Utente\nProfilo non trovato.\n'
 
   const meta = typeof name.metadata === 'string' ? JSON.parse(name.metadata) : (name.metadata || {})
@@ -324,19 +324,19 @@ function generateSkillContexts(aziendaId: string): void {
   // ── Commerciale (CRM + sales) ──
   try {
     const topClienti = q(
-      `SELECT n.display_name, COALESCE(SUM(e.totale), 0) as fatturato FROM names n LEFT JOIN entity e ON e.name_id = n.id AND e.type = 'fattura' AND e.stato = 'pagata' AND e.data >= ? WHERE n.azienda_id = ? AND n.tags LIKE '%"cliente"%' GROUP BY n.id ORDER BY fatturato DESC LIMIT 5`,
+      `SELECT n.display_name, COALESCE(SUM(e.totale), 0) as fatturato FROM entity n LEFT JOIN entity e ON e.name_id = n.id AND e.type = 'fattura' AND e.stato = 'pagata' AND e.data >= ? WHERE n.azienda_id = ? AND n.tags LIKE '%"cliente"%' GROUP BY n.id ORDER BY fatturato DESC LIMIT 5`,
       [yearStart, aziendaId]
     ) as any[]
     const topCliStr = topClienti.map((c: any) => `  - ${c.display_name}: € ${fmt(c.fatturato)}`).join('\n') || '  (nessun cliente)'
 
     const leadCaldi = q(
-      "SELECT display_name, json_extract(metadata,'$.valore_stimato') as valore FROM names WHERE azienda_id = ? AND tags LIKE '%\"lead\"%' AND stato = 'proposta' ORDER BY json_extract(metadata,'$.valore_stimato') DESC LIMIT 5",
+      "SELECT display_name, json_extract(metadata,'$.valore_stimato') as valore FROM entity WHERE azienda_id = ? AND tags LIKE '%\"lead\"%' AND stato = 'proposta' ORDER BY json_extract(metadata,'$.valore_stimato') DESC LIMIT 5",
       [aziendaId]
     ) as any[]
     const leadStr = leadCaldi.map((l: any) => `  - ${l.display_name}: € ${fmt(l.valore || 0)}`).join('\n') || '  (nessuno)'
 
     const ultimiLead = q(
-      "SELECT display_name, stato, created_at FROM names WHERE azienda_id = ? AND tags LIKE '%\"lead\"%' ORDER BY created_at DESC LIMIT 5",
+      "SELECT display_name, stato, created_at FROM entity WHERE azienda_id = ? AND tags LIKE '%\"lead\"%' ORDER BY created_at DESC LIMIT 5",
       [aziendaId]
     ) as any[]
     const ultimiStr = ultimiLead.map((l: any) => `  - ${l.display_name} [${l.stato}] — ${l.created_at?.slice(0, 10)}`).join('\n') || '  (nessuno)'
@@ -378,7 +378,7 @@ function generateSkillContexts(aziendaId: string): void {
     const annStr = annunci.map((a: any) => `  - ${a.ruolo} — ${a.sede ?? 'N/D'}`).join('\n') || '  (nessun annuncio)'
 
     const candidati = q(
-      "SELECT display_name, stato, json_extract(metadata,'$.ruolo_candidato') as ruolo FROM names WHERE azienda_id = ? AND tags LIKE '%\"candidato\"%' AND stato IN ('colloquio','offerta') LIMIT 5",
+      "SELECT display_name, stato, json_extract(metadata,'$.ruolo_candidato') as ruolo FROM entity WHERE azienda_id = ? AND tags LIKE '%\"candidato\"%' AND stato IN ('colloquio','offerta') LIMIT 5",
       [aziendaId]
     ) as any[]
     const candStr = candidati.map((c: any) => `  - ${c.display_name} per ${c.ruolo || 'N/D'} [${c.stato}]`).join('\n') || '  (nessuno)'
@@ -420,11 +420,11 @@ function generateSkillContexts(aziendaId: string): void {
       [aziendaId, prevMonth + '%']
     )
     const leadThis = qs(
-      "SELECT COUNT(*) as c FROM names WHERE azienda_id=? AND tags LIKE '%\"lead\"%' AND created_at LIKE ?",
+      "SELECT COUNT(*) as c FROM entity WHERE azienda_id=? AND tags LIKE '%\"lead\"%' AND created_at LIKE ?",
       [aziendaId, thisMonth + '%']
     )
     const leadPrev = qs(
-      "SELECT COUNT(*) as c FROM names WHERE azienda_id=? AND tags LIKE '%\"lead\"%' AND created_at LIKE ?",
+      "SELECT COUNT(*) as c FROM entity WHERE azienda_id=? AND tags LIKE '%\"lead\"%' AND created_at LIKE ?",
       [aziendaId, prevMonth + '%']
     )
     const delta = (c: number, p: number) => { if (p === 0) return c > 0 ? '+100%' : '0%'; return ((c - p) / p * 100).toFixed(0) + '%' }

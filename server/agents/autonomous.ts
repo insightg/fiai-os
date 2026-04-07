@@ -6,7 +6,7 @@
  * The generic job handler 'run_autonomous_agent' calls executeAgent() internally.
  *
  * Created via chat: "crea un agente che ogni mattina controlla le fatture scadute"
- * → the infra agent calls create_autonomous_agent tool
+ * → the IT agent calls create_autonomous_agent tool
  * → saves as entity + creates a recurring job
  */
 import crypto from 'crypto'
@@ -14,7 +14,7 @@ import db from '../db.js'
 import { createJob, registerJobHandler } from '../jobs.js'
 import { executeAgent } from './base-agent.js'
 import { AGENTS } from './config.js'
-import { buildContext } from './context.js'
+import { buildAutonomousContext } from './context.js'
 import { on, emit } from './events.js'
 import type { AgentDomain } from './types.js'
 
@@ -196,13 +196,13 @@ async function runAutonomousAgent(
   if (!agentConfig) throw new Error(`Agent domain "${meta.agentDomain}" not found`)
 
   // Build prompt from template, inject event data if available
-  let prompt = meta.promptTemplate
+  let prompt = '[AGENTE AUTONOMO — NON chiedere conferma, NON disambiguare, esegui direttamente]\n\n' + meta.promptTemplate
   if (eventPayload) {
     prompt += `\n\nEvento trigger: ${JSON.stringify(eventPayload)}`
   }
 
   // Execute the agent
-  const context = buildContext(meta.agentDomain, aziendaId, '', '')
+  const context = buildAutonomousContext(meta.agentDomain, aziendaId)
   const result = await executeAgent(prompt, agentConfig, aziendaId, '', context, 'web')
 
   // Log the execution
@@ -223,10 +223,11 @@ async function runAutonomousAgent(
   )
 
   // Notify channels
-  if (meta.notifyChannels?.includes('whatsapp') && result.text) {
+  const channels = Array.isArray(meta.notifyChannels) ? meta.notifyChannels : (typeof meta.notifyChannels === 'string' ? [meta.notifyChannels] : [])
+  if (channels.includes('whatsapp') && result.text) {
     // Find admin phones
     const admins = db.prepare(
-      "SELECT telefono FROM names WHERE azienda_id = ? AND tags LIKE '%\"admin\"%' AND telefono IS NOT NULL"
+      "SELECT telefono FROM entity WHERE azienda_id = ? AND tags LIKE '%\"admin\"%' AND telefono IS NOT NULL"
     ).all(aziendaId) as any[]
     for (const admin of admins) {
       try {

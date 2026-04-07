@@ -12,6 +12,14 @@ const router = Router()
 
 const UPLOADS_DIR = process.env.UPLOADS_DIR || '/app/data/uploads'
 
+// Pending uploads cache — holds analysis results until user confirms
+const pendingUploads = new Map<string, {
+  aziendaId: string; userId: string; fileUrl: string; fileName: string; fileSize: number; pageCount: number
+  extractedText: string; mimeType: string; ext: string
+  analysis: any; matchedNameId: string | null; matchedNameDisplay: string | null
+  createdAt: number
+}>()
+
 // Multer storage config
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => {
@@ -347,7 +355,13 @@ router.post('/smart', authMiddleware(true), upload.single('file'), async (req: A
       extractedText = `[File audio: ${fileName}, ${(fileSize / 1024).toFixed(1)} KB]`
     } else if (['.mp4', '.mov', '.avi'].includes(ext)) {
       extractedText = `[File video: ${fileName}, ${(fileSize / (1024 * 1024)).toFixed(1)} MB]`
-    } else if (['.doc', '.docx', '.xls', '.xlsx', '.pptx'].includes(ext)) {
+    } else if (ext === '.docx') {
+      try {
+        const mammoth = await import('mammoth')
+        const result = await mammoth.default.extractRawText({ path: destPath })
+        extractedText = result.value || ''
+      } catch { extractedText = `[Documento DOCX: ${fileName}]` }
+    } else if (['.doc', '.xls', '.xlsx', '.pptx'].includes(ext)) {
       extractedText = `[Documento Office: ${fileName}]`
     } else if (ext === '.zip') {
       extractedText = `[Archivio: ${fileName}, ${(fileSize / (1024 * 1024)).toFixed(1)} MB]`
@@ -411,93 +425,45 @@ router.post('/smart', authMiddleware(true), upload.single('file'), async (req: A
 
     // Match by P.IVA
     if (ed.piva) {
-      const byPiva = db.prepare("SELECT id, display_name FROM names WHERE piva = ? AND azienda_id = ?").get(ed.piva, aziendaId) as any
+      const byPiva = db.prepare("SELECT id, display_name FROM entity WHERE piva = ? AND azienda_id = ?").get(ed.piva, aziendaId) as any
       if (byPiva) { matchedNameId = byPiva.id; matchedNameDisplay = byPiva.display_name }
     }
     // Match by company name
     if (!matchedNameId && (ed.fornitore || analysis.suggested_name)) {
       const searchName = ed.fornitore || analysis.suggested_name
-      const byName = db.prepare("SELECT id, display_name FROM names WHERE display_name LIKE ? AND azienda_id = ?").get(`%${searchName}%`, aziendaId) as any
+      const byName = db.prepare("SELECT id, display_name FROM entity WHERE display_name LIKE ? AND azienda_id = ?").get(`%${searchName}%`, aziendaId) as any
       if (byName) { matchedNameId = byName.id; matchedNameDisplay = byName.display_name }
     }
     // Match by email
     if (!matchedNameId && ed.email) {
-      const byEmail = db.prepare("SELECT id, display_name FROM names WHERE email = ?").get(ed.email) as any
+      const byEmail = db.prepare("SELECT id, display_name FROM entity WHERE email = ?").get(ed.email) as any
       if (byEmail) { matchedNameId = byEmail.id; matchedNameDisplay = byEmail.display_name }
     }
 
-    // 5. Save as entity in VFS
-    const entityId = crypto.randomUUID()
-    const slug = fileName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').substring(0, 80)
-    const nameSlug = matchedNameId
-      ? (db.prepare("SELECT slug FROM names WHERE id = ?").get(matchedNameId) as any)?.slug || '_'
-      : null
-    const entityPath = nameSlug
-      ? `/names/${nameSlug}/${analysis.entity_type}/${slug}`
-      : `/entity/${analysis.entity_type}/${slug}`
+    // 5. Save analysis in memory (NOT in DB yet) — wait for user confirmation
+    const uploadId = crypto.randomUUID()
+    const fullText = (req as any).__fullText || extractedText
 
-    // 6. Chunk large documents (skip if analysisMode === 'none')
-    // For compact mode: AI analysis used sampled pages, but chunking uses full text
-    const textForChunking = (req as any).__fullText || extractedText
-    const chunks = analysisMode !== 'none' ? chunkDocument(textForChunking, analysis.entity_type, fileName) : []
-    const isChunked = chunks.length > 0
+    // Store pending upload in a temporary cache
+    pendingUploads.set(uploadId, {
+      aziendaId, userId, fileUrl, fileName, fileSize, pageCount,
+      extractedText: fullText,
+      mimeType: file.mimetype,
+      ext,
+      analysis,
+      matchedNameId, matchedNameDisplay,
+      createdAt: Date.now(),
+    })
 
-    // Save parent entity
-    // Get uploader name for audit trail
-    const uploaderName = (db.prepare("SELECT display_name FROM names WHERE id = ?").get(userId) as any)?.display_name || userId
-
-    db.prepare(`INSERT INTO entity (id, azienda_id, type, display_name, slug, stato, name_id, parent_id, user_id, file_url, numero, data, totale, metadata, path)
-      VALUES (?, ?, ?, ?, ?, NULL, ?, NULL, ?, ?, ?, ?, ?, ?, ?)`).run(
-      entityId, aziendaId, analysis.entity_type, analysis.display_name, slug,
-      matchedNameId, userId, fileUrl,
-      ed.numero || null, ed.data || null, ed.totale || null,
-      JSON.stringify({
-        tipo_file: file.mimetype,
-        categoria: analysis.categoria,
-        uploaded_by_name: uploaderName,
-        tags: analysis.tags,
-        descrizione: analysis.descrizione,
-        // Only store full text if NOT chunked (small docs)
-        ...(isChunked
-          ? { chunked: true, chunk_count: chunks.length, total_chars: extractedText.length }
-          : { contenuto_testo: extractedText }),
-        file_size: fileSize,
-        original_name: fileName,
-        extracted_data: analysis.extracted_data,
-      }),
-      entityPath
-    )
-
-    // Save chunks as child entities
-    if (isChunked) {
-      const insertChunk = db.prepare(`INSERT INTO entity (id, azienda_id, type, display_name, slug, stato, name_id, parent_id, user_id, file_url, numero, data, totale, metadata, path, ordine)
-        VALUES (?, ?, 'chunk', ?, ?, NULL, NULL, ?, NULL, NULL, NULL, NULL, NULL, ?, ?, ?)`)
-
-      for (const chunk of chunks) {
-        const chunkId = crypto.randomUUID()
-        const chunkSlug = `chunk-${chunk.chunk_index}`
-        insertChunk.run(
-          chunkId, aziendaId,
-          chunk.display_name.substring(0, 200), chunkSlug,
-          entityId,
-          JSON.stringify({
-            contenuto_testo: chunk.content,
-            chunk_index: chunk.chunk_index,
-            chunk_total: chunk.chunk_total,
-            heading_path: chunk.heading_path,
-            char_offset_start: chunk.char_offset_start,
-            char_offset_end: chunk.char_offset_end,
-            ...(chunk.extracted || {}),
-          }),
-          `${entityPath}/chunks/${chunkSlug}`,
-          chunk.chunk_index
-        )
-      }
-      console.log(`[Upload] Chunked "${fileName}" into ${chunks.length} chunks`)
+    // Clean old pending uploads (>30 min)
+    for (const [id, pu] of pendingUploads.entries()) {
+      if (Date.now() - pu.createdAt > 30 * 60 * 1000) pendingUploads.delete(id)
     }
 
+    console.log(`[Upload] Analyzed "${fileName}" — waiting for confirmation (upload_id: ${uploadId})`)
+
     res.json({
-      entity_id: entityId,
+      upload_id: uploadId,
       file_url: fileUrl,
       entity_type: analysis.entity_type,
       display_name: analysis.display_name,
@@ -508,14 +474,113 @@ router.post('/smart', authMiddleware(true), upload.single('file'), async (req: A
       matched_name: matchedNameId ? { id: matchedNameId, display_name: matchedNameDisplay } : null,
       suggested_name: analysis.suggested_name,
       file_size: fileSize,
-      chunked: isChunked,
-      chunk_count: isChunked ? chunks.length : 0,
       page_count: pageCount || undefined,
     })
   } catch (err: any) {
     console.error('Smart upload error:', err)
     res.status(500).json({ error: err.message })
   }
+})
+
+// ══════════════════════════════════════════════════════════
+// Confirm Upload — saves entity + launches background job
+// ══════════════════════════════════════════════════════════
+
+router.post('/confirm', authMiddleware(true), async (req: AuthRequest, res: Response) => {
+  try {
+    const { upload_id, categoria, display_name, autore } = req.body
+    if (!upload_id) { res.status(400).json({ error: 'upload_id richiesto' }); return }
+
+    const pending = pendingUploads.get(upload_id)
+    if (!pending) { res.status(404).json({ error: 'Upload non trovato o scaduto' }); return }
+
+    pendingUploads.delete(upload_id)
+
+    const { aziendaId, userId, fileUrl, fileName, fileSize, extractedText, mimeType, analysis, matchedNameId } = pending
+    const finalCategoria = categoria || analysis.categoria
+    const finalDisplayName = display_name || analysis.display_name
+    const ed = analysis.extracted_data || {}
+    if (autore) ed.autore = autore
+
+    // Save entity
+    const entityId = crypto.randomUUID()
+    const slug = fileName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').substring(0, 80)
+    const nameSlug = matchedNameId
+      ? (db.prepare("SELECT slug FROM entity WHERE id = ?").get(matchedNameId) as any)?.slug || '_'
+      : null
+    const entityPath = nameSlug
+      ? `/names/${nameSlug}/${analysis.entity_type}/${slug}`
+      : `/entity/${analysis.entity_type}/${slug}`
+    const uploaderName = (db.prepare("SELECT display_name FROM entity WHERE id = ?").get(userId) as any)?.display_name || userId
+
+    db.prepare(`INSERT INTO entity (id, azienda_id, type, display_name, slug, stato, name_id, parent_id, user_id, file_url, numero, data, totale, body, categoria, metadata, path)
+      VALUES (?, ?, ?, ?, ?, 'processing', ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      entityId, aziendaId, analysis.entity_type, finalDisplayName, slug,
+      matchedNameId, userId, fileUrl,
+      ed.numero || null, ed.data || null, ed.totale || null,
+      extractedText || null,  // body: store full text temporarily, job will process it
+      finalCategoria,
+      JSON.stringify({
+        tipo_file: mimeType,
+        uploaded_by_name: uploaderName,
+        tags: analysis.tags,
+        descrizione: analysis.descrizione,
+        file_size: fileSize,
+        original_name: fileName,
+        extracted_data: ed,
+      }),
+      entityPath
+    )
+
+    // Create background job for chunking + tagging + embedding
+    const jobId = crypto.randomUUID()
+    db.prepare(`INSERT INTO entity (id, azienda_id, type, display_name, slug, stato, data, metadata, path)
+      VALUES (?, ?, 'job', ?, ?, 'queued', datetime('now'), ?, ?)`).run(
+      jobId, aziendaId,
+      `Processa: ${analysis.display_name}`, `process-doc-${entityId.substring(0, 8)}`,
+      JSON.stringify({
+        action: 'process_document',
+        params: { entityId, fileName },  // text is in entity.body, not here
+      }),
+      `/entity/job/process-doc-${entityId.substring(0, 8)}`
+    )
+
+    console.log(`[Upload] Confirmed "${fileName}" → entity ${entityId}, job ${jobId}`)
+
+    res.json({
+      entity_id: entityId,
+      job_id: jobId,
+      display_name: analysis.display_name,
+      categoria: finalCategoria,
+      status: 'processing',
+    })
+  } catch (err: any) {
+    console.error('Upload confirm error:', err)
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// ══════════════════════════════════════════════════════════
+// Cancel Upload — deletes file, clears pending
+// ══════════════════════════════════════════════════════════
+
+router.post('/cancel', authMiddleware(true), (req: AuthRequest, res: Response) => {
+  const { upload_id } = req.body
+  if (!upload_id) { res.status(400).json({ error: 'upload_id richiesto' }); return }
+
+  const pending = pendingUploads.get(upload_id)
+  if (pending) {
+    // Delete the uploaded file
+    try {
+      const relativePath = pending.fileUrl.replace(/^\/api\/uploads\//, '')
+      const filePath = path.join(UPLOADS_DIR, relativePath)
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
+    } catch {}
+    pendingUploads.delete(upload_id)
+    console.log(`[Upload] Cancelled "${pending.fileName}"`)
+  }
+
+  res.json({ success: true })
 })
 
 export default router

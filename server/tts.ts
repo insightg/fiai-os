@@ -96,7 +96,7 @@ router.post('/stream', authMiddleware(true), async (req: AuthRequest, res: Respo
     let selectedVoiceForStream = voice
     if (!selectedVoiceForStream) {
       try {
-        const name = db.prepare("SELECT json_extract(metadata, '$.tts_voice') as tts_voice FROM names WHERE id = ?").get(userId) as any
+        const name = db.prepare("SELECT json_extract(metadata, '$.tts_voice') as tts_voice FROM entity WHERE id = ?").get(userId) as any
         selectedVoiceForStream = name?.tts_voice || 'Vivian'
       } catch {
         selectedVoiceForStream = 'Vivian'

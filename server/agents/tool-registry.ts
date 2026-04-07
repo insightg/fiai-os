@@ -9,6 +9,10 @@ const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions'
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || ''
 const JWT_SECRET = process.env.JWT_SECRET || 'fiai-dev-secret'
 
+// Retrieve query variants cache (TTL 10 min)
+const retrieveCache = new Map<string, { variants: string[]; ts: number }>()
+const RETRIEVE_CACHE_TTL = 600000
+
 // ── Helper: slugify ───────────────────────────────────────
 function slugify(text: string): string {
   return text.toLowerCase()
@@ -38,23 +42,28 @@ function parseRows(rows: any[]): any[] {
 
 export const TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
   // ── Generic VFS tools ──
-  search: { type: 'function', function: { name: 'search', description: 'Cerca nomi (persone/aziende) o entita (fatture, progetti, documenti, task, etc.). Usa table="names" per persone/aziende, table="entity" per oggetti, table="both" per cercare ovunque.', parameters: { type: 'object', properties: {
-    table: { type: 'string', enum: ['names', 'entity', 'both'], description: 'Dove cercare' },
-    type: { type: 'string', description: 'Tipo entity: fattura, preventivo, ordine, progetto, documento, evento, conto, rimborso, annuncio, board, card, etc.' },
-    tags: { type: 'array', items: { type: 'string' }, description: 'Filtro tags (solo names): cliente, lead, fornitore, candidato, utente, organizzazione' },
+  find: { type: 'function', function: { name: 'find', description: 'Cerca QUALSIASI cosa nel sistema. Usa automaticamente il motore migliore (SQL/full-text/semantico). Per persone: find(tags=["cliente"]). Per contenuto documenti: find(query="definizione imprenditore"). Per simili: find(query="aziende settore metalli"). Per filtri: find(type="fattura", filters={stato:"scaduta"}).', parameters: { type: 'object', properties: {
+    query: { type: 'string', description: 'Cosa cercare (testo libero)' },
+    type: { type: 'string', description: 'Tipo entity: persona, utente, organizzazione, fattura, documento, report, progetto, etc.' },
+    tags: { type: 'array', items: { type: 'string' }, description: 'Filtro tags: cliente, lead, fornitore, candidato, utente' },
     stato: { type: 'string', description: 'Filtra per stato' },
-    query: { type: 'string', description: 'Ricerca testuale sul display_name' },
-    name_id: { type: 'string', description: 'Filtra entity collegati a un name specifico' },
-    limit: { type: 'number', description: 'Max risultati (default 25)' },
+    name_id: { type: 'string', description: 'Filtra entity collegati a un record' },
+    doc_id: { type: 'string', description: 'Cerca DENTRO un documento specifico (chunk search)' },
+    limit: { type: 'number', description: 'Max risultati (default 10)' },
   } } } },
 
-  create: { type: 'function', function: { name: 'create', description: 'Crea un name (persona/azienda) o entity (fattura, progetto, etc.)', parameters: { type: 'object', properties: {
-    table: { type: 'string', enum: ['names', 'entity'], description: 'Tabella' },
-    type: { type: 'string', description: 'Tipo entity (solo per entity)' },
-    tags: { type: 'array', items: { type: 'string' }, description: 'Tags (solo per names): cliente, lead, fornitore, candidato' },
+  // Legacy alias
+  search: { type: 'function', function: { name: 'search', description: '(Alias di find) Cerca nel sistema.', parameters: { type: 'object', properties: {
+    type: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } }, stato: { type: 'string' },
+    query: { type: 'string' }, name_id: { type: 'string' }, limit: { type: 'number' },
+  } } } },
+
+  create: { type: 'function', function: { name: 'create', description: 'Crea un record: persona, azienda, fattura, progetto, documento, etc. Tutto è entity.', parameters: { type: 'object', properties: {
+    type: { type: 'string', description: 'Tipo: persona, utente, organizzazione, fattura, ordine, progetto, documento, report, etc.' },
+    tags: { type: 'array', items: { type: 'string' }, description: 'Tags: cliente, lead, fornitore, candidato, admin' },
     display_name: { type: 'string', description: 'Nome visualizzato' },
-    email: { type: 'string', description: 'Email (solo names)' },
-    telefono: { type: 'string', description: 'Telefono (solo names)' },
+    email: { type: 'string', description: 'Email' },
+    telefono: { type: 'string', description: 'Telefono' },
     stato: { type: 'string', description: 'Stato iniziale' },
     name_id: { type: 'string', description: 'ID name collegato (solo entity)' },
     parent_id: { type: 'string', description: 'ID entity padre (solo entity)' },
@@ -96,7 +105,7 @@ export const TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
   create_autonomous_agent: { type: 'function', function: { name: 'create_autonomous_agent', description: 'Crea un agente autonomo che gira in background. Puo essere schedulato (cron), reagire a eventi, o controllare condizioni.', parameters: { type: 'object', properties: {
     name: { type: 'string', description: 'Nome agente (es. "Monitor Fatture Scadute")' },
     description: { type: 'string', description: 'Cosa fa questo agente' },
-    agentDomain: { type: 'string', description: 'Dominio agente: pulse, commerciale, amministrazione, produzione, hr, legal, marketing, infra' },
+    agentDomain: { type: 'string', description: 'Dominio agente (opzionale — dedotto dal prompt se omesso): pulse, commerciale, amministrazione, produzione, hr, legal, documentale, marketing, it, doctor, whatsapp' },
     promptTemplate: { type: 'string', description: 'Messaggio/istruzione che l\'agente riceve ad ogni esecuzione' },
     trigger_type: { type: 'string', enum: ['cron', 'event'], description: 'Tipo di trigger' },
     cron: { type: 'string', description: 'Espressione cron (es. "0 8 * * 1" = lunedi 8:00, "0 9 * * *" = ogni giorno 9:00)' },
@@ -153,6 +162,42 @@ export const TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
   get_current_voice: { type: 'function', function: { name: 'get_current_voice', description: 'Ottieni la voce attuale dell\'utente', parameters: { type: 'object', properties: {} } } },
   clone_voice: { type: 'function', function: { name: 'clone_voice', description: 'Clona una voce da un audio allegato. L\'utente deve aver allegato un audio nella chat.', parameters: { type: 'object', properties: { name: { type: 'string', description: 'Nome da dare alla voce clonata' } }, required: ['name'] } } },
 
+  // ── Skill & Memory management tools ──
+  update_skill: { type: 'function', function: { name: 'update_skill', description: 'Aggiorna la skill (personalità, regole, modello) di un agente. Le modifiche sono persistenti.', parameters: { type: 'object', properties: {
+    domain: { type: 'string', description: 'Dominio agente: pulse, commerciale, produzione, marketing, amministrazione, hr, legal, documentale, whatsapp, infra, tts' },
+    system_prompt: { type: 'string', description: 'Nuovo prompt di sistema (personalità e istruzioni)' },
+    rules: { type: 'array', items: { type: 'string' }, description: 'Regole specifiche (es. ["Proponi sempre un follow-up", "Ordina per valore"])' },
+    model: { type: 'string', description: 'Modello LLM (es. anthropic/claude-haiku-4.5, mistralai/mistral-small-2603)' },
+  }, required: ['domain'] } } },
+
+  list_skills: { type: 'function', function: { name: 'list_skills', description: 'Mostra le skill di tutti gli agenti con personalità, regole e modello', parameters: { type: 'object', properties: {} } } },
+
+  add_agent_lesson: { type: 'function', function: { name: 'add_agent_lesson', description: 'Aggiungi una lezione appresa alla memoria di un agente (es. "non ripetere i dati in tabella", "ordina per valore")', parameters: { type: 'object', properties: {
+    domain: { type: 'string', description: 'Dominio agente' },
+    rule: { type: 'string', description: 'La lezione/regola da ricordare' },
+  }, required: ['domain', 'rule'] } } },
+
+  // ── Document management tools ──
+  list_documents: { type: 'function', function: { name: 'list_documents', description: 'Lista documenti con dettagli: nome, categoria, chunk count, dimensione, stato indicizzazione.', parameters: { type: 'object', properties: {
+    categoria: { type: 'string', description: 'Filtra per categoria' },
+  } } } },
+
+  explore_document: { type: 'function', function: { name: 'explore_document', description: 'Esplora struttura interna di un documento: mostra capitoli, sezioni, articoli (heading path dei chunk). Per navigare documenti grandi.', parameters: { type: 'object', properties: {
+    doc_id: { type: 'string', description: 'ID documento' },
+    limit: { type: 'number', description: 'Max sezioni (default 30)' },
+  }, required: ['doc_id'] } } },
+
+  rechunk_document: { type: 'function', function: { name: 'rechunk_document', description: 'Ri-indicizza un documento: elimina chunk esistenti, ri-estrae testo, ri-chunka. Per documenti non chunkati o da re-indicizzare.', parameters: { type: 'object', properties: {
+    doc_id: { type: 'string', description: 'ID documento' },
+  }, required: ['doc_id'] } } },
+
+  reclassify_document: { type: 'function', function: { name: 'reclassify_document', description: 'Cambia classificazione di un documento: categoria, tags, nome, tipo.', parameters: { type: 'object', properties: {
+    doc_id: { type: 'string', description: 'ID documento' },
+    categoria: { type: 'string' },
+    tags: { type: 'array', items: { type: 'string' } },
+    display_name: { type: 'string' },
+  }, required: ['doc_id'] } } },
+
   // ── Agentic RAG retrieve tool ──
   retrieve: { type: 'function', function: { name: 'retrieve', description: 'Cerca DENTRO il contenuto dei documenti caricati. Trova articoli, clausole, definizioni, sezioni specifiche. Usa per domande sul contenuto di documenti, non per cercare documenti per nome.', parameters: { type: 'object', properties: {
     query: { type: 'string', description: 'Cosa cercare nel contenuto (es. "definizione imprenditore", "clausola penale")' },
@@ -186,6 +231,11 @@ export const TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
   send_whatsapp_image: { type: 'function', function: { name: 'send_whatsapp_image', description: 'Invia un\'immagine su WhatsApp (da URL o path file)', parameters: { type: 'object', properties: { phone: { type: 'string' }, url: { type: 'string', description: 'URL o path del file immagine' }, caption: { type: 'string', description: 'Didascalia opzionale' } }, required: ['phone', 'url'] } } },
   send_whatsapp_document: { type: 'function', function: { name: 'send_whatsapp_document', description: 'Invia un documento/file su WhatsApp (PDF, DOC, etc.)', parameters: { type: 'object', properties: { phone: { type: 'string' }, url: { type: 'string', description: 'URL o path del file' }, filename: { type: 'string', description: 'Nome file visualizzato' }, caption: { type: 'string' } }, required: ['phone', 'url'] } } },
   send_whatsapp_video: { type: 'function', function: { name: 'send_whatsapp_video', description: 'Invia un video su WhatsApp', parameters: { type: 'object', properties: { phone: { type: 'string' }, url: { type: 'string', description: 'URL o path del video' }, caption: { type: 'string' } }, required: ['phone', 'url'] } } },
+
+  // ── Code Execution (programmatic tool calling) ──
+  execute_code: { type: 'function', function: { name: 'execute_code', description: 'Esegui codice JavaScript per operazioni complesse: loop su molti record, aggregazioni, filtri condizionali, batch operations. Il codice ha accesso ai tool FIAI come funzioni async: find(params), create(params), update(params), delete_record(params), relate(params), get_tree(params), retrieve(params), list_documents(), get_datetime(), date_diff(params), generate_pdf(params). Usa print() per output. Solo l\'output finale torna nel contesto — i risultati intermedi non consumano token. QUANDO USARE: operazioni su >3 record (es. "controlla tutte le fatture scadute"), aggregazioni (es. "totale fatturato per cliente"), batch updates, confronti multipli.', parameters: { type: 'object', properties: {
+    code: { type: 'string', description: 'Codice JavaScript con await per tool async. Es: const clients = await find({tags:["cliente"]}); print(`${clients.length} clienti trovati`)' },
+  }, required: ['code'] } } },
 }
 
 // ══════════════════════════════════════════════════════════
@@ -197,129 +247,108 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
 
   switch (name) {
 
-    // ── SEARCH ──
+    // ── FIND (unified search: SQL + FTS5 + Vec) ──
+    case 'find':
     case 'search': {
-      const { table = 'both', type, tags, stato, query, name_id, limit = 25 } = input
-      const results: any[] = []
+      const { type, tags, stato, query, name_id, doc_id, limit = 10 } = input
+      const maxLimit = Math.min(limit as number || 10, 50)
 
-      if (table === 'names' || table === 'both') {
-        let sql = 'SELECT id, display_name, slug, email, telefono, piva, tags, stato, metadata, path, created_at FROM names WHERE azienda_id = ?'
-        const params: any[] = [aziendaId]
-        if (tags?.length) {
-          for (const tag of tags) {
-            sql += " AND tags LIKE ?"
-            params.push(`%"${tag}"%`)
-          }
-        }
-        if (stato) { sql += ' AND stato = ?'; params.push(stato) }
-        if (query) {
-          const words = (query as string).split(/\s+/).filter((w: string) => w.length > 1)
-          const qFields = "(display_name LIKE ? OR email LIKE ? OR json_extract(metadata, '$.ragione_sociale') LIKE ?)"
-          if (words.length <= 1) {
-            sql += ` AND ${qFields}`
-            const q = `%${query}%`
-            params.push(q, q, q)
-          } else {
-            sql += ` AND (${words.map(() => qFields).join(' OR ')})`
-            for (const w of words) { const q = `%${w}%`; params.push(q, q, q) }
-          }
-        }
-        sql += ` ORDER BY display_name LIMIT ${Math.min(limit, 100)}`
-        results.push(...parseRows(db.prepare(sql).all(...params)))
-      }
+      // Detect search mode
+      const hasStructuralFilters = type || tags?.length || stato || name_id
+      const queryStr = (query || '') as string
+      const isDocContentSearch = doc_id || /Art\.\s*\d+|definizione|clausola|articolo|contenuto|capitolo/i.test(queryStr)
+      const isSemanticQuery = /simil|correlat|settore|argomento|come|riguard|tipo di|relazionat/i.test(queryStr)
 
-      if (table === 'entity' || table === 'both') {
-        let sql = 'SELECT e.id, e.type, e.display_name, e.slug, e.stato, e.name_id, e.parent_id, e.numero, e.data, e.totale, e.metadata, e.path, e.created_at, n.display_name as name_display FROM entity e LEFT JOIN names n ON e.name_id = n.id WHERE e.azienda_id = ?'
+      // MODE 1: SQL (structural filters)
+      if (hasStructuralFilters || !queryStr) {
+        let sql = 'SELECT e.id, e.type, e.display_name, e.slug, e.stato, e.email, e.telefono, e.tags, e.name_id, e.parent_id, e.file_url, e.numero, e.data, e.totale, e.categoria, e.metadata, e.path, e.created_at FROM entity e WHERE e.azienda_id = ?'
         const params: any[] = [aziendaId]
         if (type) { sql += ' AND e.type = ?'; params.push(type) }
+        if (tags?.length) { for (const tag of tags) { sql += " AND e.tags LIKE ?"; params.push(`%"${tag}"%`) } }
         if (stato) { sql += ' AND e.stato = ?'; params.push(stato) }
         if (name_id) { sql += ' AND e.name_id = ?'; params.push(name_id) }
-        if (query) {
-          // Split query into words — each word must match at least one field
-          const words = (query as string).split(/\s+/).filter((w: string) => w.length > 1)
-          if (words.length <= 1) {
-            sql += " AND (e.display_name LIKE ? OR json_extract(e.metadata, '$.categoria') LIKE ? OR json_extract(e.metadata, '$.descrizione') LIKE ? OR json_extract(e.metadata, '$.tags') LIKE ?)"
-            const q = `%${query}%`
-            params.push(q, q, q, q)
-          } else {
-            // Each word must match somewhere
-            const wordClauses = words.map(() =>
-              "(e.display_name LIKE ? OR json_extract(e.metadata, '$.categoria') LIKE ? OR json_extract(e.metadata, '$.descrizione') LIKE ? OR json_extract(e.metadata, '$.tags') LIKE ?)"
-            )
-            sql += ` AND (${wordClauses.join(' OR ')})`
-            for (const w of words) {
-              const q = `%${w}%`
-              params.push(q, q, q, q)
-            }
-          }
+        if (queryStr) {
+          const words = queryStr.split(/\s+/).filter((w: string) => w.length > 1)
+          const fields = "(e.display_name LIKE ? OR e.email LIKE ? OR e.categoria LIKE ? OR e.tags LIKE ?)"
+          if (words.length <= 1) { sql += ` AND ${fields}`; const q = `%${queryStr}%`; params.push(q, q, q, q) }
+          else { sql += ` AND (${words.map(() => fields).join(' OR ')})`; for (const w of words) { const q = `%${w}%`; params.push(q, q, q, q) } }
         }
-        // Exclude chat messages and chunks from broad searches
-        if (!type && table === 'both') sql += " AND e.type NOT IN ('chat_message', 'chat_session', 'chunk')"
-        if (type && type !== 'chunk') sql += " AND e.type != 'chunk'"
-        sql += ` ORDER BY e.created_at DESC LIMIT ${Math.min(limit, 100)}`
-        results.push(...parseRows(db.prepare(sql).all(...params)))
+        if (!type || type !== 'chunk') sql += " AND e.type NOT IN ('chat_message','chat_session','chunk','agent_log','workflow_log')"
+        sql += ` ORDER BY e.created_at DESC LIMIT ${maxLimit}`
+        return parseRows(db.prepare(sql).all(...params))
       }
 
-      return results
+      // MODE 2: FTS5 (document content / keyword search)
+      if (isDocContentSearch) {
+        // Delegate to retrieve tool logic (chunk FTS5 search)
+        return executeTool('retrieve', aziendaId, { query: queryStr, doc_id, limit: maxLimit })
+      }
+
+      // MODE 3: Semantic (vector similarity)
+      if (isSemanticQuery) {
+        try {
+          const { semanticSearch } = await import('../embeddings.js')
+          const vecResults = await semanticSearch(queryStr, aziendaId, type as string, maxLimit)
+          if (vecResults.length > 0) {
+            return vecResults.map(r => {
+              const parsed = parseRow(r)
+              return { ...parsed, similarity: r.similarity?.toFixed(3) }
+            })
+          }
+        } catch {}
+        // Fallback to SQL if vec fails
+      }
+
+      // MODE 4: Hybrid (SQL LIKE + optional Vec rerank)
+      let sql = 'SELECT e.id, e.type, e.display_name, e.slug, e.stato, e.email, e.telefono, e.tags, e.categoria, e.metadata, e.path, e.created_at FROM entity e WHERE e.azienda_id = ?'
+      const params: any[] = [aziendaId]
+      const words = queryStr.split(/\s+/).filter((w: string) => w.length > 1)
+      const fields = "(e.display_name LIKE ? OR e.email LIKE ? OR e.categoria LIKE ? OR e.tags LIKE ?)"
+      if (words.length <= 1) { sql += ` AND ${fields}`; const q = `%${queryStr}%`; params.push(q, q, q, q) }
+      else { sql += ` AND (${words.map(() => fields).join(' OR ')})`; for (const w of words) { const q = `%${w}%`; params.push(q, q, q, q) } }
+      sql += " AND e.type NOT IN ('chat_message','chat_session','chunk','agent_log','workflow_log')"
+      sql += ` ORDER BY e.created_at DESC LIMIT ${maxLimit}`
+      return parseRows(db.prepare(sql).all(...params))
     }
 
-    // ── CREATE ──
+    // ── CREATE (unified — everything is entity) ──
     case 'create': {
       const id = crypto.randomUUID()
+      const slug = slugify(input.display_name || 'unnamed')
+      const type = input.type || 'persona'
+      const tags = input.tags ? JSON.stringify(input.tags) : '[]'
 
-      if (input.table === 'names') {
-        const slug = slugify(input.display_name)
-        const tags = input.tags || ['contatto']
-        db.prepare(`INSERT INTO names (id, azienda_id, display_name, slug, email, telefono, piva, tags, stato, metadata, path)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-          id, aziendaId, input.display_name, slug,
-          input.email || null, input.telefono || null, input.metadata?.piva || null,
-          JSON.stringify(tags), input.stato || null,
-          JSON.stringify(input.metadata || {}),
-          `/names/${slug}`
-        )
-        // Emit event
-        for (const tag of tags) {
-          emit(`name_created:${tag}`, { aziendaId, recordId: id, recordType: 'name', tags })
-        }
-        return { successo: true, id, display_name: input.display_name, tags, messaggio: `"${input.display_name}" creato` }
+      // Resolve path
+      let entityPath = `/entity/${type}/${slug}`
+      if (input.parent_id) {
+        const parentPath = (db.prepare("SELECT path FROM entity WHERE id = ?").get(input.parent_id) as any)?.path
+        if (parentPath) entityPath = `${parentPath}/${slug}`
+      } else if (input.name_id) {
+        const parentSlug = (db.prepare("SELECT slug FROM entity WHERE id = ?").get(input.name_id) as any)?.slug
+        if (parentSlug) entityPath = `/entity/${parentSlug}/${type}/${slug}`
       }
 
-      if (input.table === 'entity') {
-        const slug = slugify(input.display_name)
-        // Resolve path
-        let path = `/entity/${input.type || 'unknown'}/${slug}`
-        if (input.name_id) {
-          const nameSlug = (db.prepare("SELECT slug FROM names WHERE id = ?").get(input.name_id) as any)?.slug
-          if (nameSlug) path = `/names/${nameSlug}/${input.type || 'item'}/${slug}`
-        }
-        if (input.parent_id) {
-          const parentPath = (db.prepare("SELECT path FROM entity WHERE id = ?").get(input.parent_id) as any)?.path
-          if (parentPath) path = `${parentPath}/${slug}`
-        }
+      db.prepare(`INSERT INTO entity (id, azienda_id, type, display_name, slug, stato, email, telefono, tags, name_id, parent_id, user_id, file_url, numero, data, totale, metadata, path)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        id, aziendaId, type, input.display_name, slug,
+        input.stato || null, input.email || null, input.telefono || null, tags,
+        input.name_id || null, input.parent_id || null,
+        input.user_id || null, input.file_url || null,
+        input.numero || null, input.data || null, input.totale || null,
+        JSON.stringify(input.metadata || {}), entityPath
+      )
 
-        db.prepare(`INSERT INTO entity (id, azienda_id, type, display_name, slug, stato, name_id, parent_id, user_id, file_url, numero, data, totale, metadata, path)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-          id, aziendaId, input.type || 'item', input.display_name, slug,
-          input.stato || null, input.name_id || null, input.parent_id || null,
-          input.user_id || null, input.file_url || null,
-          input.numero || null, input.data || null, input.totale || null,
-          JSON.stringify(input.metadata || {}), path
-        )
-        // Emit event
-        emit(`entity_created:${input.type || 'item'}`, { aziendaId, recordId: id, recordType: 'entity', entityType: input.type })
-        return { successo: true, id, type: input.type, display_name: input.display_name, messaggio: `"${input.display_name}" creato` }
-      }
+      // Emit events
+      emit(`entity_created:${type}`, { aziendaId, recordId: id, recordType: 'entity', entityType: type, tags: input.tags })
 
-      return { errore: 'table deve essere "names" o "entity"' }
+      return { successo: true, id, type, display_name: input.display_name, tags: input.tags, messaggio: `"${input.display_name}" creato` }
     }
 
     // ── UPDATE ──
     case 'update': {
-      if (!input.id || !input.table) return { errore: 'id e table obbligatori' }
+      if (!input.id) return { errore: 'id obbligatorio' }
 
-      const table = input.table === 'names' ? 'names' : 'entity'
-      const existing = db.prepare(`SELECT metadata FROM ${table} WHERE id = ? AND azienda_id = ?`).get(input.id, aziendaId) as any
+      const existing = db.prepare('SELECT metadata FROM entity WHERE id = ? AND azienda_id = ?').get(input.id, aziendaId) as any
       if (!existing) return { errore: 'Record non trovato' }
 
       const updates: string[] = []
@@ -342,18 +371,16 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
       if (updates.length === 1) return { errore: 'Nessun campo da aggiornare' }
 
       values.push(input.id, aziendaId)
-      db.prepare(`UPDATE ${table} SET ${updates.join(', ')} WHERE id = ? AND azienda_id = ?`).run(...values)
+      db.prepare(`UPDATE entity SET ${updates.join(', ')} WHERE id = ? AND azienda_id = ?`).run(...values)
       return { successo: true, messaggio: `Record aggiornato` }
     }
 
     // ── DELETE ──
     case 'delete_record': {
-      if (!input.id || !input.table) return { errore: 'id e table obbligatori' }
-      const table = input.table === 'names' ? 'names' : 'entity'
-      const target = db.prepare(`SELECT display_name FROM ${table} WHERE id = ? AND azienda_id = ?`).get(input.id, aziendaId) as any
+      if (!input.id) return { errore: 'id obbligatorio' }
+      const target = db.prepare('SELECT display_name FROM entity WHERE id = ? AND azienda_id = ?').get(input.id, aziendaId) as any
       if (!target) return { errore: 'Record non trovato' }
-      db.prepare(`DELETE FROM ${table} WHERE id = ? AND azienda_id = ?`).run(input.id, aziendaId)
-      // Clean up relations
+      db.prepare('DELETE FROM entity WHERE id = ? AND azienda_id = ?').run(input.id, aziendaId)
       db.prepare("DELETE FROM relations WHERE from_id = ? OR to_id = ?").run(input.id, input.id)
       return { successo: true, messaggio: `"${target.display_name}" eliminato` }
     }
@@ -361,19 +388,14 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
     // ── RELATE ──
     case 'relate': {
       if (!input.from_id || !input.to_id || !input.tipo) return { errore: 'from_id, to_id e tipo obbligatori' }
-      const fromName = db.prepare("SELECT id FROM names WHERE id = ?").get(input.from_id)
-      const fromEntity = db.prepare("SELECT id FROM entity WHERE id = ?").get(input.from_id)
-      const toName = db.prepare("SELECT id FROM names WHERE id = ?").get(input.to_id)
-      const toEntity = db.prepare("SELECT id FROM entity WHERE id = ?").get(input.to_id)
-      if (!fromName && !fromEntity) return { errore: 'from_id non trovato' }
-      if (!toName && !toEntity) return { errore: 'to_id non trovato' }
+      const fromExists = db.prepare("SELECT id FROM entity WHERE id = ?").get(input.from_id)
+      const toExists = db.prepare("SELECT id FROM entity WHERE id = ?").get(input.to_id)
+      if (!fromExists) return { errore: 'from_id non trovato' }
+      if (!toExists) return { errore: 'to_id non trovato' }
 
-      db.prepare(`INSERT OR IGNORE INTO relations (id, azienda_id, from_type, from_id, to_type, to_id, tipo, metadata)
-        VALUES (?, ?, ?, ?, ?, ?, ?, '{}')`).run(
-        crypto.randomUUID(), aziendaId,
-        fromName ? 'name' : 'entity', input.from_id,
-        toName ? 'name' : 'entity', input.to_id,
-        input.tipo
+      db.prepare(`INSERT OR IGNORE INTO relations (id, azienda_id, from_id, to_id, tipo, metadata)
+        VALUES (?, ?, ?, ?, ?, '{}')`).run(
+        crypto.randomUUID(), aziendaId, input.from_id, input.to_id, input.tipo
       )
       return { successo: true, messaggio: `Relazione "${input.tipo}" creata` }
     }
@@ -382,27 +404,24 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
     case 'get_tree': {
       if (!input.id) return { errore: 'id obbligatorio' }
 
-      // Try names first, then entity
-      let record = parseRow(db.prepare("SELECT * FROM names WHERE id = ?").get(input.id))
-      let recordType = 'name'
+      // Try by id first, then by numero/slug as fallback
+      let record = parseRow(db.prepare("SELECT * FROM entity WHERE id = ?").get(input.id))
       if (!record) {
-        record = parseRow(db.prepare("SELECT * FROM entity WHERE id = ?").get(input.id))
-        recordType = 'entity'
+        record = parseRow(db.prepare("SELECT * FROM entity WHERE numero = ? OR slug = ? LIMIT 1").get(input.id, input.id))
       }
       if (!record) return { errore: 'Record non trovato' }
 
-      // Get children (entity with parent_id or name_id)
-      const children = recordType === 'name'
-        ? parseRows(db.prepare("SELECT id, type, display_name, stato, numero, totale, data, metadata FROM entity WHERE name_id = ? ORDER BY type, created_at DESC LIMIT 50").all(input.id))
-        : parseRows(db.prepare("SELECT id, type, display_name, stato, numero, totale, data, metadata FROM entity WHERE parent_id = ? ORDER BY ordine, created_at").all(input.id))
+      // Get children (by parent_id or name_id)
+      const childrenByParent = parseRows(db.prepare("SELECT id, type, display_name, stato, numero, totale, data, metadata FROM entity WHERE parent_id = ? ORDER BY ordine, created_at").all(input.id))
+      const childrenByNameId = parseRows(db.prepare("SELECT id, type, display_name, stato, numero, totale, data, metadata FROM entity WHERE name_id = ? AND id != ? ORDER BY type, created_at DESC LIMIT 50").all(input.id, input.id))
+      const children = [...childrenByParent, ...childrenByNameId]
 
       // Get relations
-      const relationsFrom = db.prepare("SELECT to_type, to_id, tipo FROM relations WHERE from_id = ?").all(input.id) as any[]
-      const relationsTo = db.prepare("SELECT from_type, from_id, tipo FROM relations WHERE to_id = ?").all(input.id) as any[]
+      const relationsFrom = db.prepare("SELECT to_id, tipo FROM relations WHERE from_id = ?").all(input.id) as any[]
+      const relationsTo = db.prepare("SELECT from_id, tipo FROM relations WHERE to_id = ?").all(input.id) as any[]
 
       return {
         record,
-        recordType,
         children,
         relations: {
           outgoing: relationsFrom,
@@ -419,6 +438,97 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
 
     // ── AUTONOMOUS AGENTS ──
     case 'create_autonomous_agent': {
+      // Guided creation: collect missing fields and return a helpful guide
+      const missing: string[] = []
+      const guide: Record<string, string> = {}
+
+      if (!input.name) {
+        missing.push('name')
+        guide.name = 'Nome dell\'agente (es. "Monitor Fatture", "Saluti Mattutini")'
+      }
+      // agentDomain: auto-detect from prompt if not specified
+      if (!input.agentDomain && input.promptTemplate) {
+        const pt = (input.promptTemplate as string).toLowerCase()
+        if (/whatsapp|messaggio|invia.*a\s/.test(pt)) input.agentDomain = 'whatsapp'
+        else if (/fattur|scaden|pagament|conto|saldo/.test(pt)) input.agentDomain = 'amministrazione'
+        else if (/client|lead|pipeline|vendite/.test(pt)) input.agentDomain = 'commerciale'
+        else if (/candidat|annunci|cv|recruiting/.test(pt)) input.agentDomain = 'hr'
+        else if (/progett|ordin|milestone/.test(pt)) input.agentDomain = 'produzione'
+        else if (/document|contratt|normat|articol/.test(pt)) input.agentDomain = 'documentale'
+        else if (/immagin|campagna|brand|content/.test(pt)) input.agentDomain = 'marketing'
+        else input.agentDomain = 'pulse' // default
+      }
+      if (!input.agentDomain && !input.promptTemplate) {
+        missing.push('agentDomain')
+        guide.agentDomain = 'Dominio agente (opzionale — viene dedotto dal prompt). Opzioni: pulse, commerciale, amministrazione, hr, whatsapp, documentale, etc.'
+      }
+      if (!input.promptTemplate) {
+        missing.push('promptTemplate')
+        guide.promptTemplate = 'Istruzione che l\'agente eseguirà ad ogni attivazione. Es: "Cerca tutte le fatture in scadenza nei prossimi 7 giorni e genera un riepilogo"'
+      }
+      if (!input.trigger_type || !['cron', 'event'].includes(input.trigger_type)) {
+        missing.push('trigger_type')
+        guide.trigger_type = 'Tipo di attivazione: "cron" (schedulato) o "event" (reattivo a eventi)'
+      }
+      if (input.trigger_type === 'cron') {
+        if (!input.cron) {
+          missing.push('cron')
+          guide.cron = 'Espressione cron (5 campi: minuto ora giorno mese giorno_settimana). Esempi:\n' +
+            '"* * * * *" = ogni minuto\n' +
+            '"*/5 * * * *" = ogni 5 minuti\n' +
+            '"0 8 * * *" = ogni giorno alle 8:00\n' +
+            '"0 9 * * 1" = ogni lunedì alle 9:00\n' +
+            '"0 8 1 * *" = il 1° di ogni mese alle 8:00'
+        } else {
+          // Validate cron format (5 fields)
+          const cronParts = (input.cron as string).trim().split(/\s+/)
+          if (cronParts.length !== 5) {
+            missing.push('cron')
+            guide.cron = `Formato cron non valido: "${input.cron}" ha ${cronParts.length} campi, servono 5 (minuto ora giorno mese giorno_settimana). Es: "0 8 * * *"`
+          }
+        }
+      }
+      if (input.trigger_type === 'event') {
+        const VALID_EVENTS = [
+          'entity_created:documento', 'entity_created:fattura', 'entity_created:ordine', 'entity_created:progetto',
+          'name_created:lead', 'name_created:cliente', 'name_created:candidato', 'name_created:fornitore',
+          'entity_created:*', 'name_created:*',
+        ]
+        if (!input.event) {
+          missing.push('event')
+          guide.event = 'Evento trigger. Eventi disponibili:\n' + VALID_EVENTS.map(e => `"${e}"`).join('\n')
+        } else if (!VALID_EVENTS.some(v => v === input.event || (v.endsWith(':*') && (input.event as string).startsWith(v.replace(':*', ':'))))) {
+          missing.push('event')
+          guide.event = `Evento "${input.event}" non riconosciuto. Eventi disponibili:\n` + VALID_EVENTS.map(e => `"${e}"`).join('\n')
+        }
+      }
+
+      if (missing.length > 0) {
+        return {
+          incompleto: true,
+          messaggio: `Per creare l'agente autonomo servono questi dati:`,
+          campi_mancanti: missing,
+          guida: guide,
+          campi_forniti: {
+            ...(input.name ? { name: input.name } : {}),
+            ...(input.agentDomain ? { agentDomain: input.agentDomain } : {}),
+            ...(input.promptTemplate ? { promptTemplate: input.promptTemplate } : {}),
+            ...(input.trigger_type ? { trigger_type: input.trigger_type } : {}),
+            ...(input.cron ? { cron: input.cron } : {}),
+            ...(input.event ? { event: input.event } : {}),
+            ...(input.description ? { description: input.description } : {}),
+          },
+          esempio: {
+            name: 'Monitor Fatture Scadute',
+            agentDomain: 'amministrazione',
+            promptTemplate: 'Controlla le fatture in scadenza nei prossimi 7 giorni e genera un riepilogo',
+            trigger_type: 'cron',
+            cron: '0 8 * * *',
+            notify: ['chat'],
+          },
+        }
+      }
+
       const { createAutonomousAgent } = await import('./autonomous.js')
       const agentId = createAutonomousAgent(aziendaId, {
         name: input.name,
@@ -430,10 +540,20 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
           cron: input.cron,
           event: input.event,
         },
-        notifyChannels: input.notify || ['chat'],
+        notifyChannels: input.notify || ['chat', 'whatsapp'],
         enabled: true,
       })
-      return { successo: true, id: agentId, messaggio: `Agente autonomo "${input.name}" creato (${input.trigger_type}: ${input.cron || input.event || 'manual'})` }
+      return {
+        successo: true,
+        id: agentId,
+        messaggio: `Agente autonomo "${input.name}" creato`,
+        configurazione: {
+          dominio: input.agentDomain,
+          trigger: input.trigger_type === 'cron' ? `Schedulato: ${input.cron}` : `Evento: ${input.event}`,
+          prompt: input.promptTemplate,
+          notifiche: input.notify || ['chat', 'whatsapp'],
+        },
+      }
     }
 
     case 'list_autonomous_agents': {
@@ -550,15 +670,15 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
       const matched = allVoices.find(v => v.toLowerCase() === (input.voice_name as string).toLowerCase())
       if (!matched) return { errore: `Voce "${input.voice_name}" non trovata. Disponibili: ${allVoices.join(', ')}` }
       // Save in names metadata — find the user who is making the request
-      const users = db.prepare("SELECT id FROM names WHERE azienda_id = ? AND tags LIKE '%\"utente\"%'").all(aziendaId) as any[]
+      const users = db.prepare("SELECT id FROM entity WHERE azienda_id = ? AND tags LIKE '%\"utente\"%'").all(aziendaId) as any[]
       for (const u of users) {
-        db.prepare("UPDATE names SET metadata = json_set(metadata, '$.tts_voice', ?) WHERE id = ?").run(matched, u.id)
+        db.prepare("UPDATE entity SET metadata = json_set(metadata, '$.tts_voice', ?) WHERE id = ?").run(matched, u.id)
       }
       return { successo: true, messaggio: `Voce impostata su ${matched}` }
     }
 
     case 'get_current_voice': {
-      const users = db.prepare("SELECT display_name, json_extract(metadata, '$.tts_voice') as voice FROM names WHERE azienda_id = ? AND tags LIKE '%\"utente\"%'").all(aziendaId) as any[]
+      const users = db.prepare("SELECT display_name, json_extract(metadata, '$.tts_voice') as voice FROM entity WHERE azienda_id = ? AND tags LIKE '%\"utente\"%'").all(aziendaId) as any[]
       return users.map((u: any) => ({ utente: u.display_name, voce: u.voice || 'Vivian' }))
     }
 
@@ -567,16 +687,205 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
     }
 
     // ── AGENTIC RAG RETRIEVE ──
+    // ── SKILL & MEMORY MANAGEMENT ──
+    case 'update_skill': {
+      if (!input.domain) return { errore: 'domain obbligatorio' }
+      const { AGENTS } = await import('./config.js')
+      if (!AGENTS[input.domain as string]) return { errore: `Dominio "${input.domain}" non trovato` }
+
+      // Find or create skill entity
+      const existing = db.prepare(
+        "SELECT id, metadata FROM entity WHERE type = 'skill' AND json_extract(metadata, '$.domain') = ? AND azienda_id = ?"
+      ).get(input.domain, aziendaId) as any
+
+      const skillData: Record<string, unknown> = {
+        domain: input.domain,
+        ...(existing ? JSON.parse(existing.metadata) : {}),
+      }
+      if (input.system_prompt) skillData.system_prompt = input.system_prompt
+      if (input.rules) skillData.rules = input.rules
+      if (input.model) skillData.model = input.model
+      skillData.version = ((skillData.version as number) || 0) + 1
+      skillData.updated_at = new Date().toISOString()
+
+      if (existing) {
+        db.prepare("UPDATE entity SET metadata = ?, updated_at = datetime('now') WHERE id = ?").run(JSON.stringify(skillData), existing.id)
+      } else {
+        db.prepare(
+          "INSERT INTO entity (id, azienda_id, type, display_name, slug, metadata, path, created_at, updated_at) VALUES (?, ?, 'skill', ?, ?, ?, ?, datetime('now'), datetime('now'))"
+        ).run(crypto.randomUUID(), aziendaId, `Skill: ${input.domain}`, `skill-${input.domain}`, JSON.stringify(skillData), `/entity/skills/${input.domain}`)
+      }
+
+      return { successo: true, messaggio: `Skill "${input.domain}" aggiornata (v${skillData.version}). Riavvia per applicare le modifiche al system prompt.` }
+    }
+
+    case 'list_skills': {
+      const { AGENTS } = await import('./config.js')
+      return Object.entries(AGENTS).map(([domain, agent]) => ({
+        domain,
+        name: agent.name,
+        model: agent.model || 'default (claude-haiku-4.5)',
+        prompt_preview: agent.systemPrompt.substring(0, 100) + '...',
+        color: agent.color,
+        tools_count: agent.toolNames.length,
+      }))
+    }
+
+    case 'add_agent_lesson': {
+      if (!input.domain || !input.rule) return { errore: 'domain e rule obbligatori' }
+      const { addAgentLesson } = await import('./context.js')
+      addAgentLesson(aziendaId, input.domain as string, input.rule as string, 'istruzione utente')
+      return { successo: true, messaggio: `Lezione aggiunta alla memoria di "${input.domain}": "${input.rule}"` }
+    }
+
+    // ── DOCUMENT MANAGEMENT ──
+    case 'list_documents': {
+      let sql = "SELECT id, display_name, categoria, json_extract(metadata,'$.tipo_file') as tipo_file, json_extract(metadata,'$.file_size') as file_size, json_extract(metadata,'$.chunked') as chunked, json_extract(metadata,'$.chunk_count') as chunk_count, json_extract(metadata,'$.total_chars') as total_chars, file_url, created_at FROM entity WHERE azienda_id = ? AND type IN ('documento','contratto','cv','report','normativa','fattura_passiva') AND type != 'chunk'"
+      const params: any[] = [aziendaId]
+      if (input.categoria) {
+        sql += " AND categoria = ?"
+        params.push(input.categoria)
+      }
+      sql += ' ORDER BY created_at DESC LIMIT 50'
+      const docs = db.prepare(sql).all(...params) as any[]
+      return docs.map(d => ({
+        id: d.id,
+        nome: d.display_name,
+        categoria: d.categoria || 'altro',
+        tipo_file: d.tipo_file,
+        dimensione: d.file_size ? `${(d.file_size / 1024).toFixed(0)} KB` : 'N/D',
+        chunkato: d.chunked ? `Sì (${d.chunk_count} sezioni, ${d.total_chars ? (d.total_chars / 1000).toFixed(0) + 'K chars' : ''})` : 'No',
+        data: d.created_at?.slice(0, 10),
+      }))
+    }
+
+    case 'explore_document': {
+      const limit = Math.min(input.limit as number || 30, 100)
+      const doc = db.prepare("SELECT display_name, metadata FROM entity WHERE id = ? AND azienda_id = ?").get(input.doc_id, aziendaId) as any
+      if (!doc) return { errore: 'Documento non trovato' }
+      const meta = typeof doc.metadata === 'string' ? JSON.parse(doc.metadata) : doc.metadata
+
+      const chunks = db.prepare(
+        "SELECT display_name, json_extract(metadata,'$.heading_path') as heading, json_extract(metadata,'$.chunk_index') as idx FROM entity WHERE parent_id = ? AND type = 'chunk' ORDER BY ordine LIMIT ?"
+      ).all(input.doc_id, limit) as any[]
+
+      // Group by unique headings for a clean TOC
+      const toc: string[] = []
+      const seen = new Set<string>()
+      for (const c of chunks) {
+        const heading = c.heading || c.display_name
+        if (!seen.has(heading)) { seen.add(heading); toc.push(heading) }
+      }
+
+      return {
+        documento: doc.display_name,
+        categoria: meta.categoria,
+        chunk_count: meta.chunk_count || chunks.length,
+        total_chars: meta.total_chars,
+        struttura: toc,
+      }
+    }
+
+    case 'rechunk_document': {
+      console.log('[rechunk] doc_id:', input.doc_id, 'aziendaId:', aziendaId)
+      const doc = db.prepare("SELECT id, display_name, file_url, metadata FROM entity WHERE id = ? AND azienda_id = ?").get(input.doc_id, aziendaId) as any
+      if (!doc) {
+        console.log('[rechunk] Doc not found for id:', input.doc_id)
+        return { errore: 'Documento non trovato' }
+      }
+
+      const UPLOADS_DIR = process.env.UPLOADS_DIR || '/app/data/uploads'
+      const filePath = doc.file_url?.replace('/api/uploads/', UPLOADS_DIR + '/')
+      const fs = await import('fs')
+      console.log('[rechunk] filePath:', filePath, 'exists:', filePath ? fs.default.existsSync(filePath) : false)
+      if (!filePath || !fs.default.existsSync(filePath)) return { errore: 'File non trovato su disco: ' + filePath }
+
+      // Extract text
+      const ext = filePath.split('.').pop()?.toLowerCase()
+      let text = ''
+      if (ext === 'pdf') {
+        try {
+          const { PDFParse } = await import('pdf-parse')
+          const buf = fs.default.readFileSync(filePath)
+          const uint8 = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength)
+          const parser = new PDFParse(uint8, {})
+          await parser.load()
+          text = await parser.getText()
+          if (typeof text !== 'string') {
+            // Fallback: use pdfjs-dist directly
+            const pdfjsLib = await import('pdfjs-dist/legacy/build/pdf.mjs')
+            const pdfDoc = await pdfjsLib.getDocument({ data: uint8, useSystemFonts: true }).promise
+            text = ''
+            for (let i = 1; i <= pdfDoc.numPages; i++) {
+              const page = await pdfDoc.getPage(i)
+              const content = await page.getTextContent()
+              text += content.items.map((item: any) => item.str).join(' ') + '\n'
+            }
+          }
+        } catch { return { errore: 'Errore estrazione testo dal PDF' } }
+      } else if (ext === 'txt' || ext === 'csv') {
+        text = fs.default.readFileSync(filePath, 'utf-8')
+      } else if (ext === 'docx') {
+        try {
+          const mammoth = await import('mammoth')
+          const result = await mammoth.default.extractRawText({ path: filePath })
+          text = result.value || ''
+        } catch { return { errore: 'Errore estrazione testo dal DOCX' } }
+      } else {
+        return { errore: `Tipo file .${ext} non supportato per il chunking` }
+      }
+
+      if (text.length < 100) return { errore: 'Testo estratto troppo corto per il chunking' }
+
+      // Delete old chunks
+      const deleted = db.prepare("DELETE FROM entity WHERE parent_id = ? AND type = 'chunk'").run(input.doc_id)
+
+      // Chunk
+      const { chunkDocument } = await import('../chunker.js')
+      const meta = typeof doc.metadata === 'string' ? JSON.parse(doc.metadata) : doc.metadata
+      const chunks = chunkDocument(text, meta.entity_type || 'documento', doc.display_name)
+
+      if (chunks.length === 0) return { errore: 'Nessun chunk generato — il documento potrebbe essere troppo corto' }
+
+      // Save chunks
+      const chunkCrypto = await import('crypto')
+      const stmt = db.prepare('INSERT INTO entity (id,azienda_id,type,display_name,slug,parent_id,body,metadata,path,ordine,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,datetime("now"),datetime("now"))')
+      for (const c of chunks) {
+        stmt.run(chunkCrypto.randomUUID(), aziendaId, 'chunk', c.display_name.substring(0, 200), 'chunk-' + c.chunk_index, input.doc_id,
+          c.content,
+          JSON.stringify({ chunk_index: c.chunk_index, chunk_total: chunks.length, heading_path: c.heading_path }),
+          `/entity/documento/${doc.display_name}/chunks/chunk-${c.chunk_index}`, c.chunk_index)
+      }
+
+      // Update parent metadata
+      db.prepare("UPDATE entity SET metadata = json_set(metadata, '$.chunked', 1, '$.chunk_count', ?, '$.total_chars', ?) WHERE id = ?").run(chunks.length, text.length, input.doc_id)
+
+      // Rebuild FTS
+      try { db.exec("INSERT INTO chunk_fts(chunk_fts) VALUES('rebuild')") } catch {}
+
+      return { successo: true, messaggio: `"${doc.display_name}" ri-chunkato: ${chunks.length} sezioni (${deleted.changes} vecchi chunk eliminati)` }
+    }
+
+    case 'reclassify_document': {
+      const doc = db.prepare("SELECT id FROM entity WHERE id = ? AND azienda_id = ?").get(input.doc_id, aziendaId)
+      if (!doc) return { errore: 'Documento non trovato' }
+      const updates: string[] = []
+      if (input.display_name) { db.prepare("UPDATE entity SET display_name = ? WHERE id = ?").run(input.display_name, input.doc_id); updates.push('nome') }
+      if (input.categoria) { db.prepare("UPDATE entity SET metadata = json_set(metadata, '$.categoria', ?) WHERE id = ?").run(input.categoria, input.doc_id); updates.push('categoria') }
+      if (input.tags) { db.prepare("UPDATE entity SET metadata = json_set(metadata, '$.tags', ?) WHERE id = ?").run(JSON.stringify(input.tags), input.doc_id); updates.push('tags') }
+      return { successo: true, messaggio: `Documento aggiornato (${updates.join(', ')})` }
+    }
+
+    // ── AGENTIC RAG RETRIEVE ──
     case 'retrieve': {
       const limit = Math.min(input.limit as number || 5, 10)
       const query = input.query as string
       const allChunks = new Map<string, any>()
 
-      // Fast path: direct FTS5 search (no LLM calls) — ~5ms
       const ftsSearch = (q: string) => {
         try {
           let sql = `SELECT e.id, e.display_name, e.parent_id,
-            json_extract(e.metadata, '$.contenuto_testo') as contenuto_testo,
+            e.body as contenuto_testo,
             json_extract(e.metadata, '$.heading_path') as heading_path,
             json_extract(e.metadata, '$.chunk_index') as chunk_index,
             parent.display_name as document_name, rank
@@ -592,59 +901,131 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
         } catch { return [] }
       }
 
-      // Step 1: Direct FTS5 search with original query
+      // Livello 1: FTS diretto (~5ms)
       const directResults = ftsSearch(query)
       for (const r of directResults) allChunks.set(r.id, r)
 
-      // Step 2: If good results (rank < -5 = high relevance), skip LLM calls entirely
       const bestRank = directResults.length > 0 ? Math.abs(directResults[0].rank || 0) : 0
-      const hasGoodResults = directResults.length >= 2 && bestRank > 5
+      const threshold = input.doc_id ? 2 : 5
+      const hasGoodResults = directResults.length >= 3 && bestRank > threshold
+
+      if (hasGoodResults) {
+        console.log(`[Retrieve] L1 fast: ${directResults.length} results, rank=${bestRank.toFixed(1)}`)
+      }
 
       if (!hasGoodResults && allChunks.size < limit) {
-        // Step 3: Try individual words from query
+        // Livello 2: Coppie adiacenti first (more precise), then single words
         const words = query.split(/\s+/).filter((w: string) => w.length > 2)
-        for (const w of words) {
-          for (const row of ftsSearch(w)) allChunks.set(row.id, row)
-        }
-
-        // Step 4: LLM generates smarter query variants (truly agentic)
-        // Always try this if results are insufficient — the LLM understands
-        // that "successioni" needs "eredità testamento Art. 456 apertura"
-        if (allChunks.size < limit) {
+        // Coppie adiacenti — most relevant
+        for (let i = 0; i < words.length - 1 && allChunks.size < limit * 3; i++) {
           try {
-            const { generateSearchQueries } = await import('../ai.js')
-            const variants = await generateSearchQueries(query)
-            console.log(`[Retrieve] LLM variants for "${query}":`, variants)
-            for (const v of variants.slice(0, 3)) {
-              for (const row of ftsSearch(v)) allChunks.set(row.id, row)
-            }
+            for (const row of ftsSearch(`"${words[i]} ${words[i + 1]}"`)) allChunks.set(row.id, row)
           } catch {}
         }
+        // Single words only if still not enough, cap at limit*3
+        if (allChunks.size < limit) {
+          for (const w of words) {
+            if (allChunks.size >= limit * 3) break
+            for (const row of ftsSearch(w)) allChunks.set(row.id, row)
+          }
+        }
+        if (allChunks.size > 0) {
+          console.log(`[Retrieve] L2 words: ${allChunks.size} results (capped)`)
+        }
+      }
 
-        // Step 5: LIKE fallback if still nothing
-        if (allChunks.size === 0) {
+      // Livello 3: LLM variants con cache (solo se 0 risultati)
+      if (allChunks.size === 0) {
+        const cacheKey = query.toLowerCase().trim()
+        const cached = retrieveCache.get(cacheKey)
+        let variants: string[]
+
+        if (cached && Date.now() - cached.ts < RETRIEVE_CACHE_TTL) {
+          variants = cached.variants
+          console.log(`[Retrieve] L3 cache hit for "${query}"`)
+        } else {
           try {
-            let sql = `SELECT e.id, e.display_name, e.parent_id,
-              json_extract(e.metadata, '$.contenuto_testo') as contenuto_testo,
+            const { generateSearchQueries } = await import('../ai.js')
+            variants = await generateSearchQueries(query)
+            retrieveCache.set(cacheKey, { variants, ts: Date.now() })
+            console.log(`[Retrieve] L3 LLM variants for "${query}":`, variants)
+          } catch {
+            variants = [query]
+          }
+        }
+
+        for (const v of variants.slice(0, 3)) {
+          for (const row of ftsSearch(v)) allChunks.set(row.id, row)
+        }
+      }
+
+      // Tag-based search: find chunks whose tags match query keywords
+      if (allChunks.size < limit * 2) {
+        const queryWords = query.toLowerCase().split(/\s+/).filter((w: string) => w.length > 3)
+        if (queryWords.length > 0) {
+          try {
+            const tagConditions = queryWords.map(() => "e.tags LIKE ?").join(' OR ')
+            let tagSql = `SELECT e.id, e.display_name, e.parent_id, e.body as contenuto_testo,
               json_extract(e.metadata, '$.heading_path') as heading_path,
               json_extract(e.metadata, '$.chunk_index') as chunk_index,
               parent.display_name as document_name
-              FROM entity e JOIN entity parent ON e.parent_id = parent.id
-              WHERE e.type = 'chunk' AND parent.azienda_id = ?
-                AND json_extract(e.metadata, '$.contenuto_testo') LIKE ?`
-            const params: any[] = [aziendaId, `%${query}%`]
-            if (input.doc_id) { sql += ' AND e.parent_id = ?'; params.push(input.doc_id) }
-            sql += ` LIMIT ${limit}`
-            for (const row of db.prepare(sql).all(...params) as any[]) allChunks.set(row.id, row)
+              FROM entity e
+              JOIN entity parent ON e.parent_id = parent.id
+              WHERE e.type = 'chunk' AND parent.azienda_id = ? AND (${tagConditions})`
+            const tagParams: any[] = [aziendaId, ...queryWords.map((w: string) => `%${w}%`)]
+            if (input.doc_id) { tagSql += ' AND e.parent_id = ?'; tagParams.push(input.doc_id) }
+            tagSql += ` LIMIT ${limit * 2}`
+            const tagResults = db.prepare(tagSql).all(...tagParams) as any[]
+            for (const r of tagResults) allChunks.set(r.id, r)
+            if (tagResults.length > 0) console.log(`[Retrieve] Tags: +${tagResults.length} results`)
           } catch {}
         }
       }
 
-      const results = Array.from(allChunks.values()).slice(0, limit)
-      return results.map(r => ({
+      // Deduplicate: if multiple chunks have very similar display_name, keep best rank
+      const seen = new Map<string, any>()
+      for (const r of allChunks.values()) {
+        // Normalize: extract article number for dedup key
+        const artMatch = (r.display_name || '').match(/Art\.\s*(\d+)/)
+        const key = artMatch ? `art_${artMatch[1]}` : (r.display_name || '').substring(0, 40)
+        const existing = seen.get(key)
+        if (!existing || (r.rank && existing.rank && r.rank < existing.rank)) {
+          seen.set(key, r)
+        }
+      }
+      let results = Array.from(seen.values())
+
+      // ALWAYS run semantic search — best quality, finds synonyms/paraphrases
+      {
+        try {
+          const { semanticChunkSearch } = await import('../embeddings.js')
+          console.log(`[Retrieve] Running semantic search for "${query.substring(0, 40)}"...`)
+          const semanticResults = await semanticChunkSearch(query, aziendaId, input.doc_id as string, limit)
+          let added = 0
+          for (const sr of semanticResults) {
+            const key = sr.display_name?.substring(0, 40) || sr.id || sr.chunk_id
+            if (!seen.has(key)) {
+              seen.set(key, sr)
+              results.push(sr)
+              added++
+            }
+          }
+          if (semanticResults.length > 0) {
+            console.log(`[Retrieve] Semantic: ${semanticResults.length} found, +${added} new (total: ${results.length})`)
+          }
+        } catch (err) {
+          console.warn('[Retrieve] Semantic fallback failed:', (err as Error).message)
+        }
+      }
+
+      results = results.slice(0, limit)
+
+      return results.map((r: any) => ({
+        chunk_id: r.id,
         documento: r.document_name,
         sezione: r.heading_path || r.display_name,
-        testo: r.contenuto_testo,
+        testo: r.contenuto_testo || r.body,
+        indice: r.chunk_index,
       }))
     }
 
@@ -657,7 +1038,7 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
         const UPLOADS_DIR = process.env.UPLOADS_DIR || '/app/data/uploads'
 
         // Get user voice preference
-        const userVoice = (db.prepare("SELECT json_extract(metadata, '$.tts_voice') as v FROM names WHERE id = ?").get(aziendaId) as any)?.v || input.voice || 'Vivian'
+        const userVoice = (db.prepare("SELECT json_extract(metadata, '$.tts_voice') as v FROM entity WHERE id = ?").get(aziendaId) as any)?.v || input.voice || 'Vivian'
 
         const ttsRes = await fetch(TTS_API_URL, {
           method: 'POST',
@@ -842,6 +1223,14 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
 
     case 'send_whatsapp_message': {
       try {
+        const msgText = (input.text || '') as string
+        if (!msgText.trim()) {
+          return { errore: 'Testo del messaggio mancante. Specifica cosa vuoi inviare.' }
+        }
+        // Prevent sending internal agent reasoning as WhatsApp message
+        if (/^(Non ho trovato|Mi dispiace|Non posso|Errore|quale messaggio vuoi)/i.test(msgText.trim())) {
+          return { errore: `Il testo sembra una risposta interna, non un messaggio da inviare. Chiedi all'utente quale testo vuole inviare.` }
+        }
         const whatsapp = await import('../whatsapp.js')
         const phone = input.phone.replace(/\D/g, '')
         const jid = phone.includes('@') ? phone : `${phone}@s.whatsapp.net`
@@ -970,6 +1359,23 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
         return { successo: true, messaggio: `Video inviato a ${phone}` }
       } catch (err: any) {
         return { successo: false, messaggio: err.message }
+      }
+    }
+
+    // ── CODE EXECUTION (programmatic tool calling) ──
+    case 'execute_code': {
+      if (!input.code) return { errore: 'code obbligatorio' }
+      try {
+        const { executeCode } = await import('./code-executor.js')
+        console.log(`[CodeExec] Running:\n${(input.code as string).substring(0, 500)}`)
+        const result = await executeCode(input.code as string, aziendaId)
+        console.log(`[CodeExec] return_code=${result.return_code}, stdout=${result.stdout.length}ch${result.stderr ? ', stderr=' + result.stderr.substring(0, 100) : ''}`)
+        if (result.return_code !== 0) {
+          return { errore: result.stderr, output: result.stdout || undefined }
+        }
+        return { output: result.stdout }
+      } catch (err: any) {
+        return { errore: `Code execution failed: ${err.message}` }
       }
     }
 

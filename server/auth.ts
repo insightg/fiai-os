@@ -31,9 +31,9 @@ router.post('/login', async (req: Request, res: Response) => {
       return
     }
 
-    // Look up user in names table (tag: utente)
+    // Look up user in entity table (type: utente)
     const user = db.prepare(
-      "SELECT id, email, metadata FROM names WHERE email = ? AND tags LIKE '%\"utente\"%'"
+      "SELECT id, email, metadata FROM entity WHERE email = ? AND type = 'utente'"
     ).get(email) as { id: string; email: string; metadata: string } | undefined
 
     if (!user) {
@@ -77,7 +77,7 @@ router.post('/signup', async (req: Request, res: Response) => {
     }
 
     // Check if user already exists in names
-    const existing = db.prepare("SELECT id FROM names WHERE email = ?").get(email)
+    const existing = db.prepare("SELECT id FROM entity WHERE email = ?").get(email)
     if (existing) {
       res.status(400).json({ user: null, session: null, error: { message: 'Utente già esistente' } })
       return
@@ -92,16 +92,22 @@ router.post('/signup', async (req: Request, res: Response) => {
       const tags = ['utente']
       if (ruolo === 'admin') tags.push('admin')
 
-      // Resolve azienda_id
+      // Resolve azienda_id — auto-create org if none exists
       let orgId = azienda_id
       if (!orgId) {
-        const org = db.prepare("SELECT id FROM names WHERE tags LIKE '%\"organizzazione\"%' LIMIT 1").get() as any
+        const org = db.prepare("SELECT id FROM entity WHERE type = 'organizzazione' LIMIT 1").get() as any
         orgId = org?.id
       }
+      if (!orgId) {
+        // First signup: auto-create default organization
+        orgId = crypto.randomUUID()
+        db.prepare(`INSERT INTO entity (id, azienda_id, type, display_name, slug, tags, metadata, path)
+          VALUES (?, ?, 'organizzazione', 'FIAI', 'fiai', '["organizzazione"]', '{}', '/entity/organizzazione/fiai')`).run(orgId, orgId)
+      }
 
-      // Create name with utente tag
-      db.prepare(`INSERT INTO names (id, azienda_id, display_name, slug, email, tags, metadata, path)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      // Create utente entity
+      db.prepare(`INSERT INTO entity (id, azienda_id, type, display_name, slug, email, tags, metadata, path)
+        VALUES (?, ?, 'utente', ?, ?, ?, ?, ?, ?)`).run(
         userId, orgId, displayName, slug, email,
         JSON.stringify(tags),
         JSON.stringify({
@@ -110,19 +116,17 @@ router.post('/signup', async (req: Request, res: Response) => {
           ruolo: ruolo || 'collaboratore',
           tts_voice: 'Vivian',
         }),
-        `/names/${slug}`
+        `/entity/utente/${slug}`
       )
 
       // Legacy write (keeps users table in sync for any remaining references)
       try { db.prepare('INSERT OR IGNORE INTO users (id, email, password_hash) VALUES (?, ?, ?)').run(userId, email, passwordHash) } catch {}
 
       // Create membro_di relation
-      if (orgId) {
-        db.prepare(`INSERT OR IGNORE INTO relations (id, azienda_id, from_type, from_id, to_type, to_id, tipo)
-          VALUES (?, ?, 'name', ?, 'name', ?, 'membro_di')`).run(
-          crypto.randomUUID(), orgId, userId, orgId
-        )
-      }
+      db.prepare(`INSERT OR IGNORE INTO relations (id, azienda_id, from_id, to_id, tipo)
+        VALUES (?, ?, ?, ?, 'membro_di')`).run(
+        crypto.randomUUID(), orgId, userId, orgId
+      )
 
       return { id: userId, email }
     })

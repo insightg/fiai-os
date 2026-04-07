@@ -35,7 +35,7 @@ export function authMiddleware(required = true) {
         req.aziendaId = rel.to_id
       } else {
         // Fallback: try azienda_id directly from names
-        const nameRec = db.prepare("SELECT azienda_id FROM names WHERE id = ?").get(decoded.userId) as any
+        const nameRec = db.prepare("SELECT azienda_id FROM entity WHERE id = ?").get(decoded.userId) as any
         if (nameRec?.azienda_id) req.aziendaId = nameRec.azienda_id
       }
 
