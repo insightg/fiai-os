@@ -14,7 +14,7 @@ const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || ''
 const CLASSIFIER_MODEL = 'anthropic/claude-haiku-4.5'
 const GEMINI_MODEL = 'google/gemini-3.1-flash-image-preview'
 
-const VALID_DOMAINS: AgentDomain[] = ['pulse', 'commerciale', 'produzione', 'marketing', 'amministrazione', 'hr', 'legal', 'documents', 'it', 'doctor', 'general', 'image', 'tts']
+const VALID_DOMAINS: AgentDomain[] = ['direzione', 'commerciale', 'produzione', 'amministrazione', 'contabilita', 'officina', 'legal', 'qualita', 'documentale', 'it', 'doctor', 'whatsapp', 'tts', 'general']
 
 interface ConversationMessage {
   role: string
@@ -86,24 +86,23 @@ function detectResponseMode(message: string, historyLength: number): ResponseMod
 // ── Classify Intent (LLM-based) ────────────────────────
 
 const CLASSIFICATION_PROMPT =
-  'Sei un classificatore di intenti per FIAI, un gestionale aziendale italiano. ' +
-  "Analizza il messaggio dell'utente e classifica il dominio principale. " +
+  'Sei un classificatore di intenti per il gestionale BERNARDINI S.R.L. ' +
+  "Analizza il messaggio dell'utente e classifica il reparto/dominio principale. " +
   'I domini disponibili sono:\n' +
-  "- pulse: overview aziendale, briefing, riepilogo generale, daily brief, come va l'azienda, stato generale\n" +
-  '- commerciale: clienti, lead, pipeline, prospect, vendita, contatti commerciali, brief pre-call, nuovo cliente\n' +
-  '- produzione: progetti, ordini, milestone, avanzamento, delivery, deadline, rischi progetto, stato progetto\n' +
-  '- marketing: contenuti, campagne, lead scoring, brand, social, immagini, grafiche, genera immagine, crea logo, illustra, post, newsletter\n' +
-  '- amministrazione: fatture, conti, liquidita, scadenze fiscali, rimborsi, budget, fornitori, cash flow, pagamenti, fatturato\n' +
-  '- hr: candidati, annunci lavoro, recruiting, onboarding, costo aziendale, curriculum, selezione\n' +
-  '- legal: analisi giuridica, compliance, interpretazione normativa, GDPR, privacy\n' +
-  '- documentale: QUALSIASI richiesta su documenti caricati nel sistema — cerca dentro documenti, riassumi, confronta, analizza contenuto, articoli, clausole, capitoli, versetti. Vale per QUALSIASI tipo di documento: legale, religioso, letterario, tecnico, scientifico. Se l\'utente menziona un documento specifico (bibbia, codice civile, contratto, report, manuale, libro) → documentale. Se chiede "cosa dice", "cerca dentro", "racconta", "analizza", "riassumi" riferito a un documento → documentale.\n' +
-  '- it: costi API, utenti, ruoli, configurazione, agenti autonomi, workflow, AgentOps\n' +
-  '- doctor: diagnostica sistema, salute dati, problemi, errori, check-up, performance, job falliti, stato servizi\n' +
-  '- tts: sintesi vocale, text-to-speech, leggi ad alta voce, pronuncia, voce, audio, parla, clona voce\n' +
-  '- general: saluti, domande generiche, conversazione\n\n' +
-  'IMPORTANTE: Le richieste di generazione immagini vanno SEMPRE a "marketing".\n' +
-  'Le richieste di leggere, pronunciare o generare audio vanno SEMPRE a "tts".\n' +
-  'Le richieste su contenuto di documenti caricati (di QUALSIASI tipo — religioso, letterario, tecnico, legale) vanno SEMPRE a "documentale".\n\n' +
+  "- direzione: overview aziendale, briefing, KPI strategici, riepilogo generale, stato azienda\n" +
+  '- commerciale: clienti, lead, pipeline, prospect, vendita, contatti commerciali, offerte, preventivi\n' +
+  '- amministrazione: stipendi, buste paga, personale, assunzioni, ferie, permessi, F24, CU, recruiting, HR\n' +
+  '- contabilita: costi produzione, margini, centri di costo, budget industriale, scostamenti, magazzino valorizzazione\n' +
+  '- produzione: logistica, magazzino, spedizioni, pianificazione produzione, ordini produzione, scorte, fornitori materiali\n' +
+  '- officina: riparazioni, manutenzione, mezzi, attrezzature, ordini lavoro, ricambi, interventi tecnici\n' +
+  '- legal: assicurazioni, polizze, sinistri, contenzioso, cause, parco mezzi, revisioni, contratti, compliance\n' +
+  '- qualita: qualita, sicurezza, ambiente, ISO, non conformita, DVR, formazione sicurezza, audit, certificazioni, rifiuti\n' +
+  '- documentale: ricerca contenuto documenti caricati, analisi, riassunto, confronto. Se menziona un documento specifico → documentale.\n' +
+  '- it: costi API, utenti, ruoli, configurazione, agenti autonomi\n' +
+  '- doctor: diagnostica sistema, salute dati, performance\n' +
+  '- tts: sintesi vocale, audio\n' +
+  '- general: saluti, domande generiche\n\n' +
+  'Le richieste su contenuto di documenti caricati vanno SEMPRE a "documentale".\n\n' +
   'MULTI-AGENT: Se la richiesta tocca PIU domini, imposta needsMultiAgent=true e secondaryDomains con i domini aggiuntivi.\n' +
   'Esempi multi-agent:\n' +
   '- "fatturato dei clienti con progetti attivi" → domain="amministrazione", needsMultiAgent=true, secondaryDomains=["commerciale","produzione"]\n' +

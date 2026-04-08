@@ -1,0 +1,18 @@
+import fs from 'fs'
+import path from 'path'
+import { GENERIC_TOOLS } from '../../tools.js'
+import type { AgentConfig } from '../../types.js'
+
+const prompt = fs.readFileSync(path.join(import.meta.dirname, 'prompt.md'), 'utf-8')
+import views from './views.js'
+
+const config: AgentConfig = {
+  name: 'Qualita\' Sicurezza Ambiente',
+  domain: 'qualita',
+  color: '#00796B',
+  systemPrompt: prompt,
+  toolNames: [...GENERIC_TOOLS, 'retrieve', 'list_documents'],
+  views,
+}
+
+export default config
