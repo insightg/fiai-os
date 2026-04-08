@@ -25,7 +25,7 @@ export default function Login() {
     <div className="min-h-screen bg-bg flex items-center justify-center px-4">
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
-          <h1 className="font-display text-4xl font-bold text-gold mb-2">BERNARDINI</h1>
+          <h1 className="font-display text-4xl font-bold text-gold mb-2">BERNARDINI OS</h1>
           <p className="text-text2 text-sm">Gestionale Intelligente</p>
         </div>
 
@@ -68,7 +68,7 @@ export default function Login() {
         </div>
 
         <p className="text-center text-text3 text-xs mt-6">
-          BERNARDINI &mdash; Powered by AI
+          BERNARDINI OS &mdash; Powered by AI FIAI
         </p>
       </div>
     </div>

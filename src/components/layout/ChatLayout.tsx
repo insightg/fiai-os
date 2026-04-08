@@ -1370,7 +1370,7 @@ export default function ChatLayout() {
           >
             {sidebarOpen ? <PanelLeftClose size={20} /> : <PanelLeft size={20} />}
           </button>
-          <span className="font-display text-gold font-bold text-lg tracking-wide">BERNARDINI</span>
+          <span className="font-display text-gold font-bold text-lg tracking-wide">BERNARDINI OS</span>
           <span className="text-text3 text-xs hidden sm:inline">Fabbrica Italiana Agenti Intelligenti</span>
         </div>
 
@@ -1752,7 +1752,7 @@ export default function ChatLayout() {
                 </div>
               </form>
               <p className="text-center text-[10px] text-text3 mt-2">
-                BERNARDINI AI &middot; Le risposte possono contenere errori
+                BERNARDINI OS · Powered by AI FIAI &middot; Le risposte possono contenere errori
               </p>
             </div>
           </div>
