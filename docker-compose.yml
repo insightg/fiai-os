@@ -1,6 +1,6 @@
 services:
-  fiai-frontend:
-    container_name: fiai-frontend
+  bernardini-frontend:
+    container_name: bernardini-frontend
     build:
       context: .
       dockerfile: Dockerfile.frontend
@@ -8,21 +8,21 @@ services:
         - VITE_OPENROUTER_API_KEY=${VITE_OPENROUTER_API_KEY:-}
     restart: unless-stopped
     depends_on:
-      - fiai-backend
+      - bernardini-backend
     networks:
       - npm-network
-      - fiai-internal
+      - bernardini-internal
 
-  fiai-backend:
-    container_name: fiai-backend
+  bernardini-backend:
+    container_name: bernardini-backend
     build:
       context: .
       dockerfile: Dockerfile.backend
     restart: unless-stopped
     environment:
       - TZ=Europe/Rome
-      - DB_PATH=/app/data/fiai.db
-      - JWT_SECRET=${JWT_SECRET:-fiai-os-dev-secret-key-2026}
+      - DB_PATH=/app/data/bernardini.db
+      - JWT_SECRET=${JWT_SECRET:-bernardini-secret-key-2026}
       - PORT=3001
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - UPLOADS_DIR=/app/data/uploads
@@ -31,7 +31,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - fiai-data:/app/data
+      - bernardini-data:/app/data
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:3001/api/health"]
       interval: 10s
@@ -40,13 +40,13 @@ services:
       start_period: 10s
     networks:
       - npm-network
-      - fiai-internal
+      - bernardini-internal
 
 networks:
   npm-network:
     external: true
-  fiai-internal:
+  bernardini-internal:
     driver: bridge
 
 volumes:
-  fiai-data:
+  bernardini-data:
