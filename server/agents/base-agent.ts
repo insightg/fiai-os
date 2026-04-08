@@ -237,7 +237,7 @@ export async function directLLMResponse(
   conversationHistory?: ConversationMessage[]
 ): Promise<string> {
   let systemPrompt =
-    "Sei l'assistente AI di FIAI (Fabbrica Italiana Agenti Intelligenti). " +
+    "Sei l'assistente AI di BERNARDINI S.R.L.. " +
     'Rispondi sempre in italiano, in modo professionale e conciso. ' +
     'Puoi rispondere a saluti e domande conversazionali generiche. ' +
     'Per qualsiasi domanda su dati, documenti, persone, progetti o informazioni specifiche, ' +

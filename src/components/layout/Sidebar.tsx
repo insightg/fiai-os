@@ -73,7 +73,7 @@ export default function Sidebar() {
     >
       <div className="h-[52px] flex items-center px-4 border-b border-border">
         <span className="font-display text-gold text-xl font-bold tracking-wide">
-          {sidebarOpen ? 'FIAI' : 'F'}
+          {sidebarOpen ? 'BERNARDINI' : 'B'}
         </span>
       </div>
 

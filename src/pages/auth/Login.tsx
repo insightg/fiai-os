@@ -25,8 +25,8 @@ export default function Login() {
     <div className="min-h-screen bg-bg flex items-center justify-center px-4">
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
-          <h1 className="font-display text-4xl font-bold text-gold mb-2">FIAI</h1>
-          <p className="text-text2 text-sm">Fabbrica Italiana Agenti Intelligenti</p>
+          <h1 className="font-display text-4xl font-bold text-gold mb-2">BERNARDINI</h1>
+          <p className="text-text2 text-sm">Gestionale Intelligente</p>
         </div>
 
         <div className="bg-bg2 border border-border rounded-xl p-8">
@@ -68,7 +68,7 @@ export default function Login() {
         </div>
 
         <p className="text-center text-text3 text-xs mt-6">
-          FIAI OS &mdash; Powered by AI
+          BERNARDINI &mdash; Powered by AI
         </p>
       </div>
     </div>

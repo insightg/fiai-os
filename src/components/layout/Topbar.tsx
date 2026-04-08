@@ -22,7 +22,7 @@ export default function Topbar() {
           <Menu size={20} />
         </button>
         <span className="font-display text-gold font-bold text-lg tracking-wide">
-          FIAI OS
+          BERNARDINI
         </span>
       </div>
 

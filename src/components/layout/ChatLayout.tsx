@@ -501,7 +501,7 @@ function EmptyState({ onQuickCommand }: { onQuickCommand: (msg: string) => void 
       </div>
       <h2 className="font-display text-2xl font-bold text-text mb-2">Ciao! Come posso aiutarti?</h2>
       <p className="text-text3 text-sm mb-8 max-w-md">
-        Sono l&apos;assistente AI di FIAI. Posso aiutarti a consultare dati aziendali, creare
+        Sono l&apos;assistente di BERNARDINI S.R.L.. Posso aiutarti a consultare dati aziendali, creare
         lead e clienti, e molto altro.
       </p>
       <div className="grid grid-cols-2 gap-3 max-w-lg w-full">
@@ -1371,7 +1371,7 @@ export default function ChatLayout() {
           >
             {sidebarOpen ? <PanelLeftClose size={20} /> : <PanelLeft size={20} />}
           </button>
-          <span className="font-display text-gold font-bold text-lg tracking-wide">FIAI</span>
+          <span className="font-display text-gold font-bold text-lg tracking-wide">BERNARDINI</span>
           <span className="text-text3 text-xs hidden sm:inline">Fabbrica Italiana Agenti Intelligenti</span>
         </div>
 
@@ -1753,7 +1753,7 @@ export default function ChatLayout() {
                 </div>
               </form>
               <p className="text-center text-[10px] text-text3 mt-2">
-                FIAI AI &middot; Le risposte possono contenere errori
+                BERNARDINI AI &middot; Le risposte possono contenere errori
               </p>
             </div>
           </div>
