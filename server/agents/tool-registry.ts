@@ -407,8 +407,8 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
       if (input.display_name) { updates.push('display_name = ?'); values.push(input.display_name); updates.push('slug = ?'); values.push(slugify(input.display_name)) }
       if (input.stato !== undefined) { updates.push('stato = ?'); values.push(input.stato) }
       if (input.tags) { updates.push('tags = ?'); values.push(JSON.stringify(input.tags)) }
-      if (input.email !== undefined && table === 'names') { updates.push('email = ?'); values.push(input.email || null) }
-      if (input.telefono !== undefined && table === 'names') { updates.push('telefono = ?'); values.push(input.telefono || null) }
+      if (input.email !== undefined) { updates.push('email = ?'); values.push(input.email || null) }
+      if (input.telefono !== undefined) { updates.push('telefono = ?'); values.push(input.telefono || null) }
 
       // Merge metadata
       if (input.metadata) {
@@ -1259,7 +1259,13 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
         const res = await fetch('https://openrouter.ai/api/v1/auth/key', { headers: { 'Authorization': `Bearer ${OPENROUTER_API_KEY}` } })
         const data = await res.json()
         const d = data.data ?? {}
-        return { credito_totale: `$${(d.usage ?? 0).toFixed(4)}`, costo_oggi: `$${(d.usage_daily ?? 0).toFixed(4)}`, costo_mese: `$${(d.usage_monthly ?? 0).toFixed(4)}` }
+        return {
+          totale_speso: `$${(d.usage ?? 0).toFixed(2)}`,
+          speso_oggi: `$${(d.usage_daily ?? 0).toFixed(2)}`,
+          speso_questo_mese: `$${(d.usage_monthly ?? 0).toFixed(2)}`,
+          limite: d.limit ? `$${d.limit.toFixed(2)}` : 'Nessun limite',
+          nota: 'Questi sono i COSTI sostenuti, non il credito residuo',
+        }
       } catch { return { errore: 'Non disponibile' } }
     }
 

@@ -7,7 +7,13 @@ interface User { id: string; display_name: string; email: string; ruolo: string;
 interface Group { id: string; name: string; permissions: Record<string, string[]>; members: { id: string; display_name: string; email: string }[] }
 
 const ACTIONS = ['read', 'create', 'update', 'delete', 'send'] as const
-const ENTITY_TYPES = ['organizzazione', 'persona', 'fattura', 'fattura_passiva', 'preventivo', 'ordine', 'progetto', 'documento', 'contratto', 'conto', 'movimento', 'rimborso', 'annuncio', 'evento']
+const ENTITY_TYPES = ['commerciale', 'fattura', 'fattura_passiva', 'preventivo', 'ordine', 'progetto', 'documento', 'contratto', 'conto', 'movimento', 'rimborso', 'annuncio', 'evento']
+
+// commerciale = organizzazione + persona (clienti, lead, fornitori)
+// Nel permission check, 'commerciale' mappa a: organizzazione, persona
+const TYPE_ALIASES: Record<string, string[]> = {
+  'commerciale': ['organizzazione', 'persona'],
+}
 
 function api(path: string, method = 'GET', body?: any) {
   const token = getAuthToken()
@@ -228,12 +234,16 @@ function GroupsTab({ groups, users, onReload }: { groups: Group[]; users: User[]
 
   const togglePerm = async (groupId: string, group: Group, entityType: string, action: string) => {
     const perms = { ...group.permissions }
-    const current = perms[entityType] || []
-    if (current.includes(action)) {
-      perms[entityType] = current.filter(a => a !== action)
-      if (perms[entityType].length === 0) delete perms[entityType]
-    } else {
-      perms[entityType] = [...current, action]
+    // Expand aliases: 'commerciale' → ['organizzazione', 'persona']
+    const realTypes = TYPE_ALIASES[entityType] || [entityType]
+    for (const rt of realTypes) {
+      const current = perms[rt] || []
+      if (current.includes(action)) {
+        perms[rt] = current.filter(a => a !== action)
+        if (perms[rt].length === 0) delete perms[rt]
+      } else {
+        perms[rt] = [...current, action]
+      }
     }
     await api(`/groups/${groupId}`, 'PUT', { permissions: perms })
     onReload()
@@ -332,7 +342,8 @@ function GroupsTab({ groups, users, onReload }: { groups: Group[]; users: User[]
                         <tr key={et} className="border-t border-border">
                           <td className="px-2 py-1.5 text-text font-medium">{et}</td>
                           {ACTIONS.map(a => {
-                            const has = (g.permissions[et] || []).includes(a)
+                            const realTypes = TYPE_ALIASES[et] || [et]
+                            const has = realTypes.some(rt => (g.permissions[rt] || []).includes(a))
                             return (
                               <td key={a} className="px-2 py-1.5 text-center">
                                 <button

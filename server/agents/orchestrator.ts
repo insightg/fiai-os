@@ -478,12 +478,14 @@ export async function orchestrate(
 
   // ── ITERATION mode: reuse last domain ──
   if (responseMode === 'iteration' && sessionId) {
-    const lastDomain = sessionDomainCache.get(sessionId)
+    // Check keywords first — they override session domain if they match
+    const keywordOverride = quickClassifyKeywords(message)
+    const lastDomain = keywordOverride || sessionDomainCache.get(sessionId)
     if (lastDomain && lastDomain !== 'general' && lastDomain !== 'image' && lastDomain !== 'tts') {
       const agent = AGENTS[lastDomain]
       if (agent) {
         const context = buildContext(lastDomain, aziendaId, userId, sessionId)
-        const result = await executeAgent(message, agent, aziendaId, userId, context, format, conversationHistory)
+        const result = await executeAgent(message, agent, aziendaId, userId, context, format, conversationHistory, onProgress, permissions)
         return finalizeResult(result)
       }
     }

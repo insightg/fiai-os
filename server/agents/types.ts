@@ -30,6 +30,16 @@ export class UserPermissions {
     }
   }
 
+  // Type aliases: 'commerciale' covers organizzazione + persona
+  private static TYPE_GROUPS: Record<string, string[]> = {
+    'commerciale': ['organizzazione', 'persona'],
+  }
+  // Reverse: organizzazione → commerciale
+  private static TYPE_PARENTS: Record<string, string> = {
+    'organizzazione': 'commerciale',
+    'persona': 'commerciale',
+  }
+
   can(action: PermAction, entityType?: string): boolean {
     if (this.role === 'admin') return true
 
@@ -37,6 +47,12 @@ export class UserPermissions {
     if (entityType) {
       const typePerms = this.perms.get(entityType)
       if (typePerms) return typePerms.has(action)
+      // Check parent group (organizzazione → commerciale)
+      const parent = UserPermissions.TYPE_PARENTS[entityType]
+      if (parent) {
+        const parentPerms = this.perms.get(parent)
+        if (parentPerms) return parentPerms.has(action)
+      }
     }
 
     // Fallback to wildcard
