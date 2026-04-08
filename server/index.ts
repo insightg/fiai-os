@@ -16,6 +16,7 @@ import signalsRouter from './signals.js'
 import pdfRouter from './pdf.js'
 import { startWhatsApp, whatsappRouter } from './whatsapp.js'
 import chatRouter from './agents/index.js'
+import adminRouter from './admin.js'
 import { startJobWorker } from './jobs.js'
 import { initEmbeddings } from './embeddings.js'
 import { initAutonomousAgents } from './agents/autonomous.js'
@@ -32,19 +33,14 @@ if (fs.existsSync(migrationPath)) {
 // Add tts_voice column if missing
 try { db.exec("ALTER TABLE user_profiles ADD COLUMN tts_voice TEXT DEFAULT 'Vivian'") } catch {}
 
-// Fix FTS triggers: use UPDATE OF to avoid firing on embedding updates
+// FTS triggers: only INSERT triggers (standalone FTS5 can't do delete/update safely)
 try {
   db.exec("DROP TRIGGER IF EXISTS chunk_fts_au")
+  db.exec("DROP TRIGGER IF EXISTS chunk_fts_ad")
   db.exec("DROP TRIGGER IF EXISTS entity_fts_au")
-  db.exec(`CREATE TRIGGER chunk_fts_au AFTER UPDATE OF body, display_name ON entity WHEN OLD.type = 'chunk' BEGIN
-    INSERT INTO chunk_fts(chunk_fts, rowid, body, display_name) VALUES ('delete', OLD.rowid, OLD.body, OLD.display_name);
-    INSERT INTO chunk_fts(rowid, body, display_name) VALUES (NEW.rowid, NEW.body, NEW.display_name);
-  END`)
-  db.exec(`CREATE TRIGGER entity_fts_au AFTER UPDATE OF display_name, type, metadata ON entity BEGIN
-    INSERT INTO entity_fts(entity_fts, rowid, display_name, type, metadata) VALUES ('delete', OLD.rowid, OLD.display_name, OLD.type, OLD.metadata);
-    INSERT INTO entity_fts(rowid, display_name, type, metadata) VALUES (NEW.rowid, NEW.display_name, NEW.type, NEW.metadata);
-  END`)
-  console.log('FTS triggers fixed (UPDATE OF filter).')
+  db.exec("DROP TRIGGER IF EXISTS entity_fts_ad")
+  // Keep only INSERT triggers — they're created in init-sqlite.sql
+  console.log('FTS triggers cleaned (INSERT only).')
 } catch {}
 
 // Create vec0 vector index for semantic chunk search (sqlite-vec)
@@ -104,6 +100,7 @@ app.use('/api/signals', signalsRouter)
 app.use('/api/pdf', pdfRouter)
 app.use('/api/whatsapp', whatsappRouter)
 app.use('/api/chat', chatRouter)
+app.use('/api/admin', adminRouter)
 
 // Health check
 app.get('/api/health', (_req, res) => {

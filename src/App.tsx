@@ -5,6 +5,7 @@ import Layout from './components/layout/Layout'
 import ChatLayout from './components/layout/ChatLayout'
 import Login from './pages/auth/Login'
 import Impostazioni from './pages/impostazioni/Impostazioni'
+import AdminPage from './pages/admin/Admin'
 import Progetti from './pages/progetti/Progetti'
 import ProgettoDetail from './pages/progetti/ProgettoDetail'
 import Dashboard from './pages/dashboard/Dashboard'
@@ -93,6 +94,9 @@ export default function App() {
           </AuthGuard>
         }
       />
+
+      {/* Admin */}
+      <Route path="/app/admin" element={<AuthGuard><AdminPage /></AuthGuard>} />
 
       {/* App Layout — gestionale pages */}
       <Route

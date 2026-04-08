@@ -1,4 +1,4 @@
-import type { AgentConfig, AgentResult, ToolDefinition } from './types.js'
+import type { AgentConfig, AgentResult, ToolDefinition, UserPermissions } from './types.js'
 import { TOOL_DEFINITIONS, executeTool } from './tool-registry.js'
 import db from '../db.js'
 
@@ -69,7 +69,8 @@ export async function executeAgent(
   context: string,
   format: 'web' | 'whatsapp',
   conversationHistory?: ConversationMessage[],
-  onProgress?: ProgressCallback
+  onProgress?: ProgressCallback,
+  permissions?: UserPermissions
 ): Promise<AgentResult> {
   // Build tools from agent config
   const tools = agent.toolNames
@@ -79,8 +80,8 @@ export async function executeAgent(
   // Build system prompt with context
   let systemPrompt = agent.systemPrompt +
     '\n\nREGOLE FONDAMENTALI:' +
-    '\n1. FONTI: Rispondi in base ai dati presenti nel sistema (names, entity, documenti caricati). NON inventare dati, NON usare conoscenze esterne a meno che l\'utente non lo chieda. Puoi e DEVI analizzare QUALSIASI documento presente nell\'archivio, indipendentemente dal suo contenuto (legale, religioso, letterario, tecnico, etc.) — se è nel sistema, è tua competenza.' +
-    '\n2. Se NON trovi l\'informazione nei dati del sistema, dillo chiaramente: "Non ho trovato questa informazione nell\'archivio." NON inventare contenuti, NON suggerire siti web, NON fornire informazioni da fonti esterne. Se pensi che una ricerca web possa aiutare, chiedi: "Vuoi che cerchi sul web?" — ma non farlo autonomamente e non suggerire URL specifici.' +
+    '\n1. CERCA PRIMA, RISPONDI DOPO: usa SEMPRE i tool per cercare prima di rispondere. Per dati interni: find, retrieve, execute_code. Per informazioni dal web: web_search. Se l\'utente chiede "cerca sul web/online/internet" o informazioni che non possono essere nel sistema (es. elenchi aziende, notizie, informazioni generali), USA web_search. Basa la risposta sui risultati dei tool.' +
+    '\n2. DIVIETO DI ALLUCINAZIONE: non aggiungere fatti non presenti nei risultati dei tool. Se non trovi nulla: "Non ho trovato questa informazione." In caso di dubbio, non scriverlo.' +
     '\n3. Quando citi dati o testi da documenti, riporta il testo LETTERALMENTE come trovato nel sistema — non riformulare, non parafrasare, non interpretare. Usa virgolette e indica la fonte esatta (nome documento, articolo, sezione).' +
     '\n4. I risultati dei tool vengono visualizzati AUTOMATICAMENTE come card nella chat. NON ripetere i dati in tabelle o liste markdown — sono già visibili. Il tuo compito è SOLO aggiungere commenti, analisi, contesto o suggerire prossimi passi. Mai duplicare dati già mostrati.' +
     '\n5. EXECUTE_CODE FIRST: per operazioni che richiedono piu\' di 1 tool call (cercare + elaborare + agire), usa execute_code per fare tutto in un unico script. Questo e\' PIU\' VELOCE di chiamare tool uno alla volta. Esempio: invece di chiamare find, poi find, poi send_whatsapp — scrivi uno script che fa tutto insieme. Le funzioni disponibili nello script: find, create, update, delete_record, relate, get_tree, retrieve, list_documents, get_datetime, date_diff, generate_pdf, render_view. Per azioni WhatsApp nello script: send_whatsapp_message, send_whatsapp_voice, send_whatsapp_image. Usa print() per l\'output.' +
@@ -155,7 +156,7 @@ export async function executeAgent(
         // Stream progress: tool starting
         onProgress?.({ type: 'tool_start', tool: tc.function.name })
 
-        const result = await executeTool(tc.function.name, aziendaId, fnArgs)
+        const result = await executeTool(tc.function.name, aziendaId, fnArgs, permissions)
         allToolCalls.push({ tool: tc.function.name, result })
 
         // After execute_code, force the agent to synthesize — no more tool calls
@@ -238,7 +239,9 @@ export async function directLLMResponse(
   let systemPrompt =
     "Sei l'assistente AI di FIAI (Fabbrica Italiana Agenti Intelligenti). " +
     'Rispondi sempre in italiano, in modo professionale e conciso. ' +
-    'Non hai accesso a tool in questo momento, rispondi con le tue conoscenze generali.'
+    'Puoi rispondere a saluti e domande conversazionali generiche. ' +
+    'Per qualsiasi domanda su dati, documenti, persone, progetti o informazioni specifiche, ' +
+    'rispondi: "Fammi cercare nel sistema" — NON rispondere con conoscenze tue.'
 
   if (context) {
     systemPrompt += '\n\n' + context

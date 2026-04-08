@@ -638,6 +638,7 @@ export default function ChatLayout() {
     editNome?: string
     editAutore?: string
     editCategoria?: string
+    editChunkStrategy?: string
     newCategoria?: string
     newCategoriaDesc?: string
     suggestingDesc?: boolean
@@ -1855,6 +1856,28 @@ export default function ChatLayout() {
                       </select>
                     </div>
 
+                    {/* Chunk strategy — only for documents */}
+                    {!['foto', 'audio'].includes(smartUpload.result.entity_type) && (
+                      <div className="flex items-center gap-2">
+                        <span className="text-text3 shrink-0 w-16">Chunking:</span>
+                        <select
+                          value={smartUpload.editChunkStrategy ?? smartUpload.result.chunk_strategy ?? 'auto'}
+                          onChange={(e) => setSmartUpload(prev => prev ? { ...prev, editChunkStrategy: e.target.value } : null)}
+                          className="flex-1 px-2 py-1 text-xs bg-bg2 border border-border rounded text-text focus:outline-none focus:border-gold/40"
+                        >
+                          <option value="auto">Auto (rilevamento automatico)</option>
+                          <option value="by_article">Per articolo (leggi, codici)</option>
+                          <option value="by_chapter">Per capitolo (libri, testi sacri)</option>
+                          <option value="by_section">Per sezione (contratti, manuali)</option>
+                          <option value="by_paragraph">Per paragrafo (narrativa, saggi)</option>
+                          <option value="by_page">Per pagina (report, presentazioni)</option>
+                          <option value="by_verse">Per verso (poesia, salmi)</option>
+                          <option value="by_heading">Per heading (documentazione tecnica)</option>
+                          <option value="none">Non dividere</option>
+                        </select>
+                      </div>
+                    )}
+
                     {/* New category form */}
                     {(smartUpload.editCategoria === '__new__' || smartUpload.newCategoria !== undefined) && (
                       <div className="space-y-2 bg-bg3/50 rounded-lg p-2.5 border border-border">
@@ -1974,7 +1997,8 @@ export default function ChatLayout() {
                         const { confirmUpload } = await import('../../lib/upload')
                         const finalNome = smartUpload.editNome || r.display_name
                         const finalAutore = smartUpload.editAutore || (r.extracted_data as any)?.autore || undefined
-                        await confirmUpload(r.upload_id, finalCat, finalNome, finalAutore)
+                        const finalChunkStrategy = smartUpload.editChunkStrategy || r.chunk_strategy || undefined
+                        await confirmUpload(r.upload_id, finalCat, finalNome, finalAutore, finalChunkStrategy)
                         toast.success(`"${r.display_name}" — catalogazione in corso`)
                       } catch (err: any) {
                         toast.error(err.message || 'Errore nella conferma')

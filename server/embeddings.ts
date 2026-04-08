@@ -170,6 +170,58 @@ export async function embedBatch(aziendaId: string, limit = 50): Promise<number>
   return embedded
 }
 
+// ── Parallel batch embedding ─────────────────────────────
+
+export async function embedBatchParallel(aziendaId: string, total: number, concurrency = 20): Promise<number> {
+  const skipTypes = ['chat_message', 'chat_session', 'agent_log', 'job', 'workflow_log',
+    'category_template', 'skill', 'agent_memory', 'board', 'board_column']
+
+  let embedded = 0
+  let processed = 0
+
+  while (processed < total + 100) {  // safety margin
+    const rows = db.prepare(
+      `SELECT id, type, display_name, body, email, tags, categoria, metadata
+       FROM entity
+       WHERE azienda_id = ? AND embedding IS NULL
+         AND type NOT IN (${skipTypes.map(() => '?').join(',')})
+       LIMIT ?`
+    ).all(aziendaId, ...skipTypes, concurrency * 2) as any[]
+
+    if (rows.length === 0) break
+
+    // Process in parallel batches
+    const batch = rows.slice(0, concurrency)
+    const results = await Promise.allSettled(
+      batch.map(async (row) => {
+        const text = buildEmbeddingText(row)
+        if (text.length < 5) return false
+
+        const embedding = await getEmbedding(text)
+        if (embedding.length === 0) return false
+
+        const buffer = Buffer.from(new Float32Array(embedding).buffer)
+        db.prepare('UPDATE entity SET embedding = ? WHERE id = ?').run(buffer, row.id)
+        if (row.type === 'chunk') {
+          try { db.prepare('INSERT OR REPLACE INTO chunk_vec(chunk_id, embedding) VALUES (?, ?)').run(row.id, buffer) } catch {}
+        }
+        return true
+      })
+    )
+
+    const batchEmbedded = results.filter(r => r.status === 'fulfilled' && r.value === true).length
+    embedded += batchEmbedded
+    processed += batch.length
+
+    if (processed % 100 === 0 || rows.length < concurrency) {
+      console.log(`[Embedding] Progress: ${embedded}/${processed} embedded (${concurrency} parallel)`)
+    }
+  }
+
+  console.log(`[Embedding] Parallel batch complete: ${embedded} embedded total`)
+  return embedded
+}
+
 // ── Cosine similarity search ─────────────────────────────
 
 export async function semanticSearch(
@@ -279,19 +331,13 @@ function cosineSimilarity(a: number[], b: number[]): number {
 export function initEmbeddings(): void {
   // Job handler for batch embedding
   registerJobHandler('generate_embeddings', async (_params, _jobId, aziendaId) => {
-    // Embed in batches of 100 — handles chunks too
-    let total = 0
-    for (let i = 0; i < 100; i++) {  // max 100 rounds × 100 = 10000 entities
-      const count = await embedBatch(aziendaId, 100)
-      total += count
-      if (count < 100) break  // no more unembedded entities
-    }
+    const total = await embedBatchParallel(aziendaId, 10000, 20)
     return { embedded: total }
   })
 
   // Job handler for processing a confirmed document (chunk + tag + embed)
   registerJobHandler('process_document', async (params, _jobId, aziendaId) => {
-    const { entityId, fileName } = params
+    const { entityId, fileName, chunk_strategy } = params
     if (!entityId) return { error: 'Missing entityId' }
 
     const { chunkDocument } = await import('./chunker.js')
@@ -332,7 +378,7 @@ export function initEmbeddings(): void {
     if (!extractedText) return { error: 'No text available' }
 
     // 1. Chunk the document
-    const chunks = chunkDocument(extractedText, entity.type, fileName)
+    const chunks = chunkDocument(extractedText, entity.type, fileName, chunk_strategy)
     const isChunked = chunks.length > 0
 
     if (isChunked) {
@@ -379,10 +425,10 @@ export function initEmbeddings(): void {
       console.log(`[ProcessDoc] Tagged ${tagged} chunks`)
     }
 
-    // 3. Embed chunks (batch)
+    // 3. Embed chunks — parallel batches for speed
     if (isChunked) {
-      const count = await embedBatch(aziendaId, chunks.length)
-      console.log(`[ProcessDoc] Embedded ${count} chunks`)
+      const total = await embedBatchParallel(aziendaId, chunks.length)
+      console.log(`[ProcessDoc] Embedded ${total} chunks`)
     } else {
       await embedEntity(entityId)
     }

@@ -62,6 +62,7 @@ export interface SmartUploadResult {
   suggested_name: string | null
   file_size: number
   page_count?: number
+  chunk_strategy?: string
   // Set after confirmation
   entity_id?: string
 }
@@ -89,7 +90,7 @@ export async function uploadSmart(file: File, mode: 'full' | 'compact' | 'none' 
   return res.json()
 }
 
-export async function confirmUpload(uploadId: string, categoria?: string, displayName?: string, autore?: string): Promise<{ entity_id: string; status: string }> {
+export async function confirmUpload(uploadId: string, categoria?: string, displayName?: string, autore?: string, chunkStrategy?: string): Promise<{ entity_id: string; status: string }> {
   const token = getAuthToken()
   const res = await fetch('/api/upload/confirm', {
     method: 'POST',
@@ -97,7 +98,7 @@ export async function confirmUpload(uploadId: string, categoria?: string, displa
       'Content-Type': 'application/json',
       ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
     },
-    body: JSON.stringify({ upload_id: uploadId, categoria, display_name: displayName, autore }),
+    body: JSON.stringify({ upload_id: uploadId, categoria, display_name: displayName, autore, chunk_strategy: chunkStrategy }),
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: 'Conferma fallita' }))

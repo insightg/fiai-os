@@ -31,7 +31,7 @@ interface ChunkTemplate {
     content_patterns?: RegExp[]
   }
   split: {
-    primary: RegExp | 'paragraph' | 'heading' | 'none'
+    primary: RegExp | 'paragraph' | 'heading' | 'page' | 'none'
     min_chunk_size: number
     max_chunk_size: number
     overlap: number
@@ -135,6 +135,29 @@ const TEMPLATES: ChunkTemplate[] = [
     },
   },
 
+  // ── Versetti (Bibbia, testi sacri con numerazione) ──
+  {
+    id: 'versetto',
+    name: 'Per versetto',
+    match: {
+      // Don't auto-match — only used when explicitly selected via by_verse strategy
+    },
+    split: {
+      // Split on verse numbers: "1 In principio", "15 E il Signore"
+      // Matches a number at start of line followed by text
+      primary: /(?:^|\n)\s*(\d{1,3})\s+(?=[A-ZÀ-Ü])/m,
+      min_chunk_size: 30,
+      max_chunk_size: 1500,
+      overlap: 0,
+    },
+    heading: {
+      levels: [
+        { pattern: /(Genesi|Esodo|Levitico|Numeri|Deuteronomio|Giosuè|Giudici|Rut|Samuele|Re|Cronache|Esdra|Neemia|Tobia|Giuditta|Ester|Maccabei|Giobbe|Salm[oi]|Proverbi|Qoelet|Cantico|Sapienza|Siracide|Isaia|Geremia|Lamentazioni|Baruc|Ezechiele|Daniele|Osea|Gioele|Amos|Abdia|Giona|Michea|Naum|Abacuc|Sofonia|Aggeo|Zaccaria|Malachia|Matteo|Marco|Luca|Giovanni|Atti|Romani|Corinzi|Galati|Efesini|Filippesi|Colossesi|Tessalonicesi|Timoteo|Tito|Filemone|Ebrei|Giacomo|Pietro|Giuda|Apocalisse)[^\n]*/i, name: '' },
+        { pattern: /(?:Capitolo|Cap\.)\s+(\d+)/i, name: 'Cap.' },
+      ],
+    },
+  },
+
   // ── Narrativa (romanzi) ──
   {
     id: 'narrativa',
@@ -215,18 +238,80 @@ const GENERIC_TEMPLATE: ChunkTemplate = {
   heading: { levels: [] },
 }
 
+// ── Page template ───────────────────────────────────────
+
+const PAGE_TEMPLATE: ChunkTemplate = {
+  id: 'pagina',
+  name: 'Per pagina',
+  match: {},
+  split: { primary: 'page', min_chunk_size: 50, max_chunk_size: 5000, overlap: 0 },
+  heading: { levels: [] },
+}
+
+// ── Strategy → Template mapping ─────────────────────────
+
+function getTemplateForStrategy(strategy: string): ChunkTemplate {
+  const map: Record<string, string> = {
+    'by_article': 'legge_it',
+    'by_chapter': 'libro_sacro',
+    'by_section': 'contratto',
+    'by_verse': 'versetto',
+    'by_heading': 'manuale',
+  }
+  if (strategy === 'by_page') return PAGE_TEMPLATE
+  if (strategy === 'by_paragraph') return GENERIC_TEMPLATE
+  if (strategy === 'none') return { ...GENERIC_TEMPLATE, split: { ...GENERIC_TEMPLATE.split, primary: 'none' } }
+  const templateId = map[strategy]
+  if (templateId) {
+    const found = TEMPLATES.find(t => t.id === templateId)
+    if (found) return found
+  }
+  return GENERIC_TEMPLATE
+}
+
+// ── Page chunker ────────────────────────────────────────
+
+function chunkByPage(text: string): ChunkResult[] {
+  const pages = text.split(/\f/).filter(p => p.trim().length > 0)
+  if (pages.length <= 1) return []
+
+  let offset = 0
+  return pages.map((pageContent, i) => {
+    const start = offset
+    offset += pageContent.length + 1 // +1 for \f
+    return {
+      display_name: `Pagina ${i + 1}`,
+      content: pageContent.trim(),
+      chunk_index: i,
+      heading_path: `Pagina ${i + 1}`,
+      char_offset_start: start,
+      char_offset_end: start + pageContent.length,
+    }
+  })
+}
+
 // ── Main Chunker ─────────────────────────────────────────
 
-export function chunkDocument(text: string, entityType: string, filename: string): ChunkResult[] {
-  if (text.length < 10000) return [] // Too short to chunk
+export function chunkDocument(text: string, entityType: string, filename: string, strategy?: string): ChunkResult[] {
+  // Select template: explicit strategy or auto-detect
+  let template: ChunkTemplate
 
-  // Find matching template
-  const template = findTemplate(text, entityType)
+  if (strategy && strategy !== 'auto') {
+    if (strategy === 'none') return []
+    template = getTemplateForStrategy(strategy)
+    console.log(`[Chunker] Using strategy "${strategy}" → template "${template.id}"`)
+  } else {
+    if (text.length < 10000) return [] // Too short for auto-chunk
+    template = findTemplate(text, entityType)
+    console.log(`[Chunker] Auto-detected template "${template.id}"`)
+  }
 
   let chunks: ChunkResult[]
 
   if (template.split.primary === 'none') {
-    return [] // Template says don't chunk (e.g., fattura)
+    return []
+  } else if (template.split.primary === 'page') {
+    chunks = chunkByPage(text)
   } else if (template.split.primary === 'paragraph') {
     chunks = chunkByParagraph(text, template)
   } else if (template.split.primary === 'heading') {

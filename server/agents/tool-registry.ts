@@ -236,14 +236,64 @@ export const TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
   execute_code: { type: 'function', function: { name: 'execute_code', description: 'Esegui codice JavaScript per operazioni complesse: loop su molti record, aggregazioni, filtri condizionali, batch operations. Il codice ha accesso ai tool FIAI come funzioni async: find(params), create(params), update(params), delete_record(params), relate(params), get_tree(params), retrieve(params), list_documents(), get_datetime(), date_diff(params), generate_pdf(params). Usa print() per output. Solo l\'output finale torna nel contesto — i risultati intermedi non consumano token. QUANDO USARE: operazioni su >3 record (es. "controlla tutte le fatture scadute"), aggregazioni (es. "totale fatturato per cliente"), batch updates, confronti multipli.', parameters: { type: 'object', properties: {
     code: { type: 'string', description: 'Codice JavaScript con await per tool async. Es: const clients = await find({tags:["cliente"]}); print(`${clients.length} clienti trovati`)' },
   }, required: ['code'] } } },
+
+  // ── Web Search (via LLM con browsing) ──
+  web_search: { type: 'function', function: { name: 'web_search', description: 'Cerca informazioni sul web. Usa quando l\'utente chiede esplicitamente di cercare online, o quando i dati non sono nel sistema. Restituisce risultati dal web con fonti.', parameters: { type: 'object', properties: {
+    query: { type: 'string', description: 'Cosa cercare sul web' },
+  }, required: ['query'] } } },
+
+  // ── Permission management tools ──
+  create_group: { type: 'function', function: { name: 'create_group', description: 'Crea un gruppo con permessi specifici per tipo di entity', parameters: { type: 'object', properties: {
+    name: { type: 'string', description: 'Nome del gruppo (es. "Team Commerciale")' },
+    permissions: { type: 'object', description: 'Permessi per tipo entity: {"organizzazione": ["read","create","update"], "fattura": ["read"]}. Azioni: read, create, update, delete, send' },
+  }, required: ['name', 'permissions'] } } },
+
+  add_to_group: { type: 'function', function: { name: 'add_to_group', description: 'Aggiunge un utente a un gruppo', parameters: { type: 'object', properties: {
+    user_id: { type: 'string', description: 'ID utente' },
+    group_id: { type: 'string', description: 'ID gruppo' },
+  }, required: ['user_id', 'group_id'] } } },
+
+  remove_from_group: { type: 'function', function: { name: 'remove_from_group', description: 'Rimuove un utente da un gruppo', parameters: { type: 'object', properties: {
+    user_id: { type: 'string', description: 'ID utente' },
+    group_id: { type: 'string', description: 'ID gruppo' },
+  }, required: ['user_id', 'group_id'] } } },
+
+  list_groups: { type: 'function', function: { name: 'list_groups', description: 'Lista gruppi con membri e permessi', parameters: { type: 'object', properties: {} } } },
+
+  set_user_role: { type: 'function', function: { name: 'set_user_role', description: 'Cambia il ruolo di un utente (admin, collaboratore, viewer)', parameters: { type: 'object', properties: {
+    user_id: { type: 'string', description: 'ID utente' },
+    role: { type: 'string', enum: ['admin', 'collaboratore', 'viewer'], description: 'Nuovo ruolo' },
+  }, required: ['user_id', 'role'] } } },
 }
 
 // ══════════════════════════════════════════════════════════
 // TOOL EXECUTORS
 // ══════════════════════════════════════════════════════════
 
-export async function executeTool(name: string, aziendaId: string, args?: Record<string, unknown>): Promise<unknown> {
+// Tool → required permission action
+const TOOL_ACTIONS: Record<string, string> = {
+  find: 'read', search: 'read', get_tree: 'read', retrieve: 'read',
+  list_documents: 'read', explore_document: 'read', get_datetime: 'read',
+  date_diff: 'read', get_api_costs: 'read', get_whatsapp_status: 'read',
+  get_jobs: 'read', list_autonomous_agents: 'read', list_workflows: 'read',
+  list_skills: 'read', get_agent_logs: 'read',
+  create: 'create', relate: 'create', create_job: 'create',
+  create_autonomous_agent: 'create', create_workflow: 'create',
+  update: 'update', update_skill: 'update',
+  delete_record: 'delete', delete_autonomous_agent: 'delete',
+  send_whatsapp_message: 'send', send_whatsapp_voice: 'send',
+  send_whatsapp_image: 'send', send_whatsapp_document: 'send',
+  send_whatsapp_video: 'send',
+}
+
+export async function executeTool(name: string, aziendaId: string, args?: Record<string, unknown>, permissions?: import('./types.js').UserPermissions): Promise<unknown> {
   const input = (args || {}) as any
+
+  // Permission check
+  const requiredAction = TOOL_ACTIONS[name]
+  if (requiredAction && permissions && !permissions.can(requiredAction as any, input.type || input.table)) {
+    return { errore: `Permesso negato: non puoi eseguire "${name}" (richiede ${requiredAction})` }
+  }
 
   switch (name) {
 
@@ -378,11 +428,20 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
     // ── DELETE ──
     case 'delete_record': {
       if (!input.id) return { errore: 'id obbligatorio' }
-      const target = db.prepare('SELECT display_name FROM entity WHERE id = ? AND azienda_id = ?').get(input.id, aziendaId) as any
+      const target = db.prepare('SELECT display_name, type FROM entity WHERE id = ? AND azienda_id = ?').get(input.id, aziendaId) as any
       if (!target) return { errore: 'Record non trovato' }
+      // Delete children first (chunks, sub-entities) — CASCADE should handle it but be explicit
+      const children = db.prepare('DELETE FROM entity WHERE parent_id = ?').run(input.id)
+      // Delete vec0 entries for chunks
+      try { db.prepare('DELETE FROM chunk_vec WHERE chunk_id IN (SELECT id FROM entity WHERE parent_id = ?)').run(input.id) } catch {}
+      // Delete the record itself
       db.prepare('DELETE FROM entity WHERE id = ? AND azienda_id = ?').run(input.id, aziendaId)
+      // Clean relations
       db.prepare("DELETE FROM relations WHERE from_id = ? OR to_id = ?").run(input.id, input.id)
-      return { successo: true, messaggio: `"${target.display_name}" eliminato` }
+      const msg = children.changes > 0
+        ? `"${target.display_name}" eliminato con ${children.changes} elementi collegati`
+        : `"${target.display_name}" eliminato`
+      return { successo: true, messaggio: msg }
     }
 
     // ── RELATE ──
@@ -879,7 +938,11 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
     // ── AGENTIC RAG RETRIEVE ──
     case 'retrieve': {
       const limit = Math.min(input.limit as number || 5, 10)
-      const query = input.query as string
+      // Truncate query to max 3 significant words — long queries cause FTS5 AND to return 0
+      const rawQuery = input.query as string
+      const queryWords = rawQuery.split(/\s+/).filter((w: string) => w.length > 2)
+      const query = queryWords.length > 3 ? queryWords.slice(0, 3).join(' ') : rawQuery
+      if (query !== rawQuery) console.log(`[Retrieve] Query truncated: "${rawQuery.substring(0, 40)}" → "${query}"`)
       const allChunks = new Map<string, any>()
 
       const ftsSearch = (q: string) => {
@@ -1377,6 +1440,101 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
       } catch (err: any) {
         return { errore: `Code execution failed: ${err.message}` }
       }
+    }
+
+    // ── WEB SEARCH (via LLM con browsing) ──
+    case 'web_search': {
+      if (!input.query) return { errore: 'query obbligatoria' }
+      try {
+        const query = input.query as string
+        const res = await fetch(OPENROUTER_API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENROUTER_API_KEY}` },
+          body: JSON.stringify({
+            model: 'perplexity/sonar',
+            messages: [
+              { role: 'system', content: 'Rispondi in italiano. Cerca informazioni aggiornate sul web. Includi le fonti (URL) alla fine della risposta. Sii preciso e conciso.' },
+              { role: 'user', content: query },
+            ],
+            max_tokens: 1500,
+          }),
+        })
+        if (!res.ok) {
+          // Fallback to Gemini Flash
+          const res2 = await fetch(OPENROUTER_API_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENROUTER_API_KEY}` },
+            body: JSON.stringify({
+              model: 'google/gemini-2.0-flash-001',
+              messages: [
+                { role: 'system', content: 'Rispondi in italiano. Cerca informazioni aggiornate. Includi le fonti alla fine.' },
+                { role: 'user', content: query },
+              ],
+              max_tokens: 1500,
+            }),
+          })
+          const data2 = await res2.json()
+          return { risultato: data2.choices?.[0]?.message?.content || 'Nessun risultato', fonte: 'gemini' }
+        }
+        const data = await res.json()
+        const text = data.choices?.[0]?.message?.content || ''
+        const citations = data.citations || []
+        return { risultato: text, fonti: citations, fonte: 'perplexity' }
+      } catch (err: any) {
+        return { errore: `Ricerca web fallita: ${err.message}` }
+      }
+    }
+
+    // ── PERMISSION MANAGEMENT ──
+    case 'create_group': {
+      if (!input.name) return { errore: 'name obbligatorio' }
+      const groupId = crypto.randomUUID()
+      const slug = input.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').substring(0, 80)
+      db.prepare(`INSERT INTO entity (id, azienda_id, type, display_name, slug, metadata, path)
+        VALUES (?, ?, 'gruppo', ?, ?, ?, ?)`).run(
+        groupId, aziendaId, input.name, slug,
+        JSON.stringify({ permissions: input.permissions || {} }),
+        `/entity/gruppo/${slug}`
+      )
+      return { successo: true, id: groupId, messaggio: `Gruppo "${input.name}" creato` }
+    }
+
+    case 'add_to_group': {
+      if (!input.user_id || !input.group_id) return { errore: 'user_id e group_id obbligatori' }
+      db.prepare(`INSERT OR IGNORE INTO relations (id, azienda_id, from_id, to_id, tipo)
+        VALUES (?, ?, ?, ?, 'membro_di_gruppo')`).run(
+        crypto.randomUUID(), aziendaId, input.user_id, input.group_id
+      )
+      return { successo: true, messaggio: 'Utente aggiunto al gruppo' }
+    }
+
+    case 'remove_from_group': {
+      if (!input.user_id || !input.group_id) return { errore: 'user_id e group_id obbligatori' }
+      db.prepare("DELETE FROM relations WHERE from_id = ? AND to_id = ? AND tipo = 'membro_di_gruppo'").run(input.user_id, input.group_id)
+      return { successo: true, messaggio: 'Utente rimosso dal gruppo' }
+    }
+
+    case 'list_groups': {
+      const groups = db.prepare("SELECT id, display_name, metadata FROM entity WHERE type = 'gruppo' AND azienda_id = ?").all(aziendaId) as any[]
+      return groups.map(g => {
+        const meta = typeof g.metadata === 'string' ? JSON.parse(g.metadata) : (g.metadata || {})
+        const members = db.prepare("SELECT e.display_name, e.email FROM relations r JOIN entity e ON e.id = r.from_id WHERE r.to_id = ? AND r.tipo = 'membro_di_gruppo'").all(g.id) as any[]
+        return { id: g.id, nome: g.display_name, permessi: meta.permissions || {}, membri: members }
+      })
+    }
+
+    case 'set_user_role': {
+      if (!input.user_id || !input.role) return { errore: 'user_id e role obbligatori' }
+      if (!['admin', 'collaboratore', 'viewer'].includes(input.role as string)) return { errore: 'Ruolo non valido' }
+      const user = db.prepare("SELECT metadata, tags FROM entity WHERE id = ? AND type = 'utente'").get(input.user_id) as any
+      if (!user) return { errore: 'Utente non trovato' }
+      const meta = typeof user.metadata === 'string' ? JSON.parse(user.metadata) : (user.metadata || {})
+      meta.ruolo = input.role
+      let tags = typeof user.tags === 'string' ? JSON.parse(user.tags) : (user.tags || [])
+      if (input.role === 'admin' && !tags.includes('admin')) tags.push('admin')
+      if (input.role !== 'admin') tags = tags.filter((t: string) => t !== 'admin')
+      db.prepare("UPDATE entity SET metadata = ?, tags = ? WHERE id = ?").run(JSON.stringify(meta), JSON.stringify(tags), input.user_id)
+      return { successo: true, messaggio: `Ruolo utente cambiato a "${input.role}"` }
     }
 
     default:

@@ -382,7 +382,8 @@ Rispondi con questo JSON:
     "telefono": "telefono se presente",
     "nome_persona": "nome persona se CV/contatto",
     "autore": "autore del documento se identificabile (es. nome scrittore, legislatore, ente)"
-  }
+  },
+  "chunk_strategy": "by_article|by_chapter|by_section|by_paragraph|by_page|by_verse|by_heading|none"
 }
 
 REGOLE:
@@ -394,7 +395,16 @@ REGOLE:
 - entity_type "foto" se è un'immagine senza testo significativo
 - entity_type "documento" per tutto il resto
 - In extracted_data metti SOLO i campi che riesci a estrarre dal contenuto
-- suggested_name: la persona o azienda PIU' rilevante nel documento`
+- suggested_name: la persona o azienda PIU' rilevante nel documento
+- chunk_strategy: come dividere il documento in sezioni ricercabili:
+  "by_article" se è una legge/codice con articoli numerati (Art. 1, Art. 2...)
+  "by_chapter" se è un libro/romanzo con capitoli (Capitolo 1, Cap. I...)
+  "by_section" se è un contratto/manuale con sezioni numerate (1. Premesse, 2. Oggetto...)
+  "by_paragraph" se è narrativa/saggio/testo continuo
+  "by_page" se è un report/presentazione/documento misto senza struttura chiara
+  "by_verse" se è un testo sacro/religioso con versetti numerati (Bibbia, Corano, etc.) o poesia con versi/canti
+  "by_heading" se è documentazione tecnica con heading markdown (#, ##)
+  "none" se è un documento breve (<5 pagine), immagine, o non necessita divisione`
 
     const messages: OpenRouterMessage[] = isImage
       ? [{ role: 'user', content: [

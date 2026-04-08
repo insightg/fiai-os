@@ -328,12 +328,13 @@ router.post('/smart', authMiddleware(true), upload.single('file'), async (req: A
         pageCount = parsed.numpages || 0
 
         if (analysisMode === 'compact' && pageCount > 10) {
-          // Sample pages: take ~5 evenly distributed pages for AI classification
+          // Sample pages: first 5 (for TOC/index) + distributed samples
           const pages = fullText.split(/\f/) // form feed = page break in pdf-parse
           if (pages.length > 5) {
-            const sampleIndices = [0, Math.floor(pages.length * 0.25), Math.floor(pages.length * 0.5), Math.floor(pages.length * 0.75), pages.length - 1]
+            const tocPages = [0, 1, 2, 3, 4].filter(i => i < pages.length)
+            const distPages = [Math.floor(pages.length * 0.25), Math.floor(pages.length * 0.5), Math.floor(pages.length * 0.75), pages.length - 1]
+            const sampleIndices = [...new Set([...tocPages, ...distPages])].sort((a, b) => a - b)
             const samples = sampleIndices.map(i => pages[Math.min(i, pages.length - 1)])
-            // extractedText for AI analysis = sampled pages only
             extractedText = samples.join('\n\n--- [pagina campione] ---\n\n')
           } else {
             extractedText = fullText
@@ -475,6 +476,7 @@ router.post('/smart', authMiddleware(true), upload.single('file'), async (req: A
       suggested_name: analysis.suggested_name,
       file_size: fileSize,
       page_count: pageCount || undefined,
+      chunk_strategy: analysis.chunk_strategy || undefined,
     })
   } catch (err: any) {
     console.error('Smart upload error:', err)
@@ -488,7 +490,7 @@ router.post('/smart', authMiddleware(true), upload.single('file'), async (req: A
 
 router.post('/confirm', authMiddleware(true), async (req: AuthRequest, res: Response) => {
   try {
-    const { upload_id, categoria, display_name, autore } = req.body
+    const { upload_id, categoria, display_name, autore, chunk_strategy } = req.body
     if (!upload_id) { res.status(400).json({ error: 'upload_id richiesto' }); return }
 
     const pending = pendingUploads.get(upload_id)
@@ -540,7 +542,7 @@ router.post('/confirm', authMiddleware(true), async (req: AuthRequest, res: Resp
       `Processa: ${analysis.display_name}`, `process-doc-${entityId.substring(0, 8)}`,
       JSON.stringify({
         action: 'process_document',
-        params: { entityId, fileName },  // text is in entity.body, not here
+        params: { entityId, fileName, chunk_strategy: chunk_strategy || undefined },
       }),
       `/entity/job/process-doc-${entityId.substring(0, 8)}`
     )

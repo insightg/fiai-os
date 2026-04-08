@@ -566,26 +566,14 @@ CREATE INDEX IF NOT EXISTS idx_relations_from ON relations(from_id);
 CREATE INDEX IF NOT EXISTS idx_relations_to ON relations(to_id);
 CREATE INDEX IF NOT EXISTS idx_relations_tipo ON relations(tipo);
 
--- ── FTS for document chunks (uses body column) ──────────
+-- ── FTS for document chunks (standalone — no content sync) ──
 CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5(
   body, display_name,
-  content='entity', content_rowid='rowid',
   tokenize='unicode61 remove_diacritics 2'
 );
 
+-- Only INSERT trigger — standalone FTS5 doesn't support delete/update safely
 CREATE TRIGGER IF NOT EXISTS chunk_fts_ai AFTER INSERT ON entity WHEN NEW.type = 'chunk' BEGIN
-  INSERT INTO chunk_fts(rowid, body, display_name)
-  VALUES (NEW.rowid, NEW.body, NEW.display_name);
-END;
-
-CREATE TRIGGER IF NOT EXISTS chunk_fts_ad AFTER DELETE ON entity WHEN OLD.type = 'chunk' BEGIN
-  INSERT INTO chunk_fts(chunk_fts, rowid, body, display_name)
-  VALUES ('delete', OLD.rowid, OLD.body, OLD.display_name);
-END;
-
-CREATE TRIGGER IF NOT EXISTS chunk_fts_au AFTER UPDATE ON entity WHEN OLD.type = 'chunk' BEGIN
-  INSERT INTO chunk_fts(chunk_fts, rowid, body, display_name)
-  VALUES ('delete', OLD.rowid, OLD.body, OLD.display_name);
   INSERT INTO chunk_fts(rowid, body, display_name)
   VALUES (NEW.rowid, NEW.body, NEW.display_name);
 END;

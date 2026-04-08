@@ -10,7 +10,7 @@ const config: AgentConfig = {
   name: 'Archivista — Documentale',
   domain: 'documentale',
   color: '#795548',
-  model: 'anthropic/claude-haiku-4.5',  // Haiku follows tool instructions better than Mistral
+  model: 'anthropic/claude-haiku-4.5',
   systemPrompt: prompt,
   toolNames: [...GENERIC_TOOLS, 'retrieve', 'list_documents', 'explore_document', 'rechunk_document', 'reclassify_document', 'generate_pdf'],
   views,

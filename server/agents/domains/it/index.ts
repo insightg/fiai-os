@@ -14,7 +14,8 @@ const config: AgentConfig = {
   toolNames: [...GENERIC_TOOLS, 'get_api_costs', 'get_whatsapp_status',
     'create_autonomous_agent', 'list_autonomous_agents', 'toggle_autonomous_agent', 'delete_autonomous_agent', 'get_agent_logs',
     'create_workflow', 'run_workflow', 'list_workflows',
-    'update_skill', 'list_skills', 'add_agent_lesson'],
+    'update_skill', 'list_skills', 'add_agent_lesson',
+    'create_group', 'add_to_group', 'remove_from_group', 'list_groups', 'set_user_role'],
   views,
 }
 

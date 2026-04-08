@@ -1028,19 +1028,75 @@ function renderRetrieveResults(result: any): JSX.Element {
   if (!Array.isArray(result) || result.length === 0) {
     return <p className="text-xs text-text3 italic">Nessun contenuto trovato nel documento.</p>
   }
+  return <CollapsibleDocResults title="Ricerca nel documento" count={result.length} items={result} />
+}
+
+function CollapsibleWebSearch({ result }: { result: any }) {
+  const [expanded, setExpanded] = useState(false)
+  const fonti = result.fonti || []
   return (
-    <div className="space-y-2">
-      {result.slice(0, 5).map((chunk: any, i: number) => (
-        <div key={i} className="bg-bg3 rounded-lg p-3 border-l-2 border-gold/30">
-          <div className="flex items-center gap-2 mb-1">
-            <span className="text-[10px] font-medium text-gold">{chunk.sezione || chunk.documento}</span>
-            {chunk.documento && chunk.sezione && (
-              <span className="text-[10px] text-text3">— {chunk.documento}</span>
-            )}
+    <div>
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-1.5 text-[10px] text-text3 hover:text-text transition-colors group"
+      >
+        <svg className={`w-3 h-3 transition-transform ${expanded ? 'rotate-90' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+        </svg>
+        <span className="font-medium text-blue">Ricerca web</span>
+        <span className="text-text3">via {result.fonte || 'web'}</span>
+        {fonti.length > 0 && <span className="text-text3">· {fonti.length} fonti</span>}
+      </button>
+      {expanded && (
+        <div className="mt-2 ml-4 pl-3 border-l-2 border-blue/20 space-y-2 max-h-96 overflow-y-auto">
+          <div className="bg-bg3/50 rounded-lg p-3">
+            <p className="text-[11px] text-text whitespace-pre-wrap leading-relaxed">{result.risultato}</p>
           </div>
-          <p className="text-xs text-text whitespace-pre-wrap">{chunk.testo?.substring(0, 400)}{chunk.testo?.length > 400 ? '...' : ''}</p>
+          {fonti.length > 0 && (
+            <div className="space-y-1">
+              <p className="text-[9px] text-text3 font-medium">Fonti:</p>
+              {fonti.map((url: string, i: number) => (
+                <a key={i} href={url} target="_blank" rel="noopener noreferrer" className="block text-[10px] text-blue hover:underline truncate">{url}</a>
+              ))}
+            </div>
+          )}
         </div>
-      ))}
+      )}
+    </div>
+  )
+}
+
+function CollapsibleDocResults({ title, count, items, output }: { title: string; count: number; items?: any[]; output?: string }) {
+  const [expanded, setExpanded] = useState(false)
+  return (
+    <div>
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-1.5 text-[10px] text-text3 hover:text-text transition-colors group"
+      >
+        <svg className={`w-3 h-3 transition-transform ${expanded ? 'rotate-90' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+        </svg>
+        <span className="font-medium text-gold">{title}</span>
+        <span>({count})</span>
+      </button>
+      {expanded && (
+        <div className="mt-2 ml-4 pl-3 border-l-2 border-gold/20 space-y-2 max-h-96 overflow-y-auto">
+          {items ? items.slice(0, 10).map((chunk: any, i: number) => (
+            <div key={i} className="bg-bg3/50 rounded-lg p-2.5">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-[10px] font-medium text-gold">{chunk.sezione || chunk.display_name || `Risultato ${i + 1}`}</span>
+                {chunk.documento && (
+                  <span className="text-[9px] text-text3">— {chunk.documento}</span>
+                )}
+              </div>
+              <p className="text-[11px] text-text whitespace-pre-wrap leading-relaxed">{chunk.testo?.substring(0, 500)}{chunk.testo?.length > 500 ? '...' : ''}</p>
+            </div>
+          )) : output ? (
+            <pre className="text-[11px] text-text whitespace-pre-wrap leading-relaxed bg-bg3/50 rounded-lg p-2.5 max-h-80 overflow-y-auto">{output}</pre>
+          ) : null}
+        </div>
+      )}
     </div>
   )
 }
@@ -1168,6 +1224,15 @@ export function renderToolResult(toolName: string, result: any, context?: Action
       case 'explore_document': return renderDocumentStructure(result)
       case 'generate_tts': return renderGeneratedAudio(result)
       case 'render_view': return renderDynamicView(result)
+      case 'web_search': {
+        if (!result?.risultato) return renderCreateResult(result)
+        return <CollapsibleWebSearch result={result} />
+      }
+      case 'execute_code': {
+        if (!result?.output || result.output.length < 50) return renderCreateResult(result)
+        const lines = result.output.split('\n').filter((l: string) => l.trim())
+        return <CollapsibleDocResults title="execute_code" count={lines.length} output={result.output} />
+      }
       default: return null
     }
   })()

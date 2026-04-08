@@ -18,9 +18,9 @@ export async function handleChatMessage(
     attachedImageBase64?: string
     attachedAudioBase64?: string
     conversationHistory?: { role: string; content: string }[]
+    permissions?: import('./types.js').UserPermissions
   }
 ): Promise<ChatResponse> {
-  // Support both `history` and `conversationHistory` for backward compat
   const history = options?.history || options?.conversationHistory
   return orchestrate(message, userId, aziendaId, {
     format: options?.format,
@@ -28,6 +28,7 @@ export async function handleChatMessage(
     history,
     attachedImageBase64: options?.attachedImageBase64,
     attachedAudioBase64: options?.attachedAudioBase64,
+    permissions: options?.permissions,
   })
 }
 
@@ -50,6 +51,7 @@ router.post('/message', authMiddleware(true), async (req: AuthRequest, res: Resp
         history: history || conversationHistory || [],
         attachedImageBase64,
         attachedAudioBase64,
+        permissions: req.permissions,
       }
     )
 

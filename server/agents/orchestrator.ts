@@ -355,12 +355,14 @@ export async function orchestrate(
     attachedImageBase64?: string
     attachedAudioBase64?: string
     onProgress?: ProgressCallback
+    permissions?: import('./types.js').UserPermissions
   }
 ): Promise<ChatResponse> {
   const startTime = Date.now()
   const format = options?.format ?? 'web'
   const sessionId = options?.sessionId ?? ''
   const conversationHistory = options?.history
+  const permissions = options?.permissions
   const attachedImageBase64 = options?.attachedImageBase64
   const attachedAudioBase64 = options?.attachedAudioBase64
   const onProgress = options?.onProgress || (() => {})
@@ -509,6 +511,26 @@ export async function orchestrate(
     }
   }
 
+  // If not already documentale, check if the query might relate to a loaded document
+  // This prevents non-RAG agents from hallucinating document content
+  if (classification.domain !== 'documentale' && classification.domain !== 'legal') {
+    try {
+      const msgLower = message.toLowerCase()
+      // Quick check: does the query mention any document name in the system?
+      const docs = db.prepare(
+        "SELECT display_name FROM entity WHERE type = 'documento' AND azienda_id = (SELECT DISTINCT azienda_id FROM entity WHERE type = 'chunk' LIMIT 1)"
+      ).all() as any[]
+      const mentionsDoc = docs.some((d: any) => {
+        const words = d.display_name.toLowerCase().replace(/\.[^.]+$/, '').split(/[\s_-]+/)
+        return words.some((w: string) => w.length > 3 && msgLower.includes(w))
+      })
+      if (mentionsDoc) {
+        console.log(`[Classify] Query mentions a document name → routing to documentale`)
+        classification = { domain: 'documentale' as AgentDomain, confidence: 0.9, needsMultiAgent: false }
+      }
+    } catch {}
+  }
+
   // Run post_classify hook
   const hookCtx: HookContext = {
     messages: conversationHistory ? [...conversationHistory, { role: 'user', content: message }] : [{ role: 'user', content: message }],
@@ -518,16 +540,7 @@ export async function orchestrate(
   }
   await runHooks('post_classify', hookCtx)
 
-  // ── General — direct LLM response (no tools needed) ──
-  if (classification.domain === 'general') {
-    const context = buildContext('pulse', aziendaId, userId, sessionId)
-    const text = await directLLMResponse(message, context, conversationHistory)
-    const result: ChatResponse = {
-      text, toolCalls: [], agentName: 'Assistente FIAI',
-      agentDomain: 'general', agentColor: AGENT_COLORS.general,
-    }
-    return finalizeResult(result, classification)
-  }
+  // General agent now goes through full agent execution (has tools including web_search)
 
   // ── Multi-agent execution ──
   if (classification.needsMultiAgent && classification.secondaryDomains && classification.secondaryDomains.length > 0) {
@@ -539,7 +552,7 @@ export async function orchestrate(
         const agent = AGENTS[domain]
         if (!agent) return null
         const context = buildContext(domain, aziendaId, userId, sessionId)
-        return executeAgent(message, agent, aziendaId, userId, context, format, conversationHistory)
+        return executeAgent(message, agent, aziendaId, userId, context, format, conversationHistory, undefined, permissions)
       })
       .filter(p => p !== null)
 
@@ -582,7 +595,7 @@ export async function orchestrate(
   }
 
   // Agent calls tools natively — no pre-execution, no planner
-  const result = await executeAgent(message, agent, aziendaId, userId, context, format, conversationHistory, onProgress)
+  const result = await executeAgent(message, agent, aziendaId, userId, context, format, conversationHistory, onProgress, permissions)
 
   // Reasoning comes directly from agent's native tool loop
   if (result.reasoning) {

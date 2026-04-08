@@ -1,3 +1,55 @@
+// ── Permissions ─────────────────────────────────────────
+
+export type PermAction = 'read' | 'create' | 'update' | 'delete' | 'send'
+
+export class UserPermissions {
+  private role: string
+  private perms: Map<string, Set<PermAction>>  // entityType → actions
+
+  constructor(role: string, groupPermissions: Record<string, PermAction[]>[] = []) {
+    this.role = role
+    this.perms = new Map()
+
+    // Base role permissions
+    if (role === 'admin') {
+      // Admin can do everything — checked via role flag
+    } else if (role === 'viewer') {
+      this.perms.set('*', new Set(['read']))
+    } else {
+      // collaboratore (default)
+      this.perms.set('*', new Set(['read', 'create', 'update']))
+    }
+
+    // Merge group permissions (additive)
+    for (const gp of groupPermissions) {
+      for (const [entityType, actions] of Object.entries(gp)) {
+        const existing = this.perms.get(entityType) || new Set()
+        for (const a of actions) existing.add(a)
+        this.perms.set(entityType, existing)
+      }
+    }
+  }
+
+  can(action: PermAction, entityType?: string): boolean {
+    if (this.role === 'admin') return true
+
+    // Check type-specific permissions first
+    if (entityType) {
+      const typePerms = this.perms.get(entityType)
+      if (typePerms) return typePerms.has(action)
+    }
+
+    // Fallback to wildcard
+    const wildcard = this.perms.get('*')
+    return wildcard ? wildcard.has(action) : false
+  }
+
+  get isAdmin(): boolean { return this.role === 'admin' }
+  get userRole(): string { return this.role }
+}
+
+// ── Agent Types ─────────────────────────────────────────
+
 export type AgentDomain = 'pulse' | 'commerciale' | 'produzione' | 'marketing' | 'amministrazione' | 'hr' | 'legal' | 'documentale' | 'documents' | 'it' | 'doctor' | 'whatsapp' | 'image' | 'tts' | 'general'
 
 export interface AgentView {

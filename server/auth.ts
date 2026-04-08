@@ -54,9 +54,10 @@ router.post('/login', async (req: Request, res: Response) => {
     }
 
     const token = generateToken(user.id, user.email)
+    const ruolo = metadata.ruolo || 'collaboratore'
 
     res.json({
-      user: { id: user.id, email: user.email },
+      user: { id: user.id, email: user.email, ruolo },
       session: { access_token: token },
       error: null,
     })

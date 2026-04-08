@@ -12,7 +12,7 @@ const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions'
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || ''
 
 // Templates that have good structure → structural tagging
-const STRUCTURAL_TEMPLATES = new Set(['legge_it', 'contratto', 'libro_sacro', 'manuale', 'cv'])
+const STRUCTURAL_TEMPLATES = new Set(['legge_it', 'contratto', 'libro_sacro', 'versetto', 'manuale', 'cv'])
 
 // Italian stopwords to filter out
 const STOPWORDS = new Set([

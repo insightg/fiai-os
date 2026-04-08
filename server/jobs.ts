@@ -81,6 +81,10 @@ export function createJob(
 async function processJobs() {
   const now = new Date().toISOString()
 
+  // Auto-cleanup: mark jobs stuck in 'running' for >30 min as failed
+  db.prepare(`UPDATE entity SET stato = 'failed', metadata = json_set(metadata, '$.error', 'Timeout: job bloccato per piu di 30 minuti')
+    WHERE type = 'job' AND stato = 'running' AND updated_at < datetime('now', '-30 minutes')`).run()
+
   // Fetch queued jobs that are due
   const jobs = db.prepare(`
     SELECT id, azienda_id, metadata FROM entity

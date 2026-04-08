@@ -20,6 +20,7 @@ services:
       dockerfile: Dockerfile.backend
     restart: unless-stopped
     environment:
+      - TZ=Europe/Rome
       - DB_PATH=/app/data/fiai.db
       - JWT_SECRET=${JWT_SECRET:-fiai-os-dev-secret-key-2026}
       - PORT=3001
@@ -32,7 +33,7 @@ services:
     volumes:
       - fiai-data:/app/data
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3001/api/health"]
+      test: ["CMD", "curl", "-sf", "http://localhost:3001/api/health"]
       interval: 10s
       timeout: 3s
       retries: 5
