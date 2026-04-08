@@ -68,7 +68,7 @@ export default function Login() {
         </div>
 
         <p className="text-center text-text3 text-xs mt-6">
-          BERNARDINI OS &mdash; Powered by AI FIAI
+          BERNARDINI OS &mdash; Powered by FIAI
         </p>
       </div>
     </div>

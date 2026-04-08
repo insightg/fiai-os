@@ -1752,7 +1752,7 @@ export default function ChatLayout() {
                 </div>
               </form>
               <p className="text-center text-[10px] text-text3 mt-2">
-                BERNARDINI OS · Powered by AI FIAI &middot; Le risposte possono contenere errori
+                BERNARDINI OS · Powered by FIAI &middot; Le risposte possono contenere errori
               </p>
             </div>
           </div>
