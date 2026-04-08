@@ -110,14 +110,14 @@ interface DisplayMessage {
   }
 }
 
-// ── Quick Commands ──────────────────────────────────────
+// ── Quick Commands — BERNARDINI S.R.L. ──────────────────
 const quickCommands = [
-  { label: 'Riepilogo finanziario', message: "Dammi un riepilogo finanziario dell'azienda", icon: BarChart3 },
-  { label: 'Fatture scadute', message: 'Quali fatture sono scadute?', icon: AlertCircle },
-  { label: 'Stato pipeline', message: "Qual è lo stato della pipeline commerciale?", icon: Sparkles },
-  { label: 'Stato progetti', message: 'Qual è lo stato dei progetti in corso?', icon: FolderKanban },
-  { label: 'Crea lead', message: 'Crea un nuovo lead per ', icon: UserPlus },
-  { label: 'Overview dashboard', message: "Dammi una overview completa dell'azienda", icon: LayoutGrid },
+  { label: 'Stato commesse', message: "Qual è lo stato delle commesse in corso?", icon: FolderKanban },
+  { label: 'Produzione', message: "Stato della produzione e magazzino", icon: Wrench },
+  { label: 'Clienti e offerte', message: "Mostra la pipeline commerciale e le offerte aperte", icon: Sparkles },
+  { label: 'Scadenze', message: "Quali scadenze ci sono questa settimana? Polizze, revisioni, adempimenti", icon: AlertCircle },
+  { label: 'Qualità e NC', message: "Non conformità aperte e stato audit", icon: BarChart3 },
+  { label: 'Overview direzione', message: "Dammi una overview completa dell'azienda per la direzione", icon: LayoutGrid },
 ]
 
 const toolNameMap = toolNameMapExtended
@@ -499,10 +499,9 @@ function EmptyState({ onQuickCommand }: { onQuickCommand: (msg: string) => void 
       <div className="w-16 h-16 rounded-2xl bg-gold/10 border border-gold/20 flex items-center justify-center mb-6">
         <Sparkles className="w-8 h-8 text-gold" />
       </div>
-      <h2 className="font-display text-2xl font-bold text-text mb-2">Ciao! Come posso aiutarti?</h2>
+      <h2 className="font-display text-2xl font-bold text-text mb-2">Benvenuto in BERNARDINI</h2>
       <p className="text-text3 text-sm mb-8 max-w-md">
-        Sono l&apos;assistente di BERNARDINI S.R.L.. Posso aiutarti a consultare dati aziendali, creare
-        lead e clienti, e molto altro.
+        Gestionale intelligente per BERNARDINI S.R.L. — Direzione, Commerciale, Produzione, Amministrazione, Officina, Qualita&apos;, Legale.
       </p>
       <div className="grid grid-cols-2 gap-3 max-w-lg w-full">
         {quickCommands.map((cmd) => (
@@ -536,14 +535,14 @@ export default function ChatLayout() {
   // Agent panel buttons config
   // Quick actions for sidebar
   const quickActions = [
-    { label: 'Overview aziendale', command: 'overview aziendale' },
-    { label: 'Lista clienti', command: 'lista clienti' },
-    { label: 'Pipeline leads', command: 'pipeline leads' },
-    { label: 'Fatture scadute', command: 'fatture scadute' },
-    { label: 'Stato progetti', command: 'stato progetti' },
+    { label: 'Direzione: overview', command: 'overview completa azienda' },
+    { label: 'Commerciale: clienti', command: 'lista clienti e offerte' },
+    { label: 'Produzione: commesse', command: 'stato commesse in produzione' },
+    { label: 'Officina: interventi', command: 'interventi officina aperti' },
+    { label: 'Qualità: NC aperte', command: 'non conformità aperte' },
+    { label: 'Scadenze', command: 'scadenze della settimana' },
     { label: 'Documenti', command: 'lista documenti' },
-    { label: 'Utenti sistema', command: 'lista utenti' },
-    { label: 'Agenti autonomi', command: 'lista agenti autonomi' },
+    { label: 'Contabilità', command: 'margini per commessa' },
   ]
 
   // Context panel state — tracks current agent for right panel

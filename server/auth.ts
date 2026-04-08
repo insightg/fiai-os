@@ -32,9 +32,10 @@ router.post('/login', async (req: Request, res: Response) => {
     }
 
     // Look up user in entity table (type: utente)
+    // Support login by email or by display_name (e.g. "admin")
     const user = db.prepare(
-      "SELECT id, email, metadata FROM entity WHERE email = ? AND type = 'utente'"
-    ).get(email) as { id: string; email: string; metadata: string } | undefined
+      "SELECT id, email, metadata FROM entity WHERE (email = ? OR LOWER(display_name) = LOWER(?)) AND type = 'utente'"
+    ).get(email, email) as { id: string; email: string; metadata: string } | undefined
 
     if (!user) {
       res.status(400).json({ user: null, session: null, error: { message: 'Credenziali non valide' } })
