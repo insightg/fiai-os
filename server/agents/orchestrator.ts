@@ -107,8 +107,8 @@ const CLASSIFICATION_PROMPT =
   'Esempi multi-agent:\n' +
   '- "fatturato dei clienti con progetti attivi" → domain="amministrazione", needsMultiAgent=true, secondaryDomains=["commerciale","produzione"]\n' +
   '- "candidati per i ruoli nei nuovi progetti" → domain="hr", needsMultiAgent=true, secondaryDomains=["produzione"]\n' +
-  '- "report completo vendite fatture progetti" → domain="pulse", needsMultiAgent=true, secondaryDomains=["commerciale","amministrazione","produzione"]\n' +
-  '- "overview con pipeline e scadenze" → domain="pulse", needsMultiAgent=true, secondaryDomains=["commerciale","amministrazione"]\n\n' +
+  '- "report completo vendite fatture progetti" → domain="direzione", needsMultiAgent=true, secondaryDomains=["commerciale","amministrazione","produzione"]\n' +
+  '- "overview con pipeline e scadenze" → domain="direzione", needsMultiAgent=true, secondaryDomains=["commerciale","amministrazione"]\n\n' +
   'CONTESTO: Se nella conversazione recente l\'utente stava interagendo con un agente specifico (es. documentale per analisi documenti, commerciale per clienti), e il nuovo messaggio sembra un follow-up o approfondimento sullo stesso tema, usa LO STESSO dominio. Non cambiare dominio a meno che il tema sia chiaramente diverso.\n\n' +
   'Rispondi SOLO con un JSON valido: {"domain": "...", "confidence": 0.0-1.0, "needsMultiAgent": false, "secondaryDomains": []}'
 
@@ -136,7 +136,7 @@ async function classifyIntent(message: string, conversationHistory?: Conversatio
       }),
     })
 
-    if (!res.ok) return { domain: 'pulse', confidence: 0.5, needsMultiAgent: false }
+    if (!res.ok) return { domain: 'direzione', confidence: 0.5, needsMultiAgent: false }
 
     const data = await res.json()
     const text = data.choices?.[0]?.message?.content ?? ''
@@ -145,20 +145,20 @@ async function classifyIntent(message: string, conversationHistory?: Conversatio
 
     const jsonMatch = fullText.match(/\{[\s\S]*\}/)
     if (!jsonMatch) {
-      console.warn('Classification: no JSON found, falling back to pulse')
-      return { domain: 'pulse', confidence: 0.5, needsMultiAgent: false }
+      console.warn('Classification: no JSON found, falling back to direzione')
+      return { domain: 'direzione', confidence: 0.5, needsMultiAgent: false }
     }
 
     const parsed = JSON.parse(jsonMatch[0]) as ClassificationResult
     if (!VALID_DOMAINS.includes(parsed.domain)) {
-      return { domain: 'pulse', confidence: 0.5, needsMultiAgent: false }
+      return { domain: 'direzione', confidence: 0.5, needsMultiAgent: false }
     }
 
     console.log(`Classification: ${parsed.domain} (confidence: ${parsed.confidence})`)
     return parsed
   } catch (err) {
-    console.warn('Classification error, falling back to pulse:', err)
-    return { domain: 'pulse', confidence: 0.5, needsMultiAgent: false }
+    console.warn('Classification error, falling back to direzione:', err)
+    return { domain: 'direzione', confidence: 0.5, needsMultiAgent: false }
   }
 }
 
@@ -466,7 +466,7 @@ export async function orchestrate(
     }
 
     // Quick minimal response, no classification, no tools
-    const context = buildContext('pulse', aziendaId, userId, sessionId)
+    const context = buildContext('direzione', aziendaId, userId, sessionId)
     const minimalText = await directLLMResponse(message, context, conversationHistory)
     return {
       text: minimalText, toolCalls: [], agentName: 'Assistente BERNARDINI',
@@ -561,7 +561,7 @@ export async function orchestrate(
     const validResults = results.filter(r => r !== null)
 
     if (validResults.length === 0) {
-      const context = buildContext('pulse', aziendaId, userId, sessionId)
+      const context = buildContext('direzione', aziendaId, userId, sessionId)
       const text = await directLLMResponse(message, context, conversationHistory)
       return finalizeResult({ text, toolCalls: [], agentName: 'Assistente BERNARDINI', agentDomain: 'general', agentColor: AGENT_COLORS.general }, classification)
     }
@@ -580,7 +580,7 @@ export async function orchestrate(
   }
 
   // ── Single agent — direct execution with native tool calling ──
-  const agent = AGENTS[classification.domain] || AGENTS.pulse
+  const agent = AGENTS[classification.domain] || AGENTS.direzione || AGENTS.general
   onProgress({ type: 'agent', content: `${agent.name} sta elaborando...`, domain: classification.domain, agentName: agent.name, agentColor: agent.color })
 
   // Context with 60s cache + system summary
