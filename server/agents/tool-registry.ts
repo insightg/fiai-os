@@ -212,8 +212,9 @@ export const TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
   }, required: ['text'] } } },
 
   // ── Date/Time tools ──
-  get_datetime: { type: 'function', function: { name: 'get_datetime', description: 'Ottieni data e ora correnti, giorno della settimana, settimana dell\'anno, e calcola date relative (es. "tra 7 giorni", "lunedì prossimo", "fine mese")', parameters: { type: 'object', properties: {
-    offset: { type: 'string', description: 'Offset relativo opzionale: "7d" (7 giorni), "-3d" (3 giorni fa), "1w" (1 settimana), "1m" (1 mese), "next_monday", "end_month", "start_month", "end_week", "start_week", "end_year"' },
+  get_datetime: { type: 'function', function: { name: 'get_datetime', description: 'Ottieni data e ora correnti (o di qualsiasi citta/timezone), giorno della settimana, settimana dell\'anno, e calcola date relative. Senza parametri restituisce data/ora locale (Europe/Rome).', parameters: { type: 'object', properties: {
+    offset: { type: 'string', description: 'Offset relativo: "7d", "-3d", "1w", "1m", "next_monday", "next_friday", "end_month", "start_month", "end_week", "start_week", "end_year"' },
+    timezone: { type: 'string', description: 'Timezone IANA (es. "America/New_York", "Asia/Tokyo", "Europe/London") o nome citta (es. "New York", "Tokyo", "Londra", "Dubai")' },
   } } } },
 
   date_diff: { type: 'function', function: { name: 'date_diff', description: 'Calcola la differenza tra due date in giorni, settimane, mesi', parameters: { type: 'object', properties: {
@@ -1134,24 +1135,74 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
 
     // ── DATE/TIME ──
     case 'get_datetime': {
+      // City name → IANA timezone mapping
+      const cityToTz: Record<string, string> = {
+        'roma': 'Europe/Rome', 'milano': 'Europe/Rome', 'napoli': 'Europe/Rome', 'torino': 'Europe/Rome', 'parma': 'Europe/Rome',
+        'londra': 'Europe/London', 'london': 'Europe/London',
+        'parigi': 'Europe/Paris', 'paris': 'Europe/Paris',
+        'berlino': 'Europe/Berlin', 'berlin': 'Europe/Berlin',
+        'madrid': 'Europe/Madrid',
+        'new york': 'America/New_York', 'newyork': 'America/New_York',
+        'los angeles': 'America/Los_Angeles', 'losangeles': 'America/Los_Angeles',
+        'chicago': 'America/Chicago',
+        'tokyo': 'Asia/Tokyo',
+        'pechino': 'Asia/Shanghai', 'shanghai': 'Asia/Shanghai', 'beijing': 'Asia/Shanghai',
+        'dubai': 'Asia/Dubai',
+        'sydney': 'Australia/Sydney',
+        'mosca': 'Europe/Moscow', 'moscow': 'Europe/Moscow',
+        'mumbai': 'Asia/Kolkata', 'delhi': 'Asia/Kolkata',
+        'san paolo': 'America/Sao_Paulo', 'sao paulo': 'America/Sao_Paulo',
+        'singapore': 'Asia/Singapore',
+        'hong kong': 'Asia/Hong_Kong', 'hongkong': 'Asia/Hong_Kong',
+        'seoul': 'Asia/Seoul',
+        'istanbul': 'Europe/Istanbul',
+        'cairo': 'Africa/Cairo',
+      }
+
+      const tz = input.timezone
+        ? (cityToTz[(input.timezone as string).toLowerCase()] || input.timezone as string)
+        : 'Europe/Rome'
+
       const now = new Date()
-      const giorni = ['Domenica', 'Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato']
-      const mesi = ['Gennaio', 'Febbraio', 'Marzo', 'Aprile', 'Maggio', 'Giugno', 'Luglio', 'Agosto', 'Settembre', 'Ottobre', 'Novembre', 'Dicembre']
+      const formatter = new Intl.DateTimeFormat('it-IT', {
+        timeZone: tz, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+      })
+      const parts = formatter.formatToParts(now)
+      const get = (type: string) => parts.find(p => p.type === type)?.value || ''
+
+      const dayOfWeek = get('weekday')
+      const day = get('day')
+      const month = get('month')
+      const year = get('year')
+      const hour = get('hour')
+      const minute = get('minute')
 
       const result: Record<string, unknown> = {
         iso: now.toISOString(),
-        data: now.toLocaleDateString('it-IT'),
-        ora: now.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' }),
-        giorno: giorni[now.getDay()],
-        mese: mesi[now.getMonth()],
-        anno: now.getFullYear(),
-        settimana: Math.ceil(((now.getTime() - new Date(now.getFullYear(), 0, 1).getTime()) / 86400000 + new Date(now.getFullYear(), 0, 1).getDay() + 1) / 7),
+        data: `${day}/${(parts.findIndex(p => p.type === 'month') > -1 ? String(now.toLocaleDateString('it-IT', { timeZone: tz })) : '')}`,
+        data_formattata: new Date().toLocaleDateString('it-IT', { timeZone: tz, day: '2-digit', month: '2-digit', year: 'numeric' }),
+        ora: `${hour}:${minute}`,
+        giorno: dayOfWeek.charAt(0).toUpperCase() + dayOfWeek.slice(1),
+        mese: month.charAt(0).toUpperCase() + month.slice(1),
+        anno: parseInt(year),
+        timezone: tz,
         timestamp: now.getTime(),
+      }
+
+      if (input.timezone) {
+        result.citta = input.timezone
+        // Calculate UTC offset
+        const utcDate = new Date(now.toLocaleString('en-US', { timeZone: 'UTC' }))
+        const tzDate = new Date(now.toLocaleString('en-US', { timeZone: tz }))
+        const offsetHours = (tzDate.getTime() - utcDate.getTime()) / 3600000
+        result.utc_offset = `UTC${offsetHours >= 0 ? '+' : ''}${offsetHours}`
       }
 
       if (input.offset) {
         const off = input.offset as string
         let target = new Date(now)
+        const giorni = ['Domenica', 'Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato']
 
         const dMatch = off.match(/^(-?\d+)d$/)
         const wMatch = off.match(/^(-?\d+)w$/)
@@ -1169,7 +1220,7 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
         else if (off === 'end_year') { target = new Date(target.getFullYear(), 11, 31) }
         else if (off === 'start_year') { target = new Date(target.getFullYear(), 0, 1) }
 
-        result.offset_data = target.toISOString().split('T')[0]
+        result.offset_data = target.toLocaleDateString('it-IT', { timeZone: tz, day: '2-digit', month: '2-digit', year: 'numeric' })
         result.offset_giorno = giorni[target.getDay()]
         result.offset_label = off
       }
