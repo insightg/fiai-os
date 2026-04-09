@@ -233,6 +233,12 @@ export const TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
   send_whatsapp_document: { type: 'function', function: { name: 'send_whatsapp_document', description: 'Invia un documento/file su WhatsApp (PDF, DOC, etc.)', parameters: { type: 'object', properties: { phone: { type: 'string' }, url: { type: 'string', description: 'URL o path del file' }, filename: { type: 'string', description: 'Nome file visualizzato' }, caption: { type: 'string' } }, required: ['phone', 'url'] } } },
   send_whatsapp_video: { type: 'function', function: { name: 'send_whatsapp_video', description: 'Invia un video su WhatsApp', parameters: { type: 'object', properties: { phone: { type: 'string' }, url: { type: 'string', description: 'URL o path del video' }, caption: { type: 'string' } }, required: ['phone', 'url'] } } },
 
+  // ── Weather ──
+  get_weather: { type: 'function', function: { name: 'get_weather', description: 'Meteo attuale e previsioni per una citta. Restituisce temperatura, condizioni, vento, umidita. Supporta previsioni fino a 16 giorni con dettaglio orario.', parameters: { type: 'object', properties: {
+    city: { type: 'string', description: 'Nome citta (es. "Parma", "Roma", "New York", "Tokyo")' },
+    days: { type: 'number', description: 'Giorni di previsione (1-16, default 1). 1=solo oggi, 3=prossimi 3 giorni' },
+  }, required: ['city'] } } },
+
   // ── Code Execution (programmatic tool calling) ──
   execute_code: { type: 'function', function: { name: 'execute_code', description: 'Esegui codice JavaScript per operazioni complesse: loop su molti record, aggregazioni, filtri condizionali, batch operations. Il codice ha accesso ai tool FIAI come funzioni async: find(params), create(params), update(params), delete_record(params), relate(params), get_tree(params), retrieve(params), list_documents(), get_datetime(), date_diff(params), generate_pdf(params). Usa print() per output. Solo l\'output finale torna nel contesto — i risultati intermedi non consumano token. QUANDO USARE: operazioni su >3 record (es. "controlla tutte le fatture scadute"), aggregazioni (es. "totale fatturato per cliente"), batch updates, confronti multipli.', parameters: { type: 'object', properties: {
     code: { type: 'string', description: 'Codice JavaScript con await per tool async. Es: const clients = await find({tags:["cliente"]}); print(`${clients.length} clienti trovati`)' },
@@ -1527,6 +1533,96 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
         return { output: result.stdout }
       } catch (err: any) {
         return { errore: `Code execution failed: ${err.message}` }
+      }
+    }
+
+    // ── WEATHER (Open-Meteo API — free, no key) ──
+    case 'get_weather': {
+      if (!input.city) return { errore: 'city obbligatorio' }
+      try {
+        const city = input.city as string
+        const days = Math.min(Math.max(input.days as number || 1, 1), 16)
+
+        // Geocode city name to lat/lon
+        const geoRes = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=it`)
+        const geoData = await geoRes.json()
+        if (!geoData.results?.length) return { errore: `Citta "${city}" non trovata` }
+
+        const { latitude, longitude, name, country, timezone } = geoData.results[0]
+
+        // Weather codes → descriptions
+        const weatherDesc: Record<number, string> = {
+          0: 'Sereno', 1: 'Prevalentemente sereno', 2: 'Parzialmente nuvoloso', 3: 'Coperto',
+          45: 'Nebbia', 48: 'Nebbia con brina',
+          51: 'Pioggerella leggera', 53: 'Pioggerella', 55: 'Pioggerella intensa',
+          61: 'Pioggia leggera', 63: 'Pioggia', 65: 'Pioggia intensa',
+          71: 'Neve leggera', 73: 'Neve', 75: 'Neve intensa',
+          77: 'Granuli di neve', 80: 'Rovesci leggeri', 81: 'Rovesci', 82: 'Rovesci intensi',
+          85: 'Neve a rovesci', 86: 'Neve intensa a rovesci',
+          95: 'Temporale', 96: 'Temporale con grandine leggera', 99: 'Temporale con grandine',
+        }
+
+        // Build API URL
+        let url = `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&timezone=${encodeURIComponent(timezone)}`
+        url += `&current=temperature_2m,apparent_temperature,weather_code,wind_speed_10m,wind_direction_10m,relative_humidity_2m,precipitation`
+
+        if (days > 1) {
+          url += `&daily=temperature_2m_max,temperature_2m_min,weather_code,precipitation_sum,wind_speed_10m_max,sunrise,sunset`
+          url += `&forecast_days=${days}`
+        } else {
+          url += `&hourly=temperature_2m,weather_code,precipitation_probability,wind_speed_10m`
+          url += `&forecast_days=1`
+        }
+
+        const weatherRes = await fetch(url)
+        const weather = await weatherRes.json()
+        const current = weather.current
+
+        const result: Record<string, unknown> = {
+          citta: name,
+          paese: country,
+          timezone,
+          attuale: {
+            temperatura: `${current.temperature_2m}°C`,
+            percepita: `${current.apparent_temperature}°C`,
+            condizioni: weatherDesc[current.weather_code] || `Codice ${current.weather_code}`,
+            umidita: `${current.relative_humidity_2m}%`,
+            vento: `${current.wind_speed_10m} km/h`,
+            precipitazioni: `${current.precipitation} mm`,
+          },
+        }
+
+        if (days > 1 && weather.daily) {
+          const giorni = ['Dom', 'Lun', 'Mar', 'Mer', 'Gio', 'Ven', 'Sab']
+          result.previsioni = weather.daily.time.map((date: string, i: number) => {
+            const d = new Date(date)
+            return {
+              data: date,
+              giorno: giorni[d.getDay()],
+              temp_max: `${weather.daily.temperature_2m_max[i]}°C`,
+              temp_min: `${weather.daily.temperature_2m_min[i]}°C`,
+              condizioni: weatherDesc[weather.daily.weather_code[i]] || `Codice ${weather.daily.weather_code[i]}`,
+              precipitazioni: `${weather.daily.precipitation_sum[i]} mm`,
+              vento_max: `${weather.daily.wind_speed_10m_max[i]} km/h`,
+              alba: weather.daily.sunrise[i]?.split('T')[1],
+              tramonto: weather.daily.sunset[i]?.split('T')[1],
+            }
+          })
+        } else if (weather.hourly) {
+          // Show key hours: 6, 9, 12, 15, 18, 21
+          const keyHours = [6, 9, 12, 15, 18, 21]
+          result.oggi_orario = keyHours.map(h => ({
+            ora: `${String(h).padStart(2, '0')}:00`,
+            temperatura: `${weather.hourly.temperature_2m[h]}°C`,
+            condizioni: weatherDesc[weather.hourly.weather_code[h]] || `Codice ${weather.hourly.weather_code[h]}`,
+            prob_pioggia: `${weather.hourly.precipitation_probability[h]}%`,
+            vento: `${weather.hourly.wind_speed_10m[h]} km/h`,
+          }))
+        }
+
+        return result
+      } catch (err: any) {
+        return { errore: `Meteo non disponibile: ${err.message}` }
       }
     }
 
