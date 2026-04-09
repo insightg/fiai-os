@@ -260,10 +260,7 @@ export const TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
 
   list_groups: { type: 'function', function: { name: 'list_groups', description: 'Lista gruppi con membri e permessi', parameters: { type: 'object', properties: {} } } },
 
-  set_user_role: { type: 'function', function: { name: 'set_user_role', description: 'Cambia il ruolo di un utente (admin, collaboratore, viewer)', parameters: { type: 'object', properties: {
-    user_id: { type: 'string', description: 'ID utente' },
-    role: { type: 'string', enum: ['admin', 'collaboratore', 'viewer'], description: 'Nuovo ruolo' },
-  }, required: ['user_id', 'role'] } } },
+  // set_user_role removed — permissions managed via groups only
 }
 
 // ══════════════════════════════════════════════════════════
@@ -1561,20 +1558,6 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
         const members = db.prepare("SELECT e.display_name, e.email FROM relations r JOIN entity e ON e.id = r.from_id WHERE r.to_id = ? AND r.tipo = 'membro_di_gruppo'").all(g.id) as any[]
         return { id: g.id, nome: g.display_name, permessi: meta.permissions || {}, membri: members }
       })
-    }
-
-    case 'set_user_role': {
-      if (!input.user_id || !input.role) return { errore: 'user_id e role obbligatori' }
-      if (!['admin', 'collaboratore', 'viewer'].includes(input.role as string)) return { errore: 'Ruolo non valido' }
-      const user = db.prepare("SELECT metadata, tags FROM entity WHERE id = ? AND type = 'utente'").get(input.user_id) as any
-      if (!user) return { errore: 'Utente non trovato' }
-      const meta = typeof user.metadata === 'string' ? JSON.parse(user.metadata) : (user.metadata || {})
-      meta.ruolo = input.role
-      let tags = typeof user.tags === 'string' ? JSON.parse(user.tags) : (user.tags || [])
-      if (input.role === 'admin' && !tags.includes('admin')) tags.push('admin')
-      if (input.role !== 'admin') tags = tags.filter((t: string) => t !== 'admin')
-      db.prepare("UPDATE entity SET metadata = ?, tags = ? WHERE id = ?").run(JSON.stringify(meta), JSON.stringify(tags), input.user_id)
-      return { successo: true, messaggio: `Ruolo utente cambiato a "${input.role}"` }
     }
 
     default:

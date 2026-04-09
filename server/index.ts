@@ -1,4 +1,5 @@
 import express from 'express'
+import crypto from 'crypto'
 import cors from 'cors'
 import cookieParser from 'cookie-parser'
 import fs from 'fs'
@@ -70,6 +71,50 @@ try {
   if (migrated) console.log('VFS migration completed successfully.')
 } catch (err) {
   console.warn('VFS migration skipped or failed:', (err as Error).message)
+}
+
+// ── Create default permission groups (idempotent) ────────
+try {
+  const defaultGroups = [
+    { name: 'Amministratori', slug: 'amministratori', permissions: { '*': ['read', 'create', 'update', 'delete', 'send'] } },
+    { name: 'Operatori', slug: 'operatori', permissions: { '*': ['read', 'create', 'update'] } },
+    { name: 'Lettori', slug: 'lettori', permissions: { '*': ['read'] } },
+  ]
+  const aziendaId = (db.prepare("SELECT id FROM entity WHERE type = 'organizzazione' LIMIT 1").get() as any)?.id
+    || (db.prepare("SELECT DISTINCT azienda_id FROM entity LIMIT 1").get() as any)?.azienda_id
+  if (aziendaId) {
+    for (const g of defaultGroups) {
+      const exists = db.prepare("SELECT id FROM entity WHERE type = 'gruppo' AND slug = ? AND azienda_id = ?").get(g.slug, aziendaId)
+      if (!exists) {
+        const id = crypto.randomUUID()
+        db.prepare("INSERT INTO entity (id, azienda_id, type, display_name, slug, metadata, path) VALUES (?,?,'gruppo',?,?,?,?)").run(
+          id, aziendaId, g.name, g.slug, JSON.stringify({ permissions: g.permissions }), `/entity/gruppo/${g.slug}`
+        )
+        console.log(`[Groups] Created default group: ${g.name}`)
+      }
+    }
+
+    // Migrate existing users: assign to groups based on metadata.ruolo
+    const users = db.prepare("SELECT id, metadata FROM entity WHERE type = 'utente' AND azienda_id = ?").all(aziendaId) as any[]
+    for (const u of users) {
+      // Skip if user already has groups
+      const hasGroups = db.prepare("SELECT 1 FROM relations WHERE from_id = ? AND tipo = 'membro_di_gruppo' LIMIT 1").get(u.id)
+      if (hasGroups) continue
+
+      const meta = typeof u.metadata === 'string' ? JSON.parse(u.metadata) : (u.metadata || {})
+      const ruolo = meta.ruolo || 'collaboratore'
+      const groupSlug = ruolo === 'admin' ? 'amministratori' : ruolo === 'viewer' ? 'lettori' : 'operatori'
+      const group = db.prepare("SELECT id FROM entity WHERE type = 'gruppo' AND slug = ? AND azienda_id = ?").get(groupSlug, aziendaId) as any
+      if (group) {
+        db.prepare("INSERT OR IGNORE INTO relations (id, azienda_id, from_id, to_id, tipo) VALUES (?,?,?,?,'membro_di_gruppo')").run(
+          crypto.randomUUID(), aziendaId, u.id, group.id
+        )
+        console.log(`[Groups] Migrated ${u.id} → ${groupSlug}`)
+      }
+    }
+  }
+} catch (err) {
+  console.warn('[Groups] Setup error:', (err as Error).message)
 }
 
 const app = express()

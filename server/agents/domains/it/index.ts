@@ -15,7 +15,7 @@ const config: AgentConfig = {
     'create_autonomous_agent', 'list_autonomous_agents', 'toggle_autonomous_agent', 'delete_autonomous_agent', 'get_agent_logs',
     'create_workflow', 'run_workflow', 'list_workflows',
     'update_skill', 'list_skills', 'add_agent_lesson',
-    'create_group', 'add_to_group', 'remove_from_group', 'list_groups', 'set_user_role',
+    'create_group', 'add_to_group', 'remove_from_group', 'list_groups',
     'send_whatsapp_message', 'send_whatsapp_voice', 'send_whatsapp_image', 'send_whatsapp_document'],
   views,
 }

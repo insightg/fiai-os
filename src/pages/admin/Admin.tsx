@@ -146,9 +146,10 @@ function UsersTab({ users, groups, onReload }: { users: User[]; groups: Group[];
             <input value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} placeholder="Email *" type="email" className="px-3 py-2 text-xs bg-bg3 border border-border rounded-lg text-text" />
             <input value={form.password} onChange={e => setForm(f => ({ ...f, password: e.target.value }))} placeholder="Password *" type="password" className="px-3 py-2 text-xs bg-bg3 border border-border rounded-lg text-text" />
             <select value={form.ruolo} onChange={e => setForm(f => ({ ...f, ruolo: e.target.value }))} className="px-3 py-2 text-xs bg-bg3 border border-border rounded-lg text-text">
-              <option value="admin">Admin</option>
-              <option value="collaboratore">Collaboratore</option>
-              <option value="viewer">Viewer</option>
+              {groups.map(g => (
+                <option key={g.id} value={g.name}>{g.name}</option>
+              ))}
+              {groups.length === 0 && <option value="Operatori">Operatori</option>}
             </select>
           </div>
           <div className="flex gap-2 justify-end">
@@ -165,7 +166,6 @@ function UsersTab({ users, groups, onReload }: { users: User[]; groups: Group[];
             <tr className="bg-bg3">
               <th className="px-4 py-3 text-left text-text3 font-medium">Nome</th>
               <th className="px-4 py-3 text-left text-text3 font-medium">Email</th>
-              <th className="px-4 py-3 text-left text-text3 font-medium">Ruolo</th>
               <th className="px-4 py-3 text-left text-text3 font-medium">Gruppi</th>
               <th className="px-4 py-3 w-20" />
             </tr>
@@ -176,19 +176,8 @@ function UsersTab({ users, groups, onReload }: { users: User[]; groups: Group[];
                 <td className="px-4 py-3 text-text font-medium">{u.display_name}</td>
                 <td className="px-4 py-3 text-text2">{u.email}</td>
                 <td className="px-4 py-3">
-                  <select
-                    value={u.ruolo}
-                    onChange={e => updateRole(u.id, e.target.value)}
-                    className={`px-2 py-0.5 rounded-full text-[10px] font-medium border-0 cursor-pointer ${roleColors[u.ruolo] || roleColors.collaboratore}`}
-                  >
-                    <option value="admin">Admin</option>
-                    <option value="collaboratore">Collaboratore</option>
-                    <option value="viewer">Viewer</option>
-                  </select>
-                </td>
-                <td className="px-4 py-3">
                   <div className="flex gap-1 flex-wrap">
-                    {u.groups.length === 0 ? <span className="text-text3">—</span> : u.groups.map(g => (
+                    {u.groups.length === 0 ? <span className="text-text3">Nessun gruppo</span> : u.groups.map(g => (
                       <span key={g.id} className="px-1.5 py-0.5 rounded bg-bg3 text-text2 text-[10px]">{g.name}</span>
                     ))}
                   </div>
