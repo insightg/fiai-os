@@ -501,16 +501,59 @@ function GestionaleLink({ to, icon: Icon, label }: { to: string; icon: React.Com
   )
 }
 
-// ── Empty State ─────────────────────────────────────────
+// ── Empty State with location + time ────────────────────
 function EmptyState({ onQuickCommand }: { onQuickCommand: (msg: string) => void }) {
+  const [locationInfo, setLocationInfo] = useState<{ city?: string; time?: string; date?: string } | null>(null)
+  const profile = useAuthStore((s) => s.profile)
+
+  useEffect(() => {
+    // Get current time
+    const now = new Date()
+    const time = now.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })
+    const date = now.toLocaleDateString('it-IT', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
+    setLocationInfo({ time, date })
+
+    // Try to get location
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        async (pos) => {
+          try {
+            const res = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${pos.coords.latitude}&lon=${pos.coords.longitude}&format=json&zoom=10`, { headers: { 'User-Agent': 'BERNARDINI-OS/1.0' } })
+            const data = await res.json()
+            const city = data.address?.city || data.address?.town || data.address?.village || data.address?.county || ''
+            setLocationInfo(prev => ({ ...prev, city }))
+          } catch {}
+        },
+        () => {},
+        { timeout: 5000 }
+      )
+    }
+  }, [])
+
+  const greeting = (() => {
+    const h = new Date().getHours()
+    if (h < 12) return 'Buongiorno'
+    if (h < 18) return 'Buon pomeriggio'
+    return 'Buonasera'
+  })()
+
+  const userName = profile?.nome || 'Benvenuto'
+
   return (
     <div className="flex flex-col items-center justify-center h-full text-center px-6">
       <div className="w-16 h-16 rounded-2xl bg-gold/10 border border-gold/20 flex items-center justify-center mb-6">
         <Sparkles className="w-8 h-8 text-gold" />
       </div>
-      <h2 className="font-display text-2xl font-bold text-text mb-2">Benvenuto in BERNARDINI</h2>
+      <h2 className="font-display text-2xl font-bold text-text mb-2">{greeting}, {userName}</h2>
+      {locationInfo && (
+        <div className="flex items-center gap-2 text-text3 text-xs mb-3">
+          {locationInfo.time && <span>{locationInfo.time}</span>}
+          {locationInfo.date && <><span>·</span><span>{locationInfo.date}</span></>}
+          {locationInfo.city && <><span>·</span><span>📍 {locationInfo.city}</span></>}
+        </div>
+      )}
       <p className="text-text3 text-sm mb-8 max-w-md">
-        Gestionale intelligente per BERNARDINI S.R.L. — Direzione, Commerciale, Produzione, Amministrazione, Officina, Qualita&apos;, Legale.
+        BERNARDINI S.R.L. — Direzione, Commerciale, Produzione, Amministrazione, Officina, Qualita&apos;, Legale.
       </p>
       <div className="grid grid-cols-2 gap-3 max-w-lg w-full">
         {quickCommands.map((cmd) => (
