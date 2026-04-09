@@ -1035,6 +1035,151 @@ function renderRetrieveResults(result: any): JSX.Element {
   return <CollapsibleDocResults title="Ricerca nel documento" count={result.length} items={result} />
 }
 
+function MapResult({ result }: { result: any }) {
+  const [showSteps, setShowSteps] = useState(false)
+  const isRoute = result.tipo === 'percorso'
+
+  return (
+    <div className="space-y-2">
+      {/* Map iframe */}
+      <div className="rounded-lg overflow-hidden border border-border" style={{ height: '250px' }}>
+        <iframe
+          src={result.embed_url}
+          width="100%"
+          height="100%"
+          style={{ border: 0 }}
+          loading="lazy"
+          title="Mappa"
+        />
+      </div>
+
+      {/* Route info */}
+      {isRoute && (
+        <div className="bg-bg3/50 rounded-lg p-3 space-y-1.5">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-xs text-text font-medium">{result.partenza?.split(',')[0]} → {result.destinazione?.split(',')[0]}</p>
+              <p className="text-[11px] text-text2">{result.distanza} · {result.durata} · {result.mezzo}</p>
+            </div>
+            <a href={result.mappa_url} target="_blank" rel="noopener noreferrer" className="text-[10px] text-gold hover:underline">Apri mappa</a>
+          </div>
+
+          {/* Steps toggle */}
+          {result.tappe?.length > 0 && (
+            <>
+              <button onClick={() => setShowSteps(!showSteps)} className="text-[10px] text-gold hover:underline">
+                {showSteps ? 'Nascondi' : 'Mostra'} {result.tappe.length} tappe
+              </button>
+              {showSteps && (
+                <div className="space-y-1 mt-1">
+                  {result.tappe.map((s: any, i: number) => (
+                    <div key={i} className="flex items-center gap-2 text-[10px]">
+                      <span className="text-gold font-mono w-4">{i + 1}</span>
+                      <span className="text-text flex-1">{s.istruzione}</span>
+                      <span className="text-text3 shrink-0">{s.distanza}</span>
+                      <span className="text-text3 shrink-0">{s.durata}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Single location */}
+      {!isRoute && (
+        <div className="bg-bg3/50 rounded-lg p-2.5 flex items-center justify-between">
+          <p className="text-xs text-text">{result.indirizzo}</p>
+          <a href={result.mappa_url} target="_blank" rel="noopener noreferrer" className="text-[10px] text-gold hover:underline shrink-0 ml-2">Apri mappa</a>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function WeatherResult({ result }: { result: any }) {
+  const [expanded, setExpanded] = useState(false)
+  const att = result.attuale
+
+  return (
+    <div className="space-y-2">
+      {/* Current weather */}
+      <div className="bg-bg3/50 rounded-lg p-3">
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-sm font-medium text-text">{result.citta}, {result.paese}</span>
+          <span className="text-lg font-bold text-text">{att?.temperatura}</span>
+        </div>
+        <div className="flex items-center gap-3 text-[11px] text-text2">
+          <span>{att?.condizioni}</span>
+          <span>Percepita: {att?.percepita}</span>
+          <span>Umidita: {att?.umidita}</span>
+          <span>Vento: {att?.vento}</span>
+        </div>
+      </div>
+
+      {/* Forecast toggle */}
+      {(result.previsioni || result.oggi_orario) && (
+        <>
+          <button onClick={() => setExpanded(!expanded)} className="text-[10px] text-gold hover:underline">
+            {expanded ? 'Nascondi' : 'Mostra'} previsioni
+          </button>
+          {expanded && result.previsioni && (
+            <div className="overflow-x-auto">
+              <table className="w-full text-[10px]">
+                <thead><tr className="bg-bg3">
+                  <th className="px-2 py-1.5 text-left text-text3">Giorno</th>
+                  <th className="px-2 py-1.5 text-text3">Min</th>
+                  <th className="px-2 py-1.5 text-text3">Max</th>
+                  <th className="px-2 py-1.5 text-left text-text3">Condizioni</th>
+                  <th className="px-2 py-1.5 text-text3">Pioggia</th>
+                  <th className="px-2 py-1.5 text-text3">Vento</th>
+                </tr></thead>
+                <tbody>
+                  {result.previsioni.map((p: any, i: number) => (
+                    <tr key={i} className="border-t border-border">
+                      <td className="px-2 py-1.5 text-text font-medium">{p.giorno} {p.data?.split('-')[2]}</td>
+                      <td className="px-2 py-1.5 text-center text-blue">{p.temp_min}</td>
+                      <td className="px-2 py-1.5 text-center text-red">{p.temp_max}</td>
+                      <td className="px-2 py-1.5 text-text2">{p.condizioni}</td>
+                      <td className="px-2 py-1.5 text-center text-text3">{p.precipitazioni}</td>
+                      <td className="px-2 py-1.5 text-center text-text3">{p.vento_max}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {expanded && result.oggi_orario && (
+            <div className="overflow-x-auto">
+              <table className="w-full text-[10px]">
+                <thead><tr className="bg-bg3">
+                  <th className="px-2 py-1.5 text-left text-text3">Ora</th>
+                  <th className="px-2 py-1.5 text-text3">Temp</th>
+                  <th className="px-2 py-1.5 text-left text-text3">Condizioni</th>
+                  <th className="px-2 py-1.5 text-text3">Pioggia</th>
+                  <th className="px-2 py-1.5 text-text3">Vento</th>
+                </tr></thead>
+                <tbody>
+                  {result.oggi_orario.map((h: any, i: number) => (
+                    <tr key={i} className="border-t border-border">
+                      <td className="px-2 py-1.5 text-text font-medium">{h.ora}</td>
+                      <td className="px-2 py-1.5 text-center text-text">{h.temperatura}</td>
+                      <td className="px-2 py-1.5 text-text2">{h.condizioni}</td>
+                      <td className="px-2 py-1.5 text-center text-text3">{h.prob_pioggia}</td>
+                      <td className="px-2 py-1.5 text-center text-text3">{h.vento}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
 function CollapsibleWebSearch({ result }: { result: any }) {
   const [expanded, setExpanded] = useState(false)
   const fonti = result.fonti || []
@@ -1236,6 +1381,14 @@ export function renderToolResult(toolName: string, result: any, context?: Action
         if (!result?.output || result.output.length < 50) return renderCreateResult(result)
         const lines = result.output.split('\n').filter((l: string) => l.trim())
         return <CollapsibleDocResults title="execute_code" count={lines.length} output={result.output} />
+      }
+      case 'get_map': {
+        if (result?.errore) return renderCreateResult(result)
+        return <MapResult result={result} />
+      }
+      case 'get_weather': {
+        if (result?.errore) return renderCreateResult(result)
+        return <WeatherResult result={result} />
       }
       default: return null
     }

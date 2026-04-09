@@ -239,6 +239,14 @@ export const TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     days: { type: 'number', description: 'Giorni di previsione (1-16, default 1). 1=solo oggi, 3=prossimi 3 giorni' },
   }, required: ['city'] } } },
 
+  // ── Maps & Routing ──
+  get_map: { type: 'function', function: { name: 'get_map', description: 'Mostra mappa di un indirizzo o calcola un percorso tra due punti. Restituisce mappa interattiva + dettagli percorso (distanza, durata, tappe). Supporta auto, bici, piedi.', parameters: { type: 'object', properties: {
+    address: { type: 'string', description: 'Indirizzo o luogo da mostrare (es. "Via Garibaldi 10, Parma")' },
+    from: { type: 'string', description: 'Partenza per calcolo percorso (es. "Parma")' },
+    to: { type: 'string', description: 'Destinazione per calcolo percorso (es. "Milano")' },
+    mode: { type: 'string', enum: ['driving', 'cycling', 'walking'], description: 'Mezzo: driving (auto, default), cycling (bici), walking (piedi)' },
+  } } } },
+
   // ── Code Execution (programmatic tool calling) ──
   execute_code: { type: 'function', function: { name: 'execute_code', description: 'Esegui codice JavaScript per operazioni complesse: loop su molti record, aggregazioni, filtri condizionali, batch operations. Il codice ha accesso ai tool FIAI come funzioni async: find(params), create(params), update(params), delete_record(params), relate(params), get_tree(params), retrieve(params), list_documents(), get_datetime(), date_diff(params), generate_pdf(params). Usa print() per output. Solo l\'output finale torna nel contesto — i risultati intermedi non consumano token. QUANDO USARE: operazioni su >3 record (es. "controlla tutte le fatture scadute"), aggregazioni (es. "totale fatturato per cliente"), batch updates, confronti multipli.', parameters: { type: 'object', properties: {
     code: { type: 'string', description: 'Codice JavaScript con await per tool async. Es: const clients = await find({tags:["cliente"]}); print(`${clients.length} clienti trovati`)' },
@@ -1533,6 +1541,102 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
         return { output: result.stdout }
       } catch (err: any) {
         return { errore: `Code execution failed: ${err.message}` }
+      }
+    }
+
+    // ── MAPS & ROUTING (OpenStreetMap + OSRM — free) ──
+    case 'get_map': {
+      try {
+        const geocode = async (query: string) => {
+          const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=1`, {
+            headers: { 'User-Agent': 'BERNARDINI-OS/1.0' }
+          })
+          const data = await res.json()
+          if (!data.length) return null
+          return { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon), display_name: data[0].display_name }
+        }
+
+        // Single address → show map
+        if (input.address && !input.from && !input.to) {
+          const loc = await geocode(input.address as string)
+          if (!loc) return { errore: `Indirizzo "${input.address}" non trovato` }
+          return {
+            tipo: 'mappa',
+            indirizzo: loc.display_name,
+            lat: loc.lat,
+            lon: loc.lon,
+            mappa_url: `https://www.openstreetmap.org/?mlat=${loc.lat}&mlon=${loc.lon}#map=16/${loc.lat}/${loc.lon}`,
+            embed_url: `https://www.openstreetmap.org/export/embed.html?bbox=${loc.lon-0.01},${loc.lat-0.01},${loc.lon+0.01},${loc.lat+0.01}&layer=mapnik&marker=${loc.lat},${loc.lon}`,
+          }
+        }
+
+        // Route between two points
+        if (input.from && input.to) {
+          const fromLoc = await geocode(input.from as string)
+          const toLoc = await geocode(input.to as string)
+          if (!fromLoc) return { errore: `Partenza "${input.from}" non trovata` }
+          if (!toLoc) return { errore: `Destinazione "${input.to}" non trovata` }
+
+          const mode = (input.mode as string) || 'driving'
+          const osrmProfile = mode === 'cycling' ? 'bike' : mode === 'walking' ? 'foot' : 'car'
+
+          // OSRM routing
+          const routeRes = await fetch(`https://router.project-osrm.org/route/v1/${osrmProfile}/${fromLoc.lon},${fromLoc.lat};${toLoc.lon},${toLoc.lat}?overview=full&geometries=geojson&steps=true`)
+          const routeData = await routeRes.json()
+
+          if (routeData.code !== 'Ok' || !routeData.routes?.length) {
+            return { errore: 'Percorso non disponibile per questo mezzo' }
+          }
+
+          const route = routeData.routes[0]
+          const durationMin = Math.round(route.duration / 60)
+          const distanceKm = (route.distance / 1000).toFixed(1)
+          const hours = Math.floor(durationMin / 60)
+          const mins = durationMin % 60
+
+          // Extract key steps
+          const steps = route.legs[0].steps
+            .filter((s: any) => s.name && s.distance > 500)
+            .slice(0, 10)
+            .map((s: any) => ({
+              istruzione: s.maneuver?.type === 'turn' ? `Svolta ${s.maneuver.modifier || ''} su ${s.name}` :
+                          s.maneuver?.type === 'depart' ? `Parti da ${s.name}` :
+                          s.maneuver?.type === 'arrive' ? `Arrivo a ${s.name}` :
+                          `Prosegui su ${s.name}`,
+              distanza: `${(s.distance / 1000).toFixed(1)} km`,
+              durata: `${Math.round(s.duration / 60)} min`,
+            }))
+
+          const modeLabel = mode === 'cycling' ? 'bici' : mode === 'walking' ? 'piedi' : 'auto'
+
+          // Map with route
+          const bbox = [
+            Math.min(fromLoc.lon, toLoc.lon) - 0.1,
+            Math.min(fromLoc.lat, toLoc.lat) - 0.1,
+            Math.max(fromLoc.lon, toLoc.lon) + 0.1,
+            Math.max(fromLoc.lat, toLoc.lat) + 0.1,
+          ]
+
+          return {
+            tipo: 'percorso',
+            partenza: fromLoc.display_name,
+            destinazione: toLoc.display_name,
+            mezzo: modeLabel,
+            distanza: `${distanceKm} km`,
+            durata: hours > 0 ? `${hours}h ${mins}min` : `${mins} min`,
+            tappe: steps,
+            mappa_url: `https://www.openstreetmap.org/directions?engine=osrm_${osrmProfile}&route=${fromLoc.lat},${fromLoc.lon};${toLoc.lat},${toLoc.lon}`,
+            embed_url: `https://www.openstreetmap.org/export/embed.html?bbox=${bbox.join(',')}&layer=mapnik`,
+            coordinate: {
+              partenza: { lat: fromLoc.lat, lon: fromLoc.lon },
+              destinazione: { lat: toLoc.lat, lon: toLoc.lon },
+            },
+          }
+        }
+
+        return { errore: 'Specifica un indirizzo (address) o una partenza/destinazione (from/to)' }
+      } catch (err: any) {
+        return { errore: `Mappa non disponibile: ${err.message}` }
       }
     }
 
