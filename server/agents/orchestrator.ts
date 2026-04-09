@@ -306,7 +306,7 @@ async function synthesizeResults(
   agentResults: { agentName: string; text: string }[]
 ): Promise<string> {
   const systemPrompt =
-    "Sei l'assistente AI di FIAI. Hai ricevuto risposte da diversi agenti specializzati. " +
+    "Sei l'assistente di BERNARDINI S.R.L.. Hai ricevuto risposte da diversi agenti specializzati. " +
     'Sintetizza le risposte in un unico messaggio coerente e completo in italiano. ' +
     'Mantieni tutte le informazioni importanti e presenta i dati in modo chiaro.'
 
@@ -458,7 +458,7 @@ export async function orchestrate(
             ? 'Grazie, terro conto del tuo feedback per migliorare.'
             : 'Mi dispiace. Cerchero di fare meglio la prossima volta.'
         return {
-          text: response, toolCalls: [], agentName: 'Assistente FIAI',
+          text: response, toolCalls: [], agentName: 'Assistente BERNARDINI',
           agentDomain: 'general', agentColor: AGENT_COLORS.general,
           suggestions: getSuggestions('general', []),
         }
@@ -469,7 +469,7 @@ export async function orchestrate(
     const context = buildContext('pulse', aziendaId, userId, sessionId)
     const minimalText = await directLLMResponse(message, context, conversationHistory)
     return {
-      text: minimalText, toolCalls: [], agentName: 'Assistente FIAI',
+      text: minimalText, toolCalls: [], agentName: 'Assistente BERNARDINI',
       agentDomain: 'general', agentColor: AGENT_COLORS.general,
       suggestions: getSuggestions('general', []),
     }
@@ -563,7 +563,7 @@ export async function orchestrate(
     if (validResults.length === 0) {
       const context = buildContext('pulse', aziendaId, userId, sessionId)
       const text = await directLLMResponse(message, context, conversationHistory)
-      return finalizeResult({ text, toolCalls: [], agentName: 'Assistente FIAI', agentDomain: 'general', agentColor: AGENT_COLORS.general }, classification)
+      return finalizeResult({ text, toolCalls: [], agentName: 'Assistente BERNARDINI', agentDomain: 'general', agentColor: AGENT_COLORS.general }, classification)
     }
 
     const allToolCalls = validResults.flatMap(r => r.toolCalls)

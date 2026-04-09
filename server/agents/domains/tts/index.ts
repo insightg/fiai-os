@@ -11,7 +11,8 @@ const config: AgentConfig = {
   domain: 'tts',
   color: '#FF6F00',
   systemPrompt: prompt,
-  toolNames: [...GENERIC_TOOLS, 'list_voices', 'set_voice', 'get_current_voice', 'clone_voice', 'generate_tts'],
+  toolNames: [...GENERIC_TOOLS, 'list_voices', 'set_voice', 'get_current_voice', 'clone_voice', 'generate_tts',
+    'send_whatsapp_message', 'send_whatsapp_voice', 'send_whatsapp_image', 'send_whatsapp_document'],
   views,
 }
 

@@ -13,7 +13,8 @@ const config: AgentConfig = {
   systemPrompt: prompt,
   toolNames: [...GENERIC_TOOLS, 'get_api_costs', 'get_whatsapp_status',
     'list_autonomous_agents', 'get_agent_logs',
-    'list_workflows', 'get_jobs'],
+    'list_workflows', 'get_jobs',
+    'send_whatsapp_message', 'send_whatsapp_voice', 'send_whatsapp_image', 'send_whatsapp_document'],
   views,
 }
 

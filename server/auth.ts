@@ -121,9 +121,6 @@ router.post('/signup', async (req: Request, res: Response) => {
         `/entity/utente/${slug}`
       )
 
-      // Legacy write (keeps users table in sync for any remaining references)
-      try { db.prepare('INSERT OR IGNORE INTO users (id, email, password_hash) VALUES (?, ?, ?)').run(userId, email, passwordHash) } catch {}
-
       // Create membro_di relation
       db.prepare(`INSERT OR IGNORE INTO relations (id, azienda_id, from_id, to_id, tipo)
         VALUES (?, ?, ?, ?, 'membro_di')`).run(

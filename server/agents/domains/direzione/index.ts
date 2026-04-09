@@ -11,7 +11,7 @@ const config: AgentConfig = {
   domain: 'direzione',
   color: '#1a1a2e',
   systemPrompt: prompt,
-  toolNames: [...GENERIC_TOOLS],
+  toolNames: [...GENERIC_TOOLS, 'send_whatsapp_message', 'send_whatsapp_voice', 'send_whatsapp_image', 'send_whatsapp_document'],
   views,
 }
 

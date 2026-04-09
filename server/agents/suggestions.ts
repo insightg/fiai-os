@@ -1,39 +1,44 @@
 // Rule-based suggestions by domain + tool used (instant, no LLM call)
+// ── BERNARDINI S.R.L. ──────────────────────────────────
 const TOOL_SUGGESTIONS: Record<string, string[]> = {
-  // Pulse
-  get_dashboard_summary: ['Fatturato del mese', 'Pipeline commerciale', 'Progetti attivi', 'Alert e scadenze'],
-
   // Commerciale
-  get_pipeline: ['Lead caldi in proposta', 'Crea nuovo lead', 'Brief pre-call', 'Preventivi aperti'],
+  get_pipeline: ['Lead caldi in proposta', 'Crea nuovo lead', 'Preventivi aperti', 'Clienti GDO/retail'],
   get_clients: ['Nuovo cliente', 'Pipeline lead', 'Preventivi per cliente', 'Storico ordini'],
   create_lead: ['Pipeline commerciale', 'Stato lead', 'Converti lead'],
-  create_client: ['Crea preventivo', 'Pipeline', 'Assegna progetto'],
+  create_client: ['Crea preventivo', 'Pipeline', 'Ordini cliente'],
 
-  // Produzione
-  get_projects: ['Milestone prossime', 'Rischi progetto', 'Budget vs speso', 'Ordini in corso'],
-  get_orders: ['Stato progetti', 'Crea fattura', 'Avanzamento delivery'],
+  // Logistica & Produzione
+  get_projects: ['Ordini produzione', 'Pianificazione settimanale', 'Stato magazzino', 'Spedizioni in corso'],
+  get_orders: ['Stato spedizioni', 'Crea fattura', 'Avanzamento produzione'],
 
-  // Marketing
-  generate_image: ['Genera variante', 'Crea post LinkedIn', 'Score lead'],
-  analyze_image: ['Genera immagine simile', 'Crea contenuto testuale'],
-
-  // Amministrazione
-  get_financial_summary: ['Fatture scadute', 'Saldo conti', 'Cash flow', 'Scadenze fiscali'],
+  // Amministrazione & HR
+  get_financial_summary: ['Fatture scadute', 'Saldo conti', 'Cash flow', 'Scadenze F24'],
   get_overdue_invoices: ['Sollecita fattura', 'Riepilogo finanziario', 'Dettaglio cliente'],
   get_bank_accounts: ['Movimenti recenti', 'Cash flow', 'Fatture da pagare'],
   get_passive_invoices: ['Scadenze fornitori', 'Totale da pagare', 'Budget residuo'],
   get_expenses: ['Approva rimborso', 'Spese mensili', 'Per categoria'],
   approve_expense: ['Rimborsi pendenti', 'Riepilogo spese'],
   get_suppliers: ['Fatture passive', 'Dettaglio fornitore'],
-
-  // HR
   get_candidates: ['In colloquio', 'Nuovo candidato', 'Annunci aperti'],
   get_job_postings: ['Crea annuncio', 'Candidati per posizione'],
   create_candidate: ['Pipeline candidati', 'Annunci aperti'],
 
-  // Documents/Legal
-  get_documents: ['Cerca contratto', 'Normative recenti', 'Analizza documento'],
-  search_documents: ['Carica documento', 'Per categoria'],
+  // Contabilita Industriale
+  get_dashboard_summary: ['Margini per commessa', 'Scostamenti budget', 'Costi produzione', 'Report CdA'],
+
+  // Officina
+  generate_image: ['Genera variante', 'Foto intervento', 'Scheda ricambio'],
+  analyze_image: ['Genera immagine simile', 'Analisi componente'],
+
+  // Documentale / Legale
+  get_documents: ['Cerca contratto', 'Polizze attive', 'Normative ISO', 'Analizza documento'],
+  search_documents: ['Carica documento', 'Per categoria', 'Certificazioni'],
+
+  // WhatsApp
+  get_whatsapp_status: ['Invia messaggio', 'Contatti WhatsApp', 'Invia documento', 'Invia vocale'],
+  send_whatsapp_message: ['Invia altro messaggio', 'Stato WhatsApp', 'Invia documento'],
+  send_whatsapp_voice: ['Invia messaggio testo', 'Stato WhatsApp'],
+  send_whatsapp_document: ['Invia altro documento', 'Invia messaggio'],
 
   // User Management
   get_users: ['Crea nuovo utente', 'Modifica ruolo', 'Utenti WhatsApp'],
@@ -43,17 +48,22 @@ const TOOL_SUGGESTIONS: Record<string, string[]> = {
 }
 
 // Domain-level fallback suggestions (when no specific tool match)
+// ── Reparti BERNARDINI + Agenti condivisi ──────────────
 const DOMAIN_SUGGESTIONS: Record<string, string[]> = {
-  pulse: ['Overview aziendale', 'Daily brief', 'Alert e priorita', 'Stato generale'],
-  commerciale: ['Pipeline lead', 'Lista clienti', 'Nuovo lead', 'Brief pre-call'],
-  produzione: ['Progetti attivi', 'Milestone prossime', 'Rischi', 'Ordini in corso'],
-  marketing: ['Genera immagine', 'Crea post', 'Score lead', 'Contenuti campagna'],
-  amministrazione: ['Riepilogo finanziario', 'Fatture scadute', 'Saldo conti', 'Rimborsi'],
-  hr: ['Candidati attivi', 'Annunci lavoro', 'Simula costo', 'Screening CV'],
-  legal: ['Cerca contratto', 'Analizza clausole', 'Normative', 'Scadenze contratti'],
-  it: ['Costi API', 'Gestione utenti', 'Agenti autonomi', 'Workflow'],
+  direzione: ['Overview aziendale', 'KPI strategici', 'Report CdA', 'Alert e priorita'],
+  commerciale: ['Pipeline lead', 'Lista clienti', 'Nuovo lead', 'Preventivi aperti'],
+  amministrazione: ['Riepilogo finanziario', 'Fatture scadute', 'Buste paga', 'Scadenze F24'],
+  contabilita: ['Margini per commessa', 'Costi produzione', 'Scostamenti budget', 'Analisi costi'],
+  produzione: ['Ordini produzione', 'Stato magazzino', 'Spedizioni', 'Pianificazione'],
+  officina: ['Ordini lavoro aperti', 'Manutenzione mezzi', 'Ricambi disponibili', 'Interventi programmati'],
+  legal: ['Polizze attive', 'Sinistri aperti', 'Scadenze contratti', 'Parco mezzi'],
+  qualita: ['Audit programmati', 'Non conformita', 'Formazione sicurezza', 'Certificazioni ISO'],
+  documentale: ['Cerca documento', 'Carica documento', 'Per categoria', 'Archivio recente'],
+  whatsapp: ['Stato connessione', 'Invia messaggio', 'Contatti', 'Invia documento'],
+  it: ['Costi API', 'Gestione utenti', 'Agenti autonomi', 'Diagnostica sistema'],
   doctor: ['Salute sistema', 'Check-up dati', 'Job falliti', 'Diagnostica'],
-  general: ['Overview aziendale', 'Lista clienti', 'Fatturato', 'Progetti attivi'],
+  tts: ['Genera vocale', 'Leggi documento', 'Cambia voce', 'Invia vocale WhatsApp'],
+  general: ['Overview aziendale', 'Lista clienti', 'Fatturato', 'Reparti Bernardini'],
 }
 
 export function getSuggestions(domain: string, toolsUsed: string[]): string[] {

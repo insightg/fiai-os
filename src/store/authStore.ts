@@ -58,16 +58,34 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   fetchProfile: async () => {
     const user = get().user
     if (!user) return
+    // Load profile from entity table (unified VFS)
     const { data, error } = await supabase
-      .from('user_profiles')
+      .from('entity')
       .select('*')
       .eq('id', user.id)
       .single()
-    if (error) {
-      set({ error: error.message })
+    if (error || !data) {
+      // Fallback: try user_profiles (legacy)
+      const { data: legacy } = await supabase.from('user_profiles').select('*').eq('id', user.id).single()
+      if (legacy) { set({ profile: legacy as UserProfile }); return }
+      set({ error: error?.message || 'Profilo non trovato' })
       return
     }
-    set({ profile: data as UserProfile })
+    // Map entity fields to UserProfile format
+    const meta = typeof data.metadata === 'string' ? JSON.parse(data.metadata) : (data.metadata || {})
+    set({ profile: {
+      id: data.id,
+      azienda_id: data.azienda_id,
+      email: data.email || '',
+      nome: data.display_name?.split(' ')[0] || data.display_name || '',
+      cognome: meta.cognome || data.display_name?.split(' ').slice(1).join(' ') || '',
+      ruolo: meta.ruolo || 'collaboratore',
+      avatar_url: meta.avatar_url || null,
+      whatsapp_phone: meta.whatsapp_phone || data.telefono || null,
+      whatsapp_active: meta.whatsapp_active ? 1 : 0,
+      tts_voice: meta.tts_voice || 'Vivian',
+      created_at: data.created_at,
+    } as UserProfile })
   },
 
   setSession: (session: Session | null) => {

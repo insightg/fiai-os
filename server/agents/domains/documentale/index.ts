@@ -12,7 +12,8 @@ const config: AgentConfig = {
   color: '#795548',
   model: 'anthropic/claude-haiku-4.5',
   systemPrompt: prompt,
-  toolNames: [...GENERIC_TOOLS, 'retrieve', 'list_documents', 'explore_document', 'rechunk_document', 'reclassify_document', 'generate_pdf'],
+  toolNames: [...GENERIC_TOOLS, 'retrieve', 'list_documents', 'explore_document', 'rechunk_document', 'reclassify_document', 'generate_pdf',
+    'send_whatsapp_message', 'send_whatsapp_voice', 'send_whatsapp_image', 'send_whatsapp_document'],
   views,
 }
 

@@ -35,15 +35,12 @@ interface ParsedRelation {
 // ── Allowed tables (whitelist for safety) ───────────────────
 
 const ALLOWED_TABLES = new Set([
-  // v5 Virtual Filesystem
-  'names', 'entity', 'relations',
-  // Legacy tables (kept for backward compat)
-  'aziende', 'user_profiles', 'clienti', 'leads', 'preventivi', 'preventivo_righe',
-  'ordini', 'progetti', 'fatture', 'fattura_righe', 'ricorrenti', 'fornitori',
-  'fatture_passive', 'conti', 'movimenti', 'rimborsi', 'chat_sessions', 'chat_messages',
-  'users', 'candidati', 'annunci_lavoro', 'documenti',
-  'note_boards', 'note_columns', 'note_cards', 'eventi',
-  'prompt_history',
+  // VFS
+  'entity', 'relations',
+  // Used by frontend (auth + chat)
+  'user_profiles', 'chat_sessions', 'chat_messages',
+  // Legacy (read-only, for backward compat)
+  'aziende', 'users',
 ])
 
 // ── Known FK mappings for joins ─────────────────────────────

@@ -763,17 +763,21 @@ function renderWhatsAppStatus(data: any): JSX.Element {
   if (!data || data.errore) {
     return <div className="text-[10px] text-red mt-1">{data?.errore || 'Errore WhatsApp'}</div>
   }
+  const status = data.status || data.stato || 'unknown'
+  const isConnected = status === 'connected' || status?.includes('Connesso')
+  const isConnecting = status === 'connecting' || status?.includes('connessione')
+  const hasQr = !!(data.qrImage || data.qrCode)
   return (
     <div className="mt-2 bg-bg3 rounded-xl p-3 border border-border">
       <div className="flex items-center gap-2 mb-2">
-        <span className="text-lg">{data.stato?.includes('Connesso') ? '🟢' : data.stato?.includes('connessione') ? '🟡' : '🔴'}</span>
-        <span className="text-sm font-medium text-text">{data.stato}</span>
+        <span className="text-lg">{isConnected ? '🟢' : isConnecting ? '🟡' : '🔴'}</span>
+        <span className="text-sm font-medium text-text">{isConnected ? 'Connesso' : isConnecting ? 'In connessione' : 'Disconnesso'}</span>
       </div>
       <div className="text-[10px] text-text3 space-y-0.5">
-        <div>QR disponibile: {data.qr_disponibile}</div>
-        <div>Sessione salvata: {data.sessione_salvata}</div>
+        <div>QR disponibile: {hasQr ? 'Sì' : 'No'}</div>
+        <div>Sessione salvata: {data.hasAuth ? 'Sì' : 'No'}</div>
       </div>
-      {data.qr_disponibile === 'Sì' && (
+      {hasQr && (
         <div className="mt-3 flex flex-col items-center">
           <div className="text-xs text-text2 mb-2 font-medium">Scansiona con WhatsApp:</div>
           {data.qrImage && (

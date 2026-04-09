@@ -226,7 +226,7 @@ export const TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
   generate_pdf: { type: 'function', function: { name: 'generate_pdf', description: 'Genera un PDF da contenuto testuale', parameters: { type: 'object', properties: { titolo: { type: 'string' }, contenuto: { type: 'string' } }, required: ['titolo', 'contenuto'] } } },
   get_api_costs: { type: 'function', function: { name: 'get_api_costs', description: 'Costi API OpenRouter', parameters: { type: 'object', properties: {} } } },
   get_whatsapp_status: { type: 'function', function: { name: 'get_whatsapp_status', description: 'Stato connessione WhatsApp', parameters: { type: 'object', properties: {} } } },
-  send_whatsapp_message: { type: 'function', function: { name: 'send_whatsapp_message', description: 'Invia un messaggio di testo WhatsApp', parameters: { type: 'object', properties: { phone: { type: 'string', description: 'Numero senza + (es. 393471349312)' }, text: { type: 'string' } }, required: ['phone', 'text'] } } },
+  send_whatsapp_message: { type: 'function', function: { name: 'send_whatsapp_message', description: 'Invia un messaggio di testo WhatsApp', parameters: { type: 'object', properties: { phone: { type: 'string', description: 'Numero senza + con prefisso internazionale (es. 39XXXXXXXXXX)' }, text: { type: 'string' } }, required: ['phone', 'text'] } } },
   send_whatsapp_voice: { type: 'function', function: { name: 'send_whatsapp_voice', description: 'Invia un messaggio vocale WhatsApp (TTS)', parameters: { type: 'object', properties: { phone: { type: 'string' }, text: { type: 'string', description: 'Testo da pronunciare' }, voice: { type: 'string', description: 'Voce TTS (Vivian, Serena, Ryan...)' } }, required: ['phone', 'text'] } } },
   send_whatsapp_image: { type: 'function', function: { name: 'send_whatsapp_image', description: 'Invia un\'immagine su WhatsApp (da URL o path file)', parameters: { type: 'object', properties: { phone: { type: 'string' }, url: { type: 'string', description: 'URL o path del file immagine' }, caption: { type: 'string', description: 'Didascalia opzionale' } }, required: ['phone', 'url'] } } },
   send_whatsapp_document: { type: 'function', function: { name: 'send_whatsapp_document', description: 'Invia un documento/file su WhatsApp (PDF, DOC, etc.)', parameters: { type: 'object', properties: { phone: { type: 'string' }, url: { type: 'string', description: 'URL o path del file' }, filename: { type: 'string', description: 'Nome file visualizzato' }, caption: { type: 'string' } }, required: ['phone', 'url'] } } },
@@ -422,6 +422,7 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
 
       values.push(input.id, aziendaId)
       db.prepare(`UPDATE entity SET ${updates.join(', ')} WHERE id = ? AND azienda_id = ?`).run(...values)
+
       return { successo: true, messaggio: `Record aggiornato` }
     }
 
@@ -1251,7 +1252,39 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
     }
 
     case 'generate_pdf': {
-      return { successo: true, messaggio: `PDF "${input.titolo}" pronto per la generazione. Usa l'endpoint /api/pdf/generate per il download.`, titolo: input.titolo }
+      try {
+        const fs = await import('fs')
+        const path = await import('path')
+        const crypto = await import('crypto')
+        const { execSync } = await import('child_process')
+        const UPLOADS_DIR = process.env.UPLOADS_DIR || '/app/data/uploads'
+        const tmpDir = path.default.join(UPLOADS_DIR, 'tmp')
+        if (!fs.default.existsSync(tmpDir)) fs.default.mkdirSync(tmpDir, { recursive: true })
+
+        const fileId = crypto.default.randomUUID()
+        const typFile = path.default.join(tmpDir, `${fileId}.typ`)
+        const pdfFile = typFile.replace('.typ', '.pdf')
+
+        // Build simple Typst document
+        const titolo = (input.titolo || 'Documento').replace(/"/g, '\\"')
+        const contenuto = (input.contenuto || '').replace(/\\/g, '\\\\')
+        const typstSource = `#set page(margin: 2cm)\n#set text(font: "Liberation Sans", size: 11pt)\n\n= ${titolo}\n\n${contenuto}`
+        fs.default.writeFileSync(typFile, typstSource)
+
+        execSync(`typst compile "${typFile}" "${pdfFile}"`, { timeout: 30000, stdio: 'pipe' })
+
+        // Move to uploads with proper path
+        const destDir = path.default.join(UPLOADS_DIR, aziendaId, 'generated')
+        if (!fs.default.existsSync(destDir)) fs.default.mkdirSync(destDir, { recursive: true })
+        const destFile = path.default.join(destDir, `${fileId}.pdf`)
+        fs.default.renameSync(pdfFile, destFile)
+        try { fs.default.unlinkSync(typFile) } catch {}
+
+        const fileUrl = `/api/uploads/${aziendaId}/generated/${fileId}.pdf`
+        return { successo: true, messaggio: `PDF "${input.titolo}" generato`, file_url: fileUrl, filename: `${input.titolo}.pdf` }
+      } catch (err: any) {
+        return { errore: `Errore generazione PDF: ${err.message}` }
+      }
     }
 
     case 'get_api_costs': {
@@ -1292,6 +1325,7 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
 
     case 'send_whatsapp_message': {
       try {
+        console.log(`[WhatsApp] send_whatsapp_message called: phone=${input.phone}, text=${(input.text || '').substring(0, 50)}`)
         const msgText = (input.text || '') as string
         if (!msgText.trim()) {
           return { errore: 'Testo del messaggio mancante. Specifica cosa vuoi inviare.' }

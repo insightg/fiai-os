@@ -38,7 +38,7 @@ export async function startWhatsApp() {
     version,
     auth: state,
     logger: P({ level: 'silent' }),
-    browser: ['FIAI OS', 'Chrome', '131.0.0'],
+    browser: ['BERNARDINI', 'Chrome', '131.0.0'],
   })
 
   sock.ev.on('creds.update', saveCreds)
@@ -138,7 +138,7 @@ async function handleIncomingMessage(msg: WAMessage) {
         const userPhone = pending.telefono?.replace(/^\+/, '') || lidId
         db.prepare("UPDATE entity SET metadata = json_set(metadata, '$.whatsapp_lid', ?, '$.whatsapp_active', 1) WHERE id = ?").run(lidId, pending.id)
         lidPhoneMap.set(lidId, userPhone)
-        await sock.sendMessage(sender, { text: `✅ Autenticato come *${pending.display_name}*!\n\nOra puoi usare FIAI da WhatsApp.` })
+        await sock.sendMessage(sender, { text: `✅ Autenticato come *${pending.display_name}*!\n\nOra puoi usare BERNARDINI da WhatsApp.` })
       } else {
         await sock.sendMessage(sender, { text: '❌ Password errata. Riprova scrivendo la tua email.' })
       }
@@ -160,7 +160,7 @@ async function handleIncomingMessage(msg: WAMessage) {
     }
 
     // First contact — ask for email
-    await sock.sendMessage(sender, { text: '👋 Benvenuto in *FIAI OS*!\n\nPer autenticarti, invia la tua *email* di accesso:' })
+    await sock.sendMessage(sender, { text: '👋 Benvenuto in *BERNARDINI*!\n\nPer autenticarti, invia la tua *email* di accesso:' })
     return
   }
 
@@ -188,7 +188,7 @@ async function handleIncomingMessage(msg: WAMessage) {
   // No fallback — VFS only
 
   if (!waUser) {
-    await sock.sendMessage(sender, { text: '⚠️ Numero non riconosciuto.\n\nChiedi al tuo amministratore di collegare questo numero al tuo profilo FIAI.' })
+    await sock.sendMessage(sender, { text: '⚠️ Numero non riconosciuto.\n\nChiedi al tuo amministratore di collegare questo numero al tuo profilo BERNARDINI.' })
     return
   }
 
@@ -471,7 +471,7 @@ async function handleSpecialCommand(sender: string, text: string, waUser: any) {
 
   if (cmd === '!help') {
     await sock.sendMessage(sender, {
-      text: '*FIAI AI - Comandi WhatsApp*\n\n' +
+      text: '*BERNARDINI AI - Comandi WhatsApp*\n\n' +
         '!help — Questo messaggio\n' +
         '!stato — Overview aziendale\n' +
         '!clienti — Lista clienti\n' +
@@ -513,7 +513,7 @@ async function handleVoiceMessage(sender: string, text: string, _waUser: any) {
   // Format: !voce <numero> <messaggio> OR !parla <numero> <messaggio>
   const match = text.match(/^!(?:voce|parla)\s+(\d+)\s+(.+)/i)
   if (!match) {
-    await sock.sendMessage(sender, { text: 'Formato: *!voce 3331234567 Benvenuto in FIAI*\nOppure: *!parla 3331234567 il tuo messaggio*' })
+    await sock.sendMessage(sender, { text: 'Formato: *!voce 3331234567 Benvenuto in BERNARDINI*\nOppure: *!parla 3331234567 il tuo messaggio*' })
     return
   }
 
@@ -574,7 +574,7 @@ async function handleLinkCommand(sender: string, text: string) {
   const user = db.prepare("SELECT id, display_name FROM entity WHERE email = ? AND tags LIKE '%\"utente\"%'").get(email) as any
 
   if (!user) {
-    await sock.sendMessage(sender, { text: `❌ Email "${email}" non trovata nel sistema FIAI.` })
+    await sock.sendMessage(sender, { text: `❌ Email "${email}" non trovata nel sistema BERNARDINI.` })
     return
   }
 
@@ -662,7 +662,7 @@ whatsappRouter.get('/qr', async (_req, res: Response) => {
 whatsappRouter.get('/qr-page', (_req, res: Response) => {
   res.setHeader('Content-Type', 'text/html')
   res.send(`<!DOCTYPE html>
-<html><head><title>FIAI WhatsApp QR</title>
+<html><head><title>BERNARDINI WhatsApp QR</title>
 <meta http-equiv="refresh" content="5">
 <style>
   body { display:flex; flex-direction:column; align-items:center; justify-content:center; height:100vh; margin:0; font-family:sans-serif; background:#111; color:#fff; }
@@ -671,7 +671,7 @@ whatsappRouter.get('/qr-page', (_req, res: Response) => {
   p { color:#888; font-size:14px; }
 </style></head>
 <body>
-  <h2>FIAI — WhatsApp</h2>
+  <h2>BERNARDINI — WhatsApp</h2>
   <p>Scansiona con WhatsApp → Dispositivi collegati</p>
   <img src="/api/whatsapp/qr" width="400" height="400" />
   <p style="margin-top:16px;font-size:12px;color:#555">Pagina si aggiorna ogni 5 secondi</p>
@@ -696,10 +696,10 @@ whatsappRouter.get('/status', authMiddleware(true), async (_req: AuthRequest, re
 
 whatsappRouter.get('/users', authMiddleware(true), (_req: AuthRequest, res: Response) => {
   const users = db.prepare(`
-    SELECT wu.*, up.nome, up.cognome, up.email
-    FROM whatsapp_users wu
-    LEFT JOIN user_profiles up ON up.id = wu.user_id
-    ORDER BY wu.created_at DESC
+    SELECT id, display_name, email, telefono, tags, metadata
+    FROM entity
+    WHERE tags LIKE '%"utente"%' AND telefono IS NOT NULL AND telefono != ''
+    ORDER BY display_name
   `).all()
   res.json({ users })
 })
@@ -708,13 +708,12 @@ whatsappRouter.post('/users', authMiddleware(true), (req: AuthRequest, res: Resp
   const { phone, userId } = req.body
   if (!phone || !userId) { res.status(400).json({ error: 'phone e userId richiesti' }); return }
 
-  const id = crypto.randomUUID()
-  db.prepare('INSERT OR REPLACE INTO whatsapp_users (id, phone, user_id, active) VALUES (?, ?, ?, 1)').run(id, phone, userId)
-  res.json({ success: true, id })
+  db.prepare("UPDATE entity SET telefono = ?, tags = json_insert(COALESCE(tags, '[]'), '$[#]', 'whatsapp_enabled'), metadata = json_set(COALESCE(metadata, '{}'), '$.whatsapp_enabled', 1) WHERE id = ?").run(phone, userId)
+  res.json({ success: true })
 })
 
 whatsappRouter.delete('/users/:phone', authMiddleware(true), (req: AuthRequest, res: Response) => {
-  db.prepare('DELETE FROM whatsapp_users WHERE phone = ?').run(req.params.phone)
+  db.prepare("UPDATE entity SET metadata = json_set(COALESCE(metadata, '{}'), '$.whatsapp_enabled', 0) WHERE telefono = ?").run(req.params.phone)
   res.json({ success: true })
 })
 

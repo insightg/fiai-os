@@ -219,6 +219,15 @@ function renderMarkdown(text: string): JSX.Element[] {
 
     if (line.trim() === '') { elements.push(<div key={`br-${i}`} className="h-2" />); continue }
 
+    // Markdown image: ![alt](url)
+    const imgMatch = line.trim().match(/^!\[([^\]]*)\]\(([^)]+)\)$/)
+    if (imgMatch) {
+      elements.push(
+        <img key={`img-${i}`} src={imgMatch[2]} alt={imgMatch[1]} className="max-w-full max-h-80 rounded-lg border border-border bg-white p-1 my-2" />
+      )
+      continue
+    }
+
     if (line.startsWith('### ')) {
       elements.push(<h4 key={`h3-${i}`} className="text-sm font-bold text-text mt-3 mb-1">{formatInline(line.slice(4))}</h4>)
       continue
