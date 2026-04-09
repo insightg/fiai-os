@@ -1631,6 +1631,8 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
               partenza: { lat: fromLoc.lat, lon: fromLoc.lon },
               destinazione: { lat: toLoc.lat, lon: toLoc.lon },
             },
+            bbox,
+            geojson: route.geometry, // GeoJSON LineString for drawing route on map
           }
         }
 

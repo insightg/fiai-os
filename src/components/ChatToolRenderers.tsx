@@ -1035,22 +1035,52 @@ function renderRetrieveResults(result: any): JSX.Element {
   return <CollapsibleDocResults title="Ricerca nel documento" count={result.length} items={result} />
 }
 
+function LeafletMap({ result }: { result: any }) {
+  const mapRef = useRef<HTMLDivElement>(null)
+  const mapInstance = useRef<any>(null)
+
+  useEffect(() => {
+    if (!mapRef.current || mapInstance.current) return
+    import('leaflet').then((L) => {
+      if (!document.getElementById('leaflet-css')) {
+        const link = document.createElement('link'); link.id = 'leaflet-css'; link.rel = 'stylesheet'
+        link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'; document.head.appendChild(link)
+      }
+      const map = L.map(mapRef.current!, { zoomControl: true, attributionControl: false })
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18 }).addTo(map)
+
+      if (result.tipo === 'percorso' && result.coordinate) {
+        const { partenza: from, destinazione: to } = result.coordinate
+        const startIcon = L.divIcon({ html: '<div style="background:#1565C0;width:12px;height:12px;border-radius:50%;border:2px solid white"></div>', iconSize: [12, 12], className: '' })
+        const endIcon = L.divIcon({ html: '<div style="background:#D32F2F;width:12px;height:12px;border-radius:50%;border:2px solid white"></div>', iconSize: [12, 12], className: '' })
+        L.marker([from.lat, from.lon], { icon: startIcon }).addTo(map)
+        L.marker([to.lat, to.lon], { icon: endIcon }).addTo(map)
+        if (result.geojson) {
+          const routeLine = L.geoJSON(result.geojson, { style: { color: '#1565C0', weight: 4, opacity: 0.8 } }).addTo(map)
+          map.fitBounds(routeLine.getBounds(), { padding: [30, 30] })
+        } else if (result.bbox) {
+          map.fitBounds([[result.bbox[1], result.bbox[0]], [result.bbox[3], result.bbox[2]]])
+        }
+      } else {
+        L.marker([result.lat || 44.8, result.lon || 10.33]).addTo(map)
+        map.setView([result.lat || 44.8, result.lon || 10.33], 15)
+      }
+      mapInstance.current = map
+    })
+    return () => { if (mapInstance.current) { mapInstance.current.remove(); mapInstance.current = null } }
+  }, [result])
+
+  return <div ref={mapRef} style={{ height: '280px', borderRadius: '8px' }} />
+}
+
 function MapResult({ result }: { result: any }) {
   const [showSteps, setShowSteps] = useState(false)
   const isRoute = result.tipo === 'percorso'
 
   return (
     <div className="space-y-2">
-      {/* Map iframe */}
-      <div className="rounded-lg overflow-hidden border border-border" style={{ height: '250px' }}>
-        <iframe
-          src={result.embed_url}
-          width="100%"
-          height="100%"
-          style={{ border: 0 }}
-          loading="lazy"
-          title="Mappa"
-        />
+      <div className="rounded-lg overflow-hidden border border-border">
+        <LeafletMap result={result} />
       </div>
 
       {/* Route info */}
