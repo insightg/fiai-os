@@ -1,7 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { X, Loader2 } from 'lucide-react'
 import type { LayoutDescriptor } from '../../types'
-import { useNamesStore } from '../../store/namesStore'
 import { useEntityStore } from '../../store/entityStore'
 import { useAuthStore } from '../../store/authStore'
 import ListView from './ListView'
@@ -20,7 +19,6 @@ export default function DynamicPanel({ layout, onClose, onAction }: DynamicPanel
   const [data, setData] = useState<any[]>(layout.data || [])
   const [loading, setLoading] = useState(!layout.data)
   const { profile } = useAuthStore()
-  const namesStore = useNamesStore()
   const entityStore = useEntityStore()
 
   const loadData = useCallback(async () => {
@@ -29,13 +27,8 @@ export default function DynamicPanel({ layout, onClose, onAction }: DynamicPanel
     try {
       const { table, type, tags, filters } = layout.source
 
-      if (table === 'names') {
-        await namesStore.fetch(profile.azienda_id, tags)
-        let result = namesStore.names
-        if (tags?.length) result = result.filter(n => tags.every(t => n.tags.includes(t)))
-        if (filters?.stato) result = result.filter(n => n.stato === filters.stato)
-        setData(result)
-      } else if (table === 'entity') {
+      // Everything uses entity table now (names merged into entity)
+      if (table === 'names' || table === 'entity') {
         await entityStore.fetch(profile.azienda_id, type)
         let result = entityStore.entities
         if (type) result = result.filter(e => e.type === type)

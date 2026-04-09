@@ -53,7 +53,7 @@ import JobMonitor from '../JobMonitor'
 import AudioRecorder from '../AudioRecorder'
 import Badge from '../ui/Badge'
 import { renderToolResult, toolNameMapExtended } from '../ChatToolRenderers'
-import InlineCrudForm, { type FormField } from '../InlineCrudForm'
+// InlineCrudForm removed — inline edits go through chat
 import {
   sendMessage,
   createChatSession,
@@ -65,8 +65,8 @@ import {
 } from '../../lib/anthropic'
 import { supabase } from '../../lib/supabase'
 import type { ChatMessage } from '../../types'
-import { useAuthStore, useClientiStore, useLeadsStore, useProgettiStore, useCandidatiStore, useRimborsiStore, useDocumentiStore, useFattureStore } from '../../store'
-import { uploadGeneric } from '../../lib/upload'
+import { useAuthStore } from '../../store'
+// (() => Promise.resolve({})) removed — uploads go through smart upload
 import { getAuthToken } from '../../lib/supabase'
 
 // Rate message via backend API
@@ -80,9 +80,9 @@ async function rateMessageFn(messageId: string, sessionId: string, domain: strin
     })
   } catch { /* fire-and-forget */ }
 }
-import UserFilesModal from '../UserFilesModal'
+// UserFilesModal removed
 // PanelRouter removed — sidebar is now dynamic
-import DocumentArchiveModal from '../DocumentArchiveModal'
+// DocumentArchiveModal removed
 
 // ── Types ───────────────────────────────────────────────
 interface SessionItem {
@@ -717,54 +717,17 @@ export default function ChatLayout() {
     ],
   }), [])
 
-  const executeDirectAction = useCallback(async (toolName: string, action: string, data: any) => {
-    switch (toolName) {
-      case 'get_clients': {
-        const store = useClientiStore.getState()
-        if (action === 'delete') await store.remove(data.id)
-        if (action === 'edit') { const { id, ...rest } = data; await store.update(id, rest) }
-        if (action === 'create') await store.create(data)
-        break
-      }
-      case 'get_pipeline': {
-        const store = useLeadsStore.getState()
-        if (action === 'delete') await store.remove(data.id)
-        if (action === 'edit') { const { id, ...rest } = data; await store.update(id, rest) }
-        if (action === 'create') await store.create(data)
-        break
-      }
-      case 'get_projects': {
-        const store = useProgettiStore.getState()
-        if (action === 'edit') { const { id, ...rest } = data; await store.update(id, rest) }
-        break
-      }
-      case 'get_candidates': {
-        const store = useCandidatiStore.getState()
-        if (action === 'delete') await store.remove(data.id)
-        if (action === 'edit') { const { id, ...rest } = data; await store.update(id, rest) }
-        if (action === 'create') await store.create(data)
-        break
-      }
-      case 'get_expenses': {
-        const store = useRimborsiStore.getState()
-        const userId = useAuthStore.getState().user?.id || ''
-        if (action === 'approve') await store.approve(data.id, userId)
-        if (action === 'reject') await store.reject(data.id, userId, '')
-        break
-      }
-      case 'get_documents':
-      case 'search_documents': {
-        const store = useDocumentiStore.getState()
-        if (action === 'delete') await store.remove(data.id)
-        break
-      }
-      case 'get_overdue_invoices': {
-        if (action === 'mark_paid') {
-          const store = useFattureStore.getState()
-          await store.update(data.id, { stato: 'pagata', pagata_il: new Date().toISOString().split('T')[0] })
-        }
-        break
-      }
+  const executeDirectAction = useCallback(async (_toolName: string, action: string, data: any) => {
+    // All actions go through the chat API (agent tools) — no legacy stores
+    if (!data?.id) return
+    const token = (await import('../../lib/supabase')).getAuthToken()
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    if (token) headers['Authorization'] = `Bearer ${token}`
+    if (action === 'delete') {
+      await fetch('/api/chat/message', { method: 'POST', headers, body: JSON.stringify({ message: `elimina record ${data.id}`, sessionId: 'action' }) })
+    } else if (action === 'edit') {
+      const { id, ...rest } = data
+      await fetch('/api/chat/message', { method: 'POST', headers, body: JSON.stringify({ message: `aggiorna record ${id}: ${JSON.stringify(rest)}`, sessionId: 'action' }) })
     }
   }, [])
 
@@ -1543,32 +1506,7 @@ export default function ChatLayout() {
                   {messages.map((msg) => (
                     <div key={msg.id}>
                       <MessageBubble message={msg} activeSessionId={activeSessionId} onAction={handleInlineAction} />
-                      {inlineForm && inlineForm.messageId === msg.id && TOOL_FORM_FIELDS[inlineForm.toolName] && (
-                        <div className="max-w-3xl mx-auto ml-12 mt-2">
-                          <InlineCrudForm
-                            fields={TOOL_FORM_FIELDS[inlineForm.toolName]}
-                            data={inlineForm.data}
-                            onSubmit={async (formData) => {
-                              try {
-                                const aziendaId = useAuthStore.getState().profile?.azienda_id
-                                const fullData = { ...formData, azienda_id: aziendaId }
-                                if (inlineForm.mode === 'edit') {
-                                  await executeDirectAction(inlineForm.toolName, 'edit', { ...fullData, id: inlineForm.data.id })
-                                  toast.success('Aggiornato')
-                                } else {
-                                  await executeDirectAction(inlineForm.toolName, 'create', fullData)
-                                  toast.success('Creato')
-                                }
-                                setInlineForm(null)
-                              } catch {
-                                toast.error('Errore durante il salvataggio')
-                              }
-                            }}
-                            onCancel={() => setInlineForm(null)}
-                            submitLabel={inlineForm.mode === 'edit' ? 'Aggiorna' : 'Crea'}
-                          />
-                        </div>
-                      )}
+                      {/* Inline forms removed — edits go through chat */}
                     </div>
                   ))}
 
@@ -1769,7 +1707,7 @@ export default function ChatLayout() {
 
         {/* Right Panel — disabled for now, will be re-enabled when stable */}
       </div>
-      <UserFilesModal open={filesModalOpen} onClose={() => setFilesModalOpen(false)} />
+      {/* UserFilesModal removed */}
 
       {/* Artifact Overlay — disabled for now */}
 
@@ -2039,37 +1977,7 @@ export default function ChatLayout() {
         </div>
       )}
 
-      {archiveModal && (
-        <DocumentArchiveModal
-          open={archiveModal.open}
-          onClose={() => setArchiveModal(null)}
-          fileUrl={archiveModal.fileUrl}
-          fileName={archiveModal.fileName}
-          fileSize={archiveModal.fileSize}
-          suggestedCategoria={archiveModal.suggestedCategoria}
-          suggestedTags={archiveModal.suggestedTags}
-          suggestedDescrizione={archiveModal.suggestedDescrizione}
-          extractedText={archiveModal.extractedText}
-          onConfirm={async (data) => {
-            const aziendaId = profile?.azienda_id
-            const userId = user?.id
-            if (!aziendaId || !userId) return
-            const ext = archiveModal.fileName.split('.').pop()?.toLowerCase() || ''
-            await useDocumentiStore.getState().create({
-              azienda_id: aziendaId,
-              nome: data.nome,
-              tipo_file: ext,
-              categoria: data.categoria as any,
-              descrizione: data.descrizione || null,
-              file_url: archiveModal.fileUrl,
-              file_size: archiveModal.fileSize,
-              tags: data.tags.length > 0 ? data.tags : null,
-              contenuto_testo: data.contenuto_testo || null,
-              uploaded_by: userId,
-            })
-          }}
-        />
-      )}
+      {/* Archive modal removed — documents uploaded via smart upload */}
 
       {/* Job Monitor — floating badge */}
       <JobMonitor />
