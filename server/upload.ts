@@ -5,6 +5,7 @@ import fs from 'fs'
 import crypto from 'crypto'
 import { AuthRequest, authMiddleware } from './middleware.js'
 import { analyzeInvoice, analyzeDocument, analyzeUpload } from './ai.js'
+import { needsOcr } from './ocr.js'
 import { chunkDocument } from './chunker.js'
 import db from './db.js'
 
@@ -463,6 +464,12 @@ router.post('/smart', authMiddleware(true), upload.single('file'), async (req: A
 
     console.log(`[Upload] Analyzed "${fileName}" — waiting for confirmation (upload_id: ${uploadId})`)
 
+    // Check if PDF needs OCR (scanned/image-based)
+    const isScannedPdf = ext === '.pdf' && needsOcr(extractedText, fileSize, pageCount)
+    if (isScannedPdf) {
+      console.log(`[Upload] PDF "${fileName}" appears scanned (${extractedText.length} chars from ${pageCount} pages, ${fileSize} bytes) — OCR available`)
+    }
+
     res.json({
       upload_id: uploadId,
       file_url: fileUrl,
@@ -477,6 +484,7 @@ router.post('/smart', authMiddleware(true), upload.single('file'), async (req: A
       file_size: fileSize,
       page_count: pageCount || undefined,
       chunk_strategy: analysis.chunk_strategy || undefined,
+      needs_ocr: isScannedPdf || undefined,
     })
   } catch (err: any) {
     console.error('Smart upload error:', err)
@@ -490,7 +498,7 @@ router.post('/smart', authMiddleware(true), upload.single('file'), async (req: A
 
 router.post('/confirm', authMiddleware(true), async (req: AuthRequest, res: Response) => {
   try {
-    const { upload_id, categoria, display_name, autore, chunk_strategy } = req.body
+    const { upload_id, categoria, display_name, autore, chunk_strategy, use_ocr } = req.body
     if (!upload_id) { res.status(400).json({ error: 'upload_id richiesto' }); return }
 
     const pending = pendingUploads.get(upload_id)
@@ -542,7 +550,7 @@ router.post('/confirm', authMiddleware(true), async (req: AuthRequest, res: Resp
       `Processa: ${analysis.display_name}`, `process-doc-${entityId.substring(0, 8)}`,
       JSON.stringify({
         action: 'process_document',
-        params: { entityId, fileName, chunk_strategy: chunk_strategy || undefined },
+        params: { entityId, fileName, chunk_strategy: chunk_strategy || undefined, use_ocr: use_ocr || false },
       }),
       `/entity/job/process-doc-${entityId.substring(0, 8)}`
     )

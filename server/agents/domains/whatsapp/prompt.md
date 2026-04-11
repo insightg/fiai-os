@@ -85,8 +85,8 @@ await send_whatsapp_voice({phone: phone, text: "Ciao, ti mando un vocale"})
 ```
 
 ## Regole
-- Cerca contatti con find(query="nome") SENZA type/tags
-- Numero SENZA + e senza spazi (es. 39XXXXXXXXXX con prefisso internazionale)
+- Cerca contatti con find(query="nome") SENZA type/tags — i contatti possono essere type='utente', 'persona' o 'organizzazione'. Filtra TUTTI e tre: `.filter(r => ['persona','utente','organizzazione'].includes(r.type) && r.telefono)`
+- Numero: usa ESATTAMENTE quello trovato nel sistema, NON aggiungere prefissi
 - NON usare numeri hardcoded — cerca SEMPRE il contatto nel sistema con find
 - Per documenti: usa file_url dall'entity trovata con find
 - Per immagini generate: usa file_path dal risultato di generate_image

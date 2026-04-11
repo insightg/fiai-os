@@ -2,6 +2,34 @@ import type { AgentConfig, AgentResult, ToolDefinition, UserPermissions } from '
 import { TOOL_DEFINITIONS, executeTool } from './tool-registry.js'
 import db from '../db.js'
 
+// ── Session context stats (shared with tool-registry for get_session_context) ──
+export interface SessionStats {
+  sessionId: string
+  agentName: string
+  agentDomain: string
+  model: string
+  systemPromptChars: number
+  contextChars: number
+  toolDefsCount: number
+  toolDefsChars: number
+  historyMessages: number
+  historyChars: number
+  toolExchanges: number
+  toolResultsChars: number
+  totalChars: number
+  totalTokensEstimate: number
+  maxTokens: number
+  usagePercent: number
+  prunedExchanges: number
+  loopsRemaining: number
+  loopsUsed: number
+  totalApiTokens: number
+  totalApiCost: number
+  updatedAt: number
+}
+
+export const sessionStatsCache = new Map<string, SessionStats>()
+
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions'
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || ''
 const AGENT_MODEL = 'anthropic/claude-haiku-4.5'
@@ -61,21 +89,71 @@ async function fetchWithRetry(body: Record<string, unknown>, retries = 3): Promi
 
 export type ProgressCallback = (event: { type: string; [key: string]: unknown }) => void
 
+// ── Pruning: rimuove tool exchange vecchi quando i messaggi superano la soglia ──
+const MAX_MESSAGES_CHARS = 400000 // ~100K token, margine per i 200K del modello
+
+function pruneMessages(messages: any[]): any[] {
+  const total = messages.reduce((s, m) => s + (typeof m.content === 'string' ? m.content.length : JSON.stringify(m).length), 0)
+  if (total <= MAX_MESSAGES_CHARS) return messages
+
+  // Trova gruppi tool exchange: assistant(tool_calls) + N tool responses
+  const groups: { start: number; end: number }[] = []
+  for (let i = 1; i < messages.length; i++) {
+    if (messages[i].role === 'assistant' && messages[i].tool_calls) {
+      const start = i
+      let end = i
+      while (end + 1 < messages.length && messages[end + 1].role === 'tool') {
+        end++
+      }
+      groups.push({ start, end })
+      i = end
+    }
+  }
+
+  if (groups.length <= 2) return messages
+
+  // Rimuovi gruppi vecchi, tieni gli ultimi 2
+  const toRemove = new Set<number>()
+  for (const g of groups.slice(0, -2)) {
+    for (let i = g.start; i <= g.end; i++) toRemove.add(i)
+  }
+
+  const pruned = messages.filter((_: any, i: number) => !toRemove.has(i))
+  const insertIdx = pruned.findIndex((m: any) => m.role === 'assistant' && m.tool_calls)
+  if (insertIdx > 0) {
+    pruned.splice(insertIdx, 0, {
+      role: 'user',
+      content: `[${groups.length - 2} tool exchange precedenti rimossi per spazio. Risultati gia' elaborati.]`
+    })
+  }
+
+  console.log(`[Agent] Pruned ${groups.length - 2} old tool exchanges (${total} → ${pruned.reduce((s: number, m: any) => s + (typeof m.content === 'string' ? m.content.length : JSON.stringify(m).length), 0)} chars)`)
+  return pruned
+}
+
 export async function executeAgent(
   message: string,
   agent: AgentConfig,
   aziendaId: string,
   userId: string,
   context: string,
-  format: 'web' | 'whatsapp',
+  format: 'web' | 'whatsapp' | 'voice',
   conversationHistory?: ConversationMessage[],
   onProgress?: ProgressCallback,
-  permissions?: UserPermissions
+  permissions?: UserPermissions,
+  sessionId?: string
 ): Promise<AgentResult> {
-  // Build tools from agent config
+  // Build tools from agent config (dedup by function name)
+  const seenNames = new Set<string>()
   const tools = agent.toolNames
     .map(name => TOOL_DEFINITIONS[name])
-    .filter(Boolean) as ToolDefinition[]
+    .filter((t): t is ToolDefinition => {
+      if (!t) return false
+      const fname = (t as any).function?.name
+      if (seenNames.has(fname)) return false
+      seenNames.add(fname)
+      return true
+    })
 
   // Build system prompt with context
   let systemPrompt = agent.systemPrompt +
@@ -84,7 +162,8 @@ export async function executeAgent(
     '\n2. DIVIETO DI ALLUCINAZIONE: non aggiungere fatti non presenti nei risultati dei tool. Se non trovi nulla: "Non ho trovato questa informazione." In caso di dubbio, non scriverlo.' +
     '\n3. Quando citi dati o testi da documenti, riporta il testo LETTERALMENTE come trovato nel sistema — non riformulare, non parafrasare, non interpretare. Usa virgolette e indica la fonte esatta (nome documento, articolo, sezione).' +
     '\n4. I risultati dei tool vengono visualizzati AUTOMATICAMENTE come card nella chat. NON ripetere i dati in tabelle o liste markdown — sono già visibili. Il tuo compito è SOLO aggiungere commenti, analisi, contesto o suggerire prossimi passi. Mai duplicare dati già mostrati.' +
-    '\n5. EXECUTE_CODE FIRST: per operazioni che richiedono piu\' di 1 tool call (cercare + elaborare + agire), usa execute_code per fare tutto in un unico script. Questo e\' PIU\' VELOCE di chiamare tool uno alla volta. Esempio: invece di chiamare find, poi find, poi send_whatsapp — scrivi uno script che fa tutto insieme. Le funzioni disponibili nello script: find, create, update, delete_record, relate, get_tree, retrieve, list_documents, get_datetime, date_diff, generate_pdf, render_view. Per azioni WhatsApp nello script: send_whatsapp_message, send_whatsapp_voice, send_whatsapp_image. Usa print() per l\'output.' +
+    '\n5. EXECUTE_CODE FIRST: per operazioni che richiedono piu\' di 1 tool call (cercare + elaborare + agire), usa execute_code per fare tutto in un unico script. Questo e\' PIU\' VELOCE di chiamare tool uno alla volta. Esempio: invece di chiamare find, poi find, poi send_whatsapp — scrivi uno script che fa tutto insieme. Le funzioni disponibili nello script: find, create, update, delete_record, relate, get_tree, retrieve, list_documents, get_datetime, date_diff, generate_pdf, render_view. Per azioni WhatsApp nello script: send_whatsapp_message, send_whatsapp_voice, send_whatsapp_image, send_whatsapp_document. Usa print() per l\'output.' +
+    '\n   IMPORTANTE: quando cerchi persone/contatti, NON filtrare per type="persona" — gli utenti del sistema hanno type="utente". Cerca con find({query: "nome"}) SENZA type, oppure filtra con .filter(r => ["persona","utente","organizzazione"].includes(r.type)).' +
     '\n   Usa tool singoli SOLO per operazioni semplici (1 sola chiamata) o quando devi mostrare risultati intermedi all\'utente.' +
     '\n6. DISAMBIGUAZIONE: se una ricerca restituisce risultati ambigui o multipli, NON scegliere arbitrariamente. Presenta le opzioni all\'utente.' +
     '\n7. CONFERMA OBBLIGATORIA prima di azioni irreversibili o di invio:' +
@@ -95,11 +174,25 @@ export async function executeAgent(
     '\n8. NON MENTIRE sulle azioni: se non hai il tool per fare qualcosa, NON dire che l\'hai fatto. Dì chiaramente che non puoi.'
 
   if (context) {
-    systemPrompt += '\n\n' + context
+    // Truncate context to avoid token overflow (200K limit)
+    systemPrompt += '\n\n' + context.substring(0, 8000)
   }
 
   if (format === 'whatsapp') {
     systemPrompt += '\nFormatta per WhatsApp: *grassetto*, liste con -, niente tabelle markdown. Sii conciso.'
+  } else if (format === 'voice') {
+    systemPrompt += `
+FORMATO VOCALE — La tua risposta verra' letta ad alta voce da un sintetizzatore vocale.
+REGOLE DI FORMATTAZIONE VOCALE (OBBLIGATORIE):
+- Rispondi in modo DISCORSIVO e NATURALE, come se stessi parlando a voce con un collega.
+- VIETATO usare: tabelle, markdown, asterischi, elenchi puntati, titoli con #, emoji, parentesi, link, codice.
+- VIETATO elencare dati in formato lista. Integra i numeri nel discorso in modo fluido.
+- I numeri vanno scritti per esteso quando brevi (es. "tre clienti", "ventiquattro"), in cifre quando lunghi (es. "847.000 euro").
+- Le date vanno lette naturalmente: "undici aprile duemilaventisei", non "11/04/2026".
+- Usa frasi complete e connettori naturali: "per quanto riguarda", "inoltre", "in particolare".
+- Se ci sono molti dati, fai un RIASSUNTO discorsivo con i punti salienti, non un elenco completo.
+- Massimo 4-5 frasi per risposta. Se l'utente vuole approfondire, chiedera'.
+- Tono: professionale ma cordiale, come un assistente che riferisce a voce.`
   }
   systemPrompt += '\nNon ripetere i dati grezzi dei tool nella risposta. Sintetizza in modo leggibile.'
 
@@ -114,10 +207,11 @@ export async function executeAgent(
     { role: 'system', content: systemPrompt },
   ]
 
-  // Include conversation history
+  // Include conversation history (limited to avoid token overflow)
   if (conversationHistory && conversationHistory.length > 0) {
-    for (const m of conversationHistory.slice(-8)) {
-      apiMessages.push({ role: m.role, content: m.content })
+    for (const m of conversationHistory.slice(-4)) {
+      const content = typeof m.content === 'string' ? m.content.substring(0, 2000) : m.content
+      apiMessages.push({ role: m.role, content })
     }
   }
 
@@ -129,11 +223,55 @@ export async function executeAgent(
   let totalCost = 0
   let totalTokens = 0
   let loops = 10
+  const maxLoops = loops
+  let prunedCount = 0
+
+  // Pre-compute static sizes for session stats
+  const systemPromptChars = systemPrompt.length
+  const contextChars = context ? context.substring(0, 8000).length : 0
+  const toolDefsChars = JSON.stringify(tools).length
+  const historyChars = conversationHistory ? conversationHistory.slice(-4).reduce((s, m) => s + (typeof m.content === 'string' ? m.content.length : 0), 0) : 0
+  const historyCount = conversationHistory ? Math.min(conversationHistory.length, 4) : 0
+  const MODEL_MAX_TOKENS = 200000
 
   while (loops-- > 0) {
+    const messagesToSend = pruneMessages(apiMessages)
+    prunedCount = apiMessages.length - messagesToSend.length
+
+    // Update session stats
+    if (sessionId) {
+      const toolExchangeCount = apiMessages.filter((m: any) => m.role === 'assistant' && m.tool_calls).length
+      const toolResultsChars = apiMessages.filter((m: any) => m.role === 'tool').reduce((s: number, m: any) => s + (typeof m.content === 'string' ? m.content.length : 0), 0)
+      const totalChars = messagesToSend.reduce((s: number, m: any) => s + (typeof m.content === 'string' ? m.content.length : JSON.stringify(m).length), 0)
+      const totalTokensEst = Math.ceil(totalChars / 4)
+      sessionStatsCache.set(sessionId, {
+        sessionId,
+        agentName: agent.name,
+        agentDomain: agent.domain,
+        model: agent.model || AGENT_MODEL,
+        systemPromptChars,
+        contextChars,
+        toolDefsCount: tools.length,
+        toolDefsChars,
+        historyMessages: historyCount,
+        historyChars,
+        toolExchanges: toolExchangeCount,
+        toolResultsChars,
+        totalChars,
+        totalTokensEstimate: totalTokensEst,
+        maxTokens: MODEL_MAX_TOKENS,
+        usagePercent: Math.round((totalTokensEst / MODEL_MAX_TOKENS) * 100),
+        prunedExchanges: prunedCount,
+        loopsRemaining: loops,
+        loopsUsed: maxLoops - loops,
+        totalApiTokens: totalTokens,
+        totalApiCost: totalCost,
+        updatedAt: Date.now(),
+      })
+    }
     const data = await fetchWithRetry({
       model: agent.model || AGENT_MODEL,
-      messages: apiMessages,
+      messages: messagesToSend,
       tools: tools.length > 0 ? tools : undefined,
       max_tokens: 4096,
     })
@@ -159,9 +297,10 @@ export async function executeAgent(
         const result = await executeTool(tc.function.name, aziendaId, fnArgs, permissions)
         allToolCalls.push({ tool: tc.function.name, result })
 
-        // After execute_code, force the agent to synthesize — no more tool calls
-        if (tc.function.name === 'execute_code') {
-          loops = 1  // one more iteration to synthesize, then stop
+        // After execute_code, limit remaining iterations to avoid infinite loops
+        // but allow enough for a follow-up action (e.g. send_whatsapp after generate_pdf)
+        if (tc.function.name === 'execute_code' && loops > 3) {
+          loops = 3  // enough for: 1 more tool call + 1 synthesis, with margin
         }
 
         // Track reasoning step
@@ -180,8 +319,9 @@ export async function executeAgent(
         reasoningSteps.push({ tool: tc.function.name, description: tc.function.name, result_summary: summary })
 
         let toolContent: string
-        if (tc.function.name === 'generate_image' && (result as any)?.image_url) {
-          toolContent = JSON.stringify({ successo: true, messaggio: 'Immagine generata con successo' })
+        if (tc.function.name === 'generate_image' && (result as any)?.successo) {
+          const r = result as any
+          toolContent = JSON.stringify({ successo: true, messaggio: 'Immagine generata con successo', file_path: r.file_path, api_url: r.api_url })
         } else {
           toolContent = JSON.stringify(result)
         }

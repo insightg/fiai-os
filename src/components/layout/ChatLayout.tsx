@@ -690,6 +690,8 @@ export default function ChatLayout() {
     editAutore?: string
     editCategoria?: string
     editChunkStrategy?: string
+    useOcr?: boolean
+    needsOcr?: boolean
     newCategoria?: string
     newCategoriaDesc?: string
     suggestingDesc?: boolean
@@ -994,7 +996,7 @@ export default function ChatLayout() {
       const { uploadSmart } = await import('../../lib/upload')
       const result = await uploadSmart(file, analysisMode)
       clearTimeout(phaseTimer); clearTimeout(phaseTimer2); clearTimeout(phaseTimer3)
-      setSmartUpload({ status: 'done', fileName: file.name, fileSize: file.size, file, result })
+      setSmartUpload({ status: 'done', fileName: file.name, fileSize: file.size, file, result, needsOcr: result.needs_ocr, useOcr: result.needs_ocr || false })
 
       // For images: also set as attached preview for chat
       if (file.type.startsWith('image/')) {
@@ -1867,6 +1869,24 @@ export default function ChatLayout() {
                       </div>
                     )}
 
+                    {/* OCR toggle — shown when PDF is scanned/image-based */}
+                    {smartUpload.needsOcr && (
+                      <div className="flex items-center gap-2 bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2">
+                        <label className="flex items-center gap-2 cursor-pointer flex-1">
+                          <input
+                            type="checkbox"
+                            checked={smartUpload.useOcr || false}
+                            onChange={(e) => setSmartUpload(prev => prev ? { ...prev, useOcr: e.target.checked } : null)}
+                            className="rounded border-border accent-gold"
+                          />
+                          <div>
+                            <span className="text-xs font-medium text-amber-600">Riconoscitore OCR</span>
+                            <p className="text-[10px] text-text3">PDF scannerizzato — usa AI per estrarre il testo dalle immagini (pagina per pagina)</p>
+                          </div>
+                        </label>
+                      </div>
+                    )}
+
                     {/* New category form */}
                     {(smartUpload.editCategoria === '__new__' || smartUpload.newCategoria !== undefined) && (
                       <div className="space-y-2 bg-bg3/50 rounded-lg p-2.5 border border-border">
@@ -1987,7 +2007,7 @@ export default function ChatLayout() {
                         const finalNome = smartUpload.editNome || r.display_name
                         const finalAutore = smartUpload.editAutore || (r.extracted_data as any)?.autore || undefined
                         const finalChunkStrategy = smartUpload.editChunkStrategy || r.chunk_strategy || undefined
-                        await confirmUpload(r.upload_id, finalCat, finalNome, finalAutore, finalChunkStrategy)
+                        await confirmUpload(r.upload_id, finalCat, finalNome, finalAutore, finalChunkStrategy, smartUpload.useOcr)
                         toast.success(`"${r.display_name}" — catalogazione in corso`)
                       } catch (err: any) {
                         toast.error(err.message || 'Errore nella conferma')

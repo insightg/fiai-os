@@ -12,7 +12,7 @@ export async function handleChatMessage(
   userId: string,
   aziendaId: string,
   options?: {
-    format?: 'web' | 'whatsapp'
+    format?: 'web' | 'whatsapp' | 'voice'
     sessionId?: string
     history?: { role: string; content: string }[]
     attachedImageBase64?: string

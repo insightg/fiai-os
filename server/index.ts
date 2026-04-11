@@ -18,6 +18,7 @@ import pdfRouter from './pdf.js'
 import { startWhatsApp, whatsappRouter } from './whatsapp.js'
 import chatRouter from './agents/index.js'
 import adminRouter from './admin.js'
+import openaiCompatRouter from './openai-compat.js'
 import { startJobWorker } from './jobs.js'
 import { initEmbeddings } from './embeddings.js'
 import { initAutonomousAgents } from './agents/autonomous.js'
@@ -146,6 +147,7 @@ app.use('/api/pdf', pdfRouter)
 app.use('/api/whatsapp', whatsappRouter)
 app.use('/api/chat', chatRouter)
 app.use('/api/admin', adminRouter)
+app.use('/v1', openaiCompatRouter)
 
 // Health check
 app.get('/api/health', (_req, res) => {

@@ -100,9 +100,10 @@ const CLASSIFICATION_PROMPT =
   '- documentale: ricerca contenuto documenti caricati, analisi, riassunto, confronto. Se menziona un documento specifico → documentale.\n' +
   '- it: costi API, utenti, ruoli, configurazione, agenti autonomi\n' +
   '- doctor: diagnostica sistema, salute dati, performance\n' +
-  '- tts: sintesi vocale, audio\n' +
-  '- general: saluti, domande generiche\n\n' +
-  'Le richieste su contenuto di documenti caricati vanno SEMPRE a "documentale".\n\n' +
+  '- tts: sintesi vocale, leggi ad alta voce, genera audio/vocale, voce\n' +
+  '- general: saluti, domande generiche, genera immagine, crea immagine, genera PDF\n\n' +
+  'Le richieste su contenuto di documenti caricati vanno SEMPRE a "documentale".\n' +
+  'DISAMBIGUAZIONE: se il messaggio e\' ambiguo tra piu\' domini (es. "genera cavallo rosso" potrebbe essere immagine O audio), imposta confidence=0.3 e domain="general". L\'agente chiedera\' chiarimenti all\'utente.\n\n' +
   'MULTI-AGENT: Se la richiesta tocca PIU domini, imposta needsMultiAgent=true e secondaryDomains con i domini aggiuntivi.\n' +
   'Esempi multi-agent:\n' +
   '- "fatturato dei clienti con progetti attivi" → domain="amministrazione", needsMultiAgent=true, secondaryDomains=["commerciale","produzione"]\n' +
@@ -348,7 +349,7 @@ export async function orchestrate(
   userId: string,
   aziendaId: string,
   options?: {
-    format?: 'web' | 'whatsapp'
+    format?: 'web' | 'whatsapp' | 'voice'
     sessionId?: string
     history?: ConversationMessage[]
     attachedImageBase64?: string
@@ -367,6 +368,7 @@ export async function orchestrate(
   const onProgress = options?.onProgress || (() => {})
 
   const historyLength = (conversationHistory?.length ?? 0) + 1
+  console.log(`[Orchestrate] sessionId=${sessionId}, historyLength=${historyLength}, message="${message.substring(0, 50)}"`)
 
   // ── Safety Gate: Input Check ──
   const inputCheck = checkInput(message)
@@ -439,6 +441,8 @@ export async function orchestrate(
 
   // ── Response Mode Routing ──
   const responseMode = detectResponseMode(message, historyLength)
+  const cachedDomain = sessionId ? sessionDomainCache.get(sessionId) : undefined
+  console.log(`[Orchestrate] responseMode=${responseMode}, cachedDomain=${cachedDomain || 'none'}`)
 
   if (responseMode === 'minimal') {
     // Check for explicit numeric rating (1-10)
@@ -484,7 +488,7 @@ export async function orchestrate(
       const agent = AGENTS[lastDomain]
       if (agent) {
         const context = buildContext(lastDomain, aziendaId, userId, sessionId)
-        const result = await executeAgent(message, agent, aziendaId, userId, context, format, conversationHistory, onProgress, permissions)
+        const result = await executeAgent(message, agent, aziendaId, userId, context, format, conversationHistory, onProgress, permissions, sessionId)
         return finalizeResult(result)
       }
     }
@@ -502,6 +506,17 @@ export async function orchestrate(
   // Normalize domain aliases
   if (classification.domain === 'image' as any) classification.domain = 'marketing' as AgentDomain
   if (classification.domain === 'documents' as any) classification.domain = 'documentale' as AgentDomain
+
+  // Very low confidence + no session context → route to general with disambiguation hint
+  if (classification.confidence <= 0.4) {
+    const lastDomain = sessionId ? sessionDomainCache.get(sessionId) : undefined
+    if (!lastDomain || lastDomain === 'general') {
+      console.log(`[Classify] Very low confidence (${classification.confidence}), routing to general for disambiguation`)
+      classification = { domain: 'general', confidence: 0.5, needsMultiAgent: false }
+      // Prepend disambiguation context to the message so the agent knows to ask
+      message = `[SISTEMA: La richiesta dell'utente e' ambigua — non e' chiaro quale azione o agente serva. Chiedi chiarimenti all'utente presentando le opzioni possibili. NON procedere con un'azione specifica senza conferma.]\n\n${message}`
+    }
+  }
 
   // Low confidence + session has previous domain → prefer session domain (contextual continuity)
   if (classification.confidence < 0.7 && sessionId) {
@@ -553,7 +568,7 @@ export async function orchestrate(
         const agent = AGENTS[domain]
         if (!agent) return null
         const context = buildContext(domain, aziendaId, userId, sessionId)
-        return executeAgent(message, agent, aziendaId, userId, context, format, conversationHistory, undefined, permissions)
+        return executeAgent(message, agent, aziendaId, userId, context, format, conversationHistory, undefined, permissions, sessionId)
       })
       .filter(p => p !== null)
 
@@ -587,7 +602,7 @@ export async function orchestrate(
   const cacheKey = `${classification.domain}:${aziendaId}:${sessionId}`
   const cached = contextCache.get(cacheKey)
   let context: string
-  if (cached && Date.now() - cached.ts < 60000) {
+  if (cached && Date.now() - cached.ts < 300000) {
     context = cached.content
   } else {
     const systemSummary = generatePlannerContext(aziendaId)
@@ -596,7 +611,7 @@ export async function orchestrate(
   }
 
   // Agent calls tools natively — no pre-execution, no planner
-  const result = await executeAgent(message, agent, aziendaId, userId, context, format, conversationHistory, onProgress, permissions)
+  const result = await executeAgent(message, agent, aziendaId, userId, context, format, conversationHistory, onProgress, permissions, sessionId)
 
   // Reasoning comes directly from agent's native tool loop
   if (result.reasoning) {

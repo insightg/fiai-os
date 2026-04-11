@@ -1,0 +1,393 @@
+/**
+ * OpenAI-Compatible API Endpoint for BERNARDINI OS
+ *
+ * Allows any device/client that speaks the OpenAI standard
+ * (e.g. ESP32, Home Assistant, custom apps) to interact with
+ * BERNARDINI agents via /v1/chat/completions.
+ *
+ * Auth: Bearer token — either a JWT or an API key from entity type 'api_key'.
+ * Streaming: supports both stream:true (SSE) and stream:false.
+ */
+
+import { Router, Request, Response } from 'express'
+import crypto from 'crypto'
+import jwt from 'jsonwebtoken'
+import db from './db.js'
+import { UserPermissions } from './agents/types.js'
+import { handleChatMessage } from './agents/index.js'
+import { AGENTS } from './agents/config.js'
+
+const router = Router()
+const JWT_SECRET = process.env.JWT_SECRET || 'fiai-dev-secret'
+
+// ── Auth helper: resolve Bearer token (JWT or API key) ────
+
+interface ResolvedAuth {
+  userId: string
+  aziendaId: string
+  permissions: UserPermissions
+}
+
+function resolveAuth(req: Request): ResolvedAuth | null {
+  const authHeader = req.headers.authorization
+  const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null
+  if (!token) return null
+
+  // 1) Try JWT
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET) as { userId: string; email: string }
+    const rel = db.prepare(
+      "SELECT r.to_id FROM relations r WHERE r.from_id = ? AND r.tipo = 'membro_di' LIMIT 1"
+    ).get(decoded.userId) as { to_id: string } | undefined
+    let aziendaId = rel?.to_id || ''
+    if (!aziendaId) {
+      const rec = db.prepare("SELECT azienda_id FROM entity WHERE id = ?").get(decoded.userId) as any
+      if (rec?.azienda_id) aziendaId = rec.azienda_id
+    }
+
+    // Load group permissions
+    let permissions: UserPermissions
+    try {
+      const groups = db.prepare(
+        "SELECT e.display_name, e.metadata FROM relations r JOIN entity e ON e.id = r.to_id WHERE r.from_id = ? AND r.tipo = 'membro_di_gruppo'"
+      ).all(decoded.userId) as any[]
+      const groupData = groups.map(g => {
+        const m = typeof g.metadata === 'string' ? JSON.parse(g.metadata) : (g.metadata || {})
+        return { name: g.display_name, permissions: m.permissions || {} }
+      })
+      permissions = new UserPermissions(groupData)
+    } catch {
+      permissions = new UserPermissions([])
+    }
+
+    return { userId: decoded.userId, aziendaId, permissions }
+  } catch { /* not a valid JWT, try API key */ }
+
+  // 2) Try API key (entity type='api_key', slug=token)
+  try {
+    const keyEntity = db.prepare(
+      "SELECT id, azienda_id, metadata FROM entity WHERE type = 'api_key' AND slug = ? AND (stato IS NULL OR stato = 'active')"
+    ).get(token) as any
+    if (keyEntity) {
+      const meta = typeof keyEntity.metadata === 'string' ? JSON.parse(keyEntity.metadata) : (keyEntity.metadata || {})
+      const userId = meta.user_id || keyEntity.id
+      const aziendaId = keyEntity.azienda_id || ''
+
+      // API keys get admin permissions by default (they're pre-authorized)
+      const permissions = new UserPermissions([
+        { name: 'api_key', permissions: { '*': ['read', 'create', 'update', 'delete', 'send'] } }
+      ])
+      return { userId, aziendaId, permissions }
+    }
+  } catch { /* not a valid API key */ }
+
+  return null
+}
+
+// ── POST /v1/chat/completions ─────────────────────────────
+
+router.post('/chat/completions', async (req: Request, res: Response) => {
+  const auth = resolveAuth(req)
+  if (!auth) {
+    res.status(401).json({
+      error: { message: 'Invalid authentication. Provide a valid Bearer token (JWT or API key).', type: 'invalid_request_error', code: 'invalid_api_key' }
+    })
+    return
+  }
+
+  const { messages, model, stream, max_tokens, temperature } = req.body
+
+  if (!messages || !Array.isArray(messages) || messages.length === 0) {
+    res.status(400).json({
+      error: { message: '`messages` is required and must be a non-empty array.', type: 'invalid_request_error', code: 'invalid_request' }
+    })
+    return
+  }
+
+  // Extract last user message + conversation history
+  const lastUserMsg = [...messages].reverse().find((m: any) => m.role === 'user')
+  if (!lastUserMsg) {
+    res.status(400).json({
+      error: { message: 'At least one message with role "user" is required.', type: 'invalid_request_error', code: 'invalid_request' }
+    })
+    return
+  }
+
+  // Build history from prior messages (exclude the last user message)
+  const lastUserIndex = messages.lastIndexOf(lastUserMsg)
+  const history = messages.slice(0, lastUserIndex).map((m: any) => ({
+    role: m.role === 'assistant' ? 'assistant' : 'user',
+    content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+  }))
+
+  // Handle image attachments (OpenAI vision format)
+  let attachedImageBase64: string | undefined
+  if (Array.isArray(lastUserMsg.content)) {
+    const imageBlock = lastUserMsg.content.find((b: any) => b.type === 'image_url')
+    if (imageBlock?.image_url?.url?.startsWith('data:image')) {
+      attachedImageBase64 = imageBlock.image_url.url.split(',')[1]
+    }
+  }
+
+  const userText = typeof lastUserMsg.content === 'string'
+    ? lastUserMsg.content
+    : lastUserMsg.content.filter((b: any) => b.type === 'text').map((b: any) => b.text).join('\n')
+
+  // Detect voice/audio mode:
+  //   1. Header: X-Response-Format: voice
+  //   2. Model name ending with "-voice" (e.g. "bernardini-os-voice", "commerciale-voice")
+  //   3. OpenAI modalities field includes "audio"
+  const headerFormat = req.headers['x-response-format'] as string | undefined
+  const modalities = req.body.modalities as string[] | undefined
+  const isVoice = headerFormat === 'voice'
+    || (model && typeof model === 'string' && model.endsWith('-voice'))
+    || (Array.isArray(modalities) && modalities.includes('audio'))
+  const responseFormat: 'web' | 'voice' = isVoice ? 'voice' : 'web'
+
+  // Strip "-voice" suffix from model name for routing
+  const cleanModel = (model && typeof model === 'string') ? model.replace(/-voice$/, '') : model
+
+  // Use 'model' field as optional session hint (can pass domain name)
+  const sessionId = `openai-${cleanModel || 'default'}-${auth.userId}`
+
+  const completionId = `chatcmpl-${crypto.randomUUID().replace(/-/g, '').slice(0, 29)}`
+  const created = Math.floor(Date.now() / 1000)
+  const modelName = cleanModel || 'bernardini-os'
+
+  try {
+    if (stream) {
+      // ── Streaming SSE response ────────────────────────
+      res.setHeader('Content-Type', 'text/event-stream')
+      res.setHeader('Cache-Control', 'no-cache')
+      res.setHeader('Connection', 'keep-alive')
+      res.setHeader('X-Accel-Buffering', 'no')
+      res.flushHeaders()
+
+      // Send initial chunk with role
+      const initialChunk = {
+        id: completionId,
+        object: 'chat.completion.chunk',
+        created,
+        model: modelName,
+        choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }],
+      }
+      res.write(`data: ${JSON.stringify(initialChunk)}\n\n`)
+
+      // Get the full response
+      const result = await handleChatMessage(userText, auth.userId, auth.aziendaId, {
+        format: responseFormat,
+        sessionId,
+        history,
+        attachedImageBase64,
+        permissions: auth.permissions,
+      })
+
+      // Stream the response text in chunks (simulate token-by-token)
+      const text = result.text || ''
+      const chunkSize = 4 // characters per chunk — balance between granularity and overhead
+      for (let i = 0; i < text.length; i += chunkSize) {
+        const slice = text.slice(i, i + chunkSize)
+        const chunk = {
+          id: completionId,
+          object: 'chat.completion.chunk',
+          created,
+          model: modelName,
+          choices: [{ index: 0, delta: { content: slice }, finish_reason: null }],
+        }
+        res.write(`data: ${JSON.stringify(chunk)}\n\n`)
+      }
+
+      // Send finish chunk
+      const finishChunk = {
+        id: completionId,
+        object: 'chat.completion.chunk',
+        created,
+        model: modelName,
+        choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+        usage: {
+          prompt_tokens: result.totalTokens ? Math.floor(result.totalTokens * 0.7) : 0,
+          completion_tokens: result.totalTokens ? Math.ceil(result.totalTokens * 0.3) : 0,
+          total_tokens: result.totalTokens || 0,
+        },
+      }
+      res.write(`data: ${JSON.stringify(finishChunk)}\n\n`)
+      res.write('data: [DONE]\n\n')
+      res.end()
+
+    } else {
+      // ── Non-streaming response ────────────────────────
+      const result = await handleChatMessage(userText, auth.userId, auth.aziendaId, {
+        format: responseFormat,
+        sessionId,
+        history,
+        attachedImageBase64,
+        permissions: auth.permissions,
+      })
+
+      const promptTokens = result.totalTokens ? Math.floor(result.totalTokens * 0.7) : 0
+      const completionTokens = result.totalTokens ? Math.ceil(result.totalTokens * 0.3) : 0
+
+      res.json({
+        id: completionId,
+        object: 'chat.completion',
+        created,
+        model: modelName,
+        choices: [{
+          index: 0,
+          message: { role: 'assistant', content: result.text || '' },
+          finish_reason: 'stop',
+        }],
+        usage: {
+          prompt_tokens: promptTokens,
+          completion_tokens: completionTokens,
+          total_tokens: result.totalTokens || 0,
+        },
+        // BERNARDINI-specific metadata (extra, ignored by standard clients)
+        _bernardini: {
+          agentName: result.agentName,
+          agentDomain: result.agentDomain,
+          agentColor: result.agentColor,
+          toolCalls: result.toolCalls,
+          suggestions: result.suggestions,
+        },
+      })
+    }
+  } catch (err) {
+    console.error('[OpenAI Compat] Error:', err)
+    if (!res.headersSent) {
+      res.status(500).json({
+        error: { message: (err as Error).message, type: 'server_error', code: 'internal_error' }
+      })
+    } else {
+      // Streaming already started — send error as SSE
+      const errorChunk = {
+        id: completionId,
+        object: 'chat.completion.chunk',
+        created,
+        model: modelName,
+        choices: [{ index: 0, delta: { content: `\n\n[Errore: ${(err as Error).message}]` }, finish_reason: 'stop' }],
+      }
+      res.write(`data: ${JSON.stringify(errorChunk)}\n\n`)
+      res.write('data: [DONE]\n\n')
+      res.end()
+    }
+  }
+})
+
+// ── GET /v1/models ────────────────────────────────────────
+
+router.get('/models', (req: Request, res: Response) => {
+  const auth = resolveAuth(req)
+  if (!auth) {
+    res.status(401).json({
+      error: { message: 'Invalid authentication.', type: 'invalid_request_error', code: 'invalid_api_key' }
+    })
+    return
+  }
+
+  // List all agents as "models"
+  const models = Object.entries(AGENTS).map(([domain, agent]) => ({
+    id: domain,
+    object: 'model',
+    created: Math.floor(Date.now() / 1000),
+    owned_by: 'bernardini-os',
+    permission: [],
+    root: domain,
+    parent: null,
+    _bernardini: { name: agent.name, color: agent.color },
+  }))
+
+  // Add a default model
+  models.unshift({
+    id: 'bernardini-os',
+    object: 'model',
+    created: Math.floor(Date.now() / 1000),
+    owned_by: 'bernardini-os',
+    permission: [],
+    root: 'bernardini-os',
+    parent: null,
+    _bernardini: { name: 'BERNARDINI OS (Auto-routing)', color: '#1565C0' },
+  })
+
+  res.json({ object: 'list', data: models })
+})
+
+// ── POST /v1/api-keys ─────────────────────────────────────
+// Utility: generate an API key for device authentication
+
+router.post('/api-keys', async (req: Request, res: Response) => {
+  const auth = resolveAuth(req)
+  if (!auth || !auth.permissions.isAdmin) {
+    res.status(403).json({
+      error: { message: 'Admin access required to create API keys.', type: 'invalid_request_error', code: 'forbidden' }
+    })
+    return
+  }
+
+  const { name } = req.body
+  const keyValue = `brd-${crypto.randomBytes(32).toString('hex')}`
+  const id = crypto.randomUUID()
+
+  db.prepare(
+    "INSERT INTO entity (id, azienda_id, type, display_name, slug, stato, metadata, path, created_at, updated_at) VALUES (?,?,'api_key',?,?,'active',?,?,datetime('now'),datetime('now'))"
+  ).run(
+    id, auth.aziendaId,
+    name || 'API Key',
+    keyValue,
+    JSON.stringify({ user_id: auth.userId, created_by: auth.userId }),
+    `/entity/api_key/${id}`
+  )
+
+  res.json({
+    id,
+    name: name || 'API Key',
+    key: keyValue,
+    created: Math.floor(Date.now() / 1000),
+    note: 'Save this key — it will not be shown again.',
+  })
+})
+
+// ── GET /v1/api-keys ──────────────────────────────────────
+
+router.get('/api-keys', (req: Request, res: Response) => {
+  const auth = resolveAuth(req)
+  if (!auth || !auth.permissions.isAdmin) {
+    res.status(403).json({
+      error: { message: 'Admin access required.', type: 'invalid_request_error', code: 'forbidden' }
+    })
+    return
+  }
+
+  const keys = db.prepare(
+    "SELECT id, display_name, slug, stato, created_at FROM entity WHERE type = 'api_key' AND azienda_id = ? ORDER BY created_at DESC"
+  ).all(auth.aziendaId) as any[]
+
+  res.json({
+    data: keys.map(k => ({
+      id: k.id,
+      name: k.display_name,
+      key_preview: `${k.slug.slice(0, 8)}...${k.slug.slice(-4)}`,
+      status: k.stato,
+      created: k.created_at,
+    }))
+  })
+})
+
+// ── DELETE /v1/api-keys/:id ───────────────────────────────
+
+router.delete('/api-keys/:id', (req: Request, res: Response) => {
+  const auth = resolveAuth(req)
+  if (!auth || !auth.permissions.isAdmin) {
+    res.status(403).json({
+      error: { message: 'Admin access required.', type: 'invalid_request_error', code: 'forbidden' }
+    })
+    return
+  }
+
+  db.prepare("UPDATE entity SET stato = 'revoked' WHERE id = ? AND type = 'api_key' AND azienda_id = ?")
+    .run(req.params.id, auth.aziendaId)
+
+  res.json({ id: req.params.id, deleted: true })
+})
+
+export default router

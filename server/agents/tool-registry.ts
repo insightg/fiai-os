@@ -226,12 +226,17 @@ export const TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
   generate_image: { type: 'function', function: { name: 'generate_image', description: "Genera un'immagine dalla descrizione testuale", parameters: { type: 'object', properties: { prompt: { type: 'string' } }, required: ['prompt'] } } },
   generate_pdf: { type: 'function', function: { name: 'generate_pdf', description: 'Genera un PDF da contenuto testuale', parameters: { type: 'object', properties: { titolo: { type: 'string' }, contenuto: { type: 'string' } }, required: ['titolo', 'contenuto'] } } },
   get_api_costs: { type: 'function', function: { name: 'get_api_costs', description: 'Costi API OpenRouter', parameters: { type: 'object', properties: {} } } },
+  get_session_context: { type: 'function', function: { name: 'get_session_context', description: 'Mostra statistiche del contesto della sessione corrente: token usati, percentuale rimanente, dettagli system prompt, tool, history, pruning.', parameters: { type: 'object', properties: { session_id: { type: 'string', description: 'ID sessione (opzionale, usa la sessione corrente)' } } } } },
+  inspect_system: { type: 'function', function: { name: 'inspect_system', description: 'Ispeziona agenti e tool del sistema. Senza parametri: lista tutti gli agenti con tools. Con agent_domain: dettagli agente (prompt completo, tools, modello). Con tool_name: dettaglio tool (descrizione, parametri).', parameters: { type: 'object', properties: {
+    agent_domain: { type: 'string', description: 'Dominio agente per vedere dettagli (es. "commerciale", "it", "documentale")' },
+    tool_name: { type: 'string', description: 'Nome tool per vedere definizione completa (es. "find", "execute_code")' },
+  } } } },
   get_whatsapp_status: { type: 'function', function: { name: 'get_whatsapp_status', description: 'Stato connessione WhatsApp', parameters: { type: 'object', properties: {} } } },
-  send_whatsapp_message: { type: 'function', function: { name: 'send_whatsapp_message', description: 'Invia un messaggio di testo WhatsApp', parameters: { type: 'object', properties: { phone: { type: 'string', description: 'Numero senza + con prefisso internazionale (es. 39XXXXXXXXXX)' }, text: { type: 'string' } }, required: ['phone', 'text'] } } },
-  send_whatsapp_voice: { type: 'function', function: { name: 'send_whatsapp_voice', description: 'Invia un messaggio vocale WhatsApp (TTS)', parameters: { type: 'object', properties: { phone: { type: 'string' }, text: { type: 'string', description: 'Testo da pronunciare' }, voice: { type: 'string', description: 'Voce TTS (Vivian, Serena, Ryan...)' } }, required: ['phone', 'text'] } } },
-  send_whatsapp_image: { type: 'function', function: { name: 'send_whatsapp_image', description: 'Invia un\'immagine su WhatsApp (da URL o path file)', parameters: { type: 'object', properties: { phone: { type: 'string' }, url: { type: 'string', description: 'URL o path del file immagine' }, caption: { type: 'string', description: 'Didascalia opzionale' } }, required: ['phone', 'url'] } } },
-  send_whatsapp_document: { type: 'function', function: { name: 'send_whatsapp_document', description: 'Invia un documento/file su WhatsApp (PDF, DOC, etc.)', parameters: { type: 'object', properties: { phone: { type: 'string' }, url: { type: 'string', description: 'URL o path del file' }, filename: { type: 'string', description: 'Nome file visualizzato' }, caption: { type: 'string' } }, required: ['phone', 'url'] } } },
-  send_whatsapp_video: { type: 'function', function: { name: 'send_whatsapp_video', description: 'Invia un video su WhatsApp', parameters: { type: 'object', properties: { phone: { type: 'string' }, url: { type: 'string', description: 'URL o path del video' }, caption: { type: 'string' } }, required: ['phone', 'url'] } } },
+  send_whatsapp_message: { type: 'function', function: { name: 'send_whatsapp_message', description: 'Invia un messaggio di testo WhatsApp', parameters: { type: 'object', properties: { phone: { type: 'string', description: 'Numero ESATTAMENTE come trovato nel sistema — NON aggiungere prefissi, NON modificare. Es: se il sistema restituisce 393471349312, usa 393471349312' }, text: { type: 'string' } }, required: ['phone', 'text'] } } },
+  send_whatsapp_voice: { type: 'function', function: { name: 'send_whatsapp_voice', description: 'Invia un messaggio vocale WhatsApp (TTS)', parameters: { type: 'object', properties: { phone: { type: 'string', description: 'Numero ESATTAMENTE come trovato nel sistema — NON aggiungere prefissi' }, text: { type: 'string', description: 'Testo da pronunciare' }, voice: { type: 'string', description: 'Voce TTS (Vivian, Serena, Ryan...)' } }, required: ['phone', 'text'] } } },
+  send_whatsapp_image: { type: 'function', function: { name: 'send_whatsapp_image', description: 'Invia un\'immagine su WhatsApp (da URL o path file)', parameters: { type: 'object', properties: { phone: { type: 'string', description: 'Numero ESATTAMENTE come trovato nel sistema — NON aggiungere prefissi' }, url: { type: 'string', description: 'URL o path del file immagine' }, caption: { type: 'string', description: 'Didascalia opzionale' } }, required: ['phone', 'url'] } } },
+  send_whatsapp_document: { type: 'function', function: { name: 'send_whatsapp_document', description: 'Invia un documento/file su WhatsApp (PDF, DOC, etc.)', parameters: { type: 'object', properties: { phone: { type: 'string', description: 'Numero ESATTAMENTE come trovato nel sistema — NON aggiungere prefissi' }, url: { type: 'string', description: 'URL o path del file' }, filename: { type: 'string', description: 'Nome file visualizzato' }, caption: { type: 'string' } }, required: ['phone', 'url'] } } },
+  send_whatsapp_video: { type: 'function', function: { name: 'send_whatsapp_video', description: 'Invia un video su WhatsApp', parameters: { type: 'object', properties: { phone: { type: 'string', description: 'Numero ESATTAMENTE come trovato nel sistema — NON aggiungere prefissi' }, url: { type: 'string', description: 'URL o path del video' }, caption: { type: 'string' } }, required: ['phone', 'url'] } } },
 
   // ── Weather ──
   get_weather: { type: 'function', function: { name: 'get_weather', description: 'Meteo attuale e previsioni per una citta. Restituisce temperatura, condizioni, vento, umidita. Supporta previsioni fino a 16 giorni con dettaglio orario.', parameters: { type: 'object', properties: {
@@ -288,7 +293,7 @@ const TOOL_ACTIONS: Record<string, string> = {
   list_documents: 'read', explore_document: 'read', get_datetime: 'read',
   date_diff: 'read', get_api_costs: 'read', get_whatsapp_status: 'read',
   get_jobs: 'read', list_autonomous_agents: 'read', list_workflows: 'read',
-  list_skills: 'read', get_agent_logs: 'read',
+  list_skills: 'read', get_agent_logs: 'read', get_session_context: 'read', inspect_system: 'read',
   create: 'create', relate: 'create', create_job: 'create',
   create_autonomous_agent: 'create', create_workflow: 'create',
   update: 'update', update_skill: 'update',
@@ -1364,6 +1369,119 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
       } catch { return { errore: 'Non disponibile' } }
     }
 
+    case 'get_session_context': {
+      const { sessionStatsCache } = await import('./base-agent.js')
+      // Find stats: use provided session_id or find most recent
+      let stats = input.session_id ? sessionStatsCache.get(input.session_id) : null
+      if (!stats) {
+        // Get the most recent session stats
+        let latest: any = null
+        for (const s of sessionStatsCache.values()) {
+          if (!latest || s.updatedAt > latest.updatedAt) latest = s
+        }
+        stats = latest
+      }
+      if (!stats) return { errore: 'Nessuna sessione attiva trovata' }
+
+      const remaining = stats.maxTokens - stats.totalTokensEstimate
+      const bar = (pct: number) => {
+        const filled = Math.round(pct / 5)
+        return '█'.repeat(filled) + '░'.repeat(20 - filled)
+      }
+
+      return {
+        sessione: stats.sessionId,
+        agente: `${stats.agentName} (${stats.agentDomain})`,
+        modello: stats.model,
+        contesto: {
+          system_prompt: `${stats.systemPromptChars.toLocaleString()} chars`,
+          contesto_8_livelli: `${stats.contextChars.toLocaleString()} chars`,
+          tool_definitions: `${stats.toolDefsCount} tools, ${stats.toolDefsChars.toLocaleString()} chars`,
+          history: `${stats.historyMessages} messaggi, ${stats.historyChars.toLocaleString()} chars`,
+          tool_exchanges: `${stats.toolExchanges} scambi, ${stats.toolResultsChars.toLocaleString()} chars risultati`,
+        },
+        token: {
+          usati: `~${stats.totalTokensEstimate.toLocaleString()}`,
+          massimo: stats.maxTokens.toLocaleString(),
+          rimanenti: `~${remaining.toLocaleString()}`,
+          percentuale_usata: `${stats.usagePercent}%`,
+          percentuale_rimanente: `${100 - stats.usagePercent}%`,
+          barra: `${bar(stats.usagePercent)} ${stats.usagePercent}%`,
+        },
+        loop: {
+          usati: stats.loopsUsed,
+          rimanenti: stats.loopsRemaining,
+          tool_exchange_prunati: stats.prunedExchanges,
+        },
+        costi_api: {
+          token_api_totali: stats.totalApiTokens,
+          costo_totale: `$${stats.totalApiCost.toFixed(4)}`,
+        },
+      }
+    }
+
+    case 'inspect_system': {
+      const { AGENTS } = await import('./config.js')
+
+      // Detail for a specific tool
+      if (input.tool_name) {
+        const toolDef = TOOL_DEFINITIONS[input.tool_name as string]
+        if (!toolDef) return { errore: `Tool "${input.tool_name}" non trovato` }
+        const fn = (toolDef as any).function
+        // Find which agents use this tool
+        const usedBy = Object.entries(AGENTS)
+          .filter(([_, a]) => a.toolNames.includes(input.tool_name as string))
+          .map(([domain, a]) => ({ domain, agente: a.name }))
+        return {
+          nome: fn.name,
+          descrizione: fn.description,
+          parametri: fn.parameters?.properties || {},
+          required: fn.parameters?.required || [],
+          usato_da: usedBy,
+        }
+      }
+
+      // Detail for a specific agent
+      if (input.agent_domain) {
+        const agent = AGENTS[input.agent_domain as string]
+        if (!agent) return { errore: `Agente "${input.agent_domain}" non trovato. Disponibili: ${Object.keys(AGENTS).join(', ')}` }
+        return {
+          nome: agent.name,
+          dominio: agent.domain,
+          colore: agent.color,
+          modello: agent.model || 'default (anthropic/claude-haiku-4.5)',
+          system_prompt: agent.systemPrompt,
+          tools: agent.toolNames.map(tn => {
+            const td = TOOL_DEFINITIONS[tn]
+            return td ? { nome: tn, descrizione: (td as any).function?.description?.substring(0, 80) } : { nome: tn, descrizione: '(non trovato)' }
+          }),
+          views: agent.views ? Object.keys(agent.views) : [],
+        }
+      }
+
+      // Overview: list all agents with their tools
+      const agentList = Object.entries(AGENTS).map(([domain, agent]) => ({
+        dominio: domain,
+        nome: agent.name,
+        colore: agent.color,
+        modello: agent.model || 'default',
+        tools_count: agent.toolNames.length,
+        tools: agent.toolNames,
+      }))
+
+      const allToolNames = new Set<string>()
+      for (const a of Object.values(AGENTS)) {
+        for (const t of a.toolNames) allToolNames.add(t)
+      }
+
+      return {
+        agenti: agentList,
+        totale_agenti: agentList.length,
+        tools_unici: allToolNames.size,
+        tutti_i_tools: [...allToolNames].sort(),
+      }
+    }
+
     case 'get_whatsapp_status': {
       try {
         const res = await fetch(`http://localhost:${process.env.PORT || 3001}/api/whatsapp/status`, {
@@ -1532,7 +1650,7 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
       if (!input.code) return { errore: 'code obbligatorio' }
       try {
         const { executeCode } = await import('./code-executor.js')
-        console.log(`[CodeExec] Running:\n${(input.code as string).substring(0, 500)}`)
+        console.log(`[CodeExec] Running:\n${(input.code as string).substring(0, 1500)}`)
         const result = await executeCode(input.code as string, aziendaId)
         console.log(`[CodeExec] return_code=${result.return_code}, stdout=${result.stdout.length}ch${result.stderr ? ', stderr=' + result.stderr.substring(0, 100) : ''}`)
         if (result.return_code !== 0) {

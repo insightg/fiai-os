@@ -262,6 +262,7 @@ const pendingArchive = new Map<string, {
   aziendaId: string
   userId: string
   timestamp: number
+  useOcr?: boolean
 }>()
 
 // ── Handle Document Upload via WhatsApp ──────────────────
@@ -322,7 +323,16 @@ async function handleDocumentUpload(msg: WAMessage, sender: string, waUser: any,
       aziendaId: waUser.azienda_id,
       userId: waUser.user_id,
       timestamp: Date.now(),
+      useOcr: isScanned,
     })
+
+    // Check if PDF needs OCR
+    const ext2 = path.extname(fileName).toLowerCase()
+    let isScanned = false
+    if (ext2 === '.pdf') {
+      const { needsOcr: checkOcr } = await import('./ocr.js')
+      isScanned = checkOcr(extractedText, buffer.length, 0)
+    }
 
     const tagsStr = tags.length > 0 ? tags.join(', ') : 'nessuno'
     await sock.sendMessage(sender, {
@@ -331,8 +341,9 @@ async function handleDocumentUpload(msg: WAMessage, sender: string, waUser: any,
         `*Tags:* ${tagsStr}\n` +
         `*Descrizione:* ${descrizione || '(nessuna)'}\n\n` +
         `${extractedText ? `_Testo estratto (anteprima):_ ${extractedText.substring(0, 200)}...\n\n` : ''}` +
+        `${isScanned ? '⚠️ *PDF scannerizzato rilevato* — il testo verra\' estratto con OCR (Riconoscitore AI)\n\n' : ''}` +
         `Vuoi archiviarlo? Rispondi:\n` +
-        `✅ *sì* — archivia con questi dati\n` +
+        `✅ *sì* — archivia con questi dati${isScanned ? ' + OCR' : ''}\n` +
         `✏️ *sì come [categoria]* — archivia con categoria diversa\n` +
         `❌ *no* — non archiviare`
     })
@@ -381,21 +392,43 @@ function checkPendingArchive(sender: string, text: string): boolean {
 
 async function archivePendingDocument(sender: string, pending: typeof pendingArchive extends Map<string, infer V> ? V : never) {
   try {
-    const id = crypto.randomUUID()
-    const tagsJson = JSON.stringify(pending.tags)
+    const entityId = crypto.randomUUID()
+    const slug = pending.fileName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').substring(0, 80)
 
-    db.prepare(
-      'INSERT INTO documenti (id, azienda_id, nome, tipo_file, categoria, descrizione, file_url, tags, contenuto_testo, uploaded_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-    ).run(
-      id, pending.aziendaId, pending.fileName,
-      path.extname(pending.fileName).replace('.', '') || 'pdf',
-      pending.categoria, pending.descrizione, pending.fileUrl,
-      tagsJson, pending.extractedText, pending.userId
+    // Save as entity (same as web upload)
+    db.prepare(`INSERT INTO entity (id, azienda_id, type, display_name, slug, stato, user_id, file_url, body, categoria, metadata, path)
+      VALUES (?, ?, 'documento', ?, ?, 'processing', ?, ?, ?, ?, ?, ?)`).run(
+      entityId, pending.aziendaId,
+      pending.fileName, slug,
+      pending.userId, pending.fileUrl,
+      pending.extractedText || null,
+      pending.categoria,
+      JSON.stringify({
+        tipo_file: path.extname(pending.fileName).replace('.', '') || 'pdf',
+        tags: pending.tags,
+        descrizione: pending.descrizione,
+        uploaded_via: 'whatsapp',
+      }),
+      `/entity/documento/${slug}`
+    )
+
+    // Create background job for chunking + tagging + embedding (+ OCR if needed)
+    const jobId = crypto.randomUUID()
+    db.prepare(`INSERT INTO entity (id, azienda_id, type, display_name, slug, stato, data, metadata, path)
+      VALUES (?, ?, 'job', ?, ?, 'queued', datetime('now'), ?, ?)`).run(
+      jobId, pending.aziendaId,
+      `Processa: ${pending.fileName}`, `process-doc-${entityId.substring(0, 8)}`,
+      JSON.stringify({
+        action: 'process_document',
+        params: { entityId, fileName: pending.fileName, use_ocr: pending.useOcr || false },
+      }),
+      `/entity/job/process-doc-${entityId.substring(0, 8)}`
     )
 
     pendingArchive.delete(sender)
+    const ocrNote = pending.useOcr ? '\n🔍 OCR in corso — il testo verra\' estratto dalle immagini.' : ''
     await sock.sendMessage(sender, {
-      text: `✅ *${pending.fileName}* archiviato come *${pending.categoria}*.\n\nOra è ricercabile nel sistema documentale.`
+      text: `✅ *${pending.fileName}* archiviato come *${pending.categoria}*.${ocrNote}\n\nOra è ricercabile nel sistema documentale.`
     })
   } catch (err: any) {
     await sock.sendMessage(sender, { text: `❌ Errore archiviazione: ${err.message}` })

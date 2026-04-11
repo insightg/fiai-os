@@ -11,7 +11,7 @@ const config: AgentConfig = {
   domain: 'it',
   color: '#455A64',
   systemPrompt: prompt,
-  toolNames: [...GENERIC_TOOLS, 'get_api_costs', 'get_whatsapp_status',
+  toolNames: [...GENERIC_TOOLS, 'get_api_costs', 'get_session_context', 'inspect_system', 'get_whatsapp_status',
     'create_autonomous_agent', 'list_autonomous_agents', 'toggle_autonomous_agent', 'delete_autonomous_agent', 'get_agent_logs',
     'create_workflow', 'run_workflow', 'list_workflows',
     'update_skill', 'list_skills', 'add_agent_lesson',

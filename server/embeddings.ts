@@ -337,7 +337,7 @@ export function initEmbeddings(): void {
 
   // Job handler for processing a confirmed document (chunk + tag + embed)
   registerJobHandler('process_document', async (params, _jobId, aziendaId) => {
-    const { entityId, fileName, chunk_strategy } = params
+    const { entityId, fileName, chunk_strategy, use_ocr } = params
     if (!entityId) return { error: 'Missing entityId' }
 
     const { chunkDocument } = await import('./chunker.js')
@@ -346,16 +346,17 @@ export function initEmbeddings(): void {
     const entity = db.prepare('SELECT type, display_name, body, file_url FROM entity WHERE id = ?').get(entityId) as any
     if (!entity) return { error: 'Entity not found' }
 
+    // Resolve file path
+    const fs = await import('fs')
+    const path = await import('path')
+    const UPLOADS_DIR = process.env.UPLOADS_DIR || '/app/data/uploads'
+    const relativePath = entity.file_url ? entity.file_url.replace(/^\/api\/uploads\//, '') : ''
+    const filePath = relativePath ? path.join(UPLOADS_DIR, relativePath) : ''
+    const ext = filePath ? path.extname(filePath).toLowerCase() : ''
+
     // Read extracted text: try body first, then re-extract from file
     let extractedText = entity.body || ''
-    if (!extractedText && entity.file_url) {
-      const fs = await import('fs')
-      const path = await import('path')
-      const UPLOADS_DIR = process.env.UPLOADS_DIR || '/app/data/uploads'
-      const relativePath = entity.file_url.replace(/^\/api\/uploads\//, '')
-      const filePath = path.join(UPLOADS_DIR, relativePath)
-      const ext = path.extname(filePath).toLowerCase()
-
+    if (!extractedText && filePath) {
       if (ext === '.pdf' && fs.existsSync(filePath)) {
         try {
           const { PDFParse } = await import('pdf-parse')
@@ -375,6 +376,32 @@ export function initEmbeddings(): void {
         } catch {}
       }
     }
+
+    // OCR: if requested and PDF has little/no text, use vision model
+    if (use_ocr && ext === '.pdf' && filePath && fs.existsSync(filePath)) {
+      console.log(`[ProcessDoc] OCR requested for "${fileName}" — starting Riconoscitore`)
+      try {
+        const { ocrPdf } = await import('./ocr.js')
+        const ocrResult = await ocrPdf(filePath, {
+          onProgress: (page, total) => {
+            // Update job status with progress
+            db.prepare("UPDATE entity SET metadata = json_set(metadata, '$.ocr_progress', ?) WHERE id = ?")
+              .run(`${page}/${total}`, _jobId)
+          },
+        })
+        if (ocrResult.text.length > extractedText.length) {
+          console.log(`[ProcessDoc] OCR produced ${ocrResult.text.length} chars (was ${extractedText.length}) from ${ocrResult.pages} pages`)
+          extractedText = ocrResult.text
+          // Update entity body with OCR text
+          db.prepare("UPDATE entity SET body = ? WHERE id = ?").run(extractedText, entityId)
+        } else {
+          console.log(`[ProcessDoc] OCR produced less text (${ocrResult.text.length}) than extraction (${extractedText.length}), keeping original`)
+        }
+      } catch (ocrErr: any) {
+        console.error(`[ProcessDoc] OCR error: ${ocrErr.message}`)
+      }
+    }
+
     if (!extractedText) return { error: 'No text available' }
 
     // 1. Chunk the document
