@@ -40,6 +40,8 @@ function quickClassifyKeywords(text: string): AgentDomain | null {
   if (/\btts\b|sintesi vocale|lista voci|imposta voce|clona.*voce|voce predefinita/.test(t)) return 'tts'
   // WhatsApp keywords → route to WhatsApp agent (MUST have send tools)
   if (/\bwhatsapp\b|\bwhapp\b|\bwapp\b|manda.*(?:a|via)\s|invia.*(?:a|via)\s.*(?:messaggio|vocale|immagine|documento|video)|manda.*messaggio/i.test(t)) return 'whatsapp'
+  // Email keywords → route to Email agent
+  if (/\bemail\b|\be-?mail\b|\bposta\b|\binbox\b|\bcasella\b|invia.*email|leggi.*mail|manda.*mail|scrivi.*mail/i.test(t)) return 'email'
   // Document keywords → route to Documentale (has retrieve, list_documents, explore_document)
   // Catches ANY reference to documents, books, or content search — regardless of topic
   if (/\bbibbia\b|\bcodice civile\b|\bcontratto\b|\bnormativa\b|\bmanuale\b|\breport\b|\blibro\b/i.test(t)) return 'documentale'
@@ -97,6 +99,7 @@ const CLASSIFICATION_PROMPT =
   '- officina: riparazioni, manutenzione, mezzi, attrezzature, ordini lavoro, ricambi, interventi tecnici\n' +
   '- legal: assicurazioni, polizze, sinistri, contenzioso, cause, parco mezzi, revisioni, contratti, compliance\n' +
   '- qualita: qualita, sicurezza, ambiente, ISO, non conformita, DVR, formazione sicurezza, audit, certificazioni, rifiuti\n' +
+  '- email: casella di posta, invio email, lettura email, allegati email, inbox, posta elettronica\n' +
   '- documentale: ricerca contenuto documenti caricati, analisi, riassunto, confronto. Se menziona un documento specifico → documentale.\n' +
   '- it: costi API, utenti, ruoli, configurazione, agenti autonomi\n' +
   '- doctor: diagnostica sistema, salute dati, performance\n' +

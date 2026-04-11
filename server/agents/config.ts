@@ -15,6 +15,7 @@ import qualita from './domains/qualita-sicurezza/index.js'
 // ── Import shared agents ────────────────────────────────
 import documentale from './domains/documentale/index.js'
 import whatsapp from './domains/whatsapp/index.js'
+import email from './domains/email/index.js'
 import it from './domains/it/index.js'
 import doctor from './domains/doctor/index.js'
 import tts from './domains/tts/index.js'
@@ -25,7 +26,7 @@ const DEFAULT_AGENTS: Record<string, AgentConfig> = {
   direzione, commerciale, amministrazione, contabilita,
   produzione, officina, legal, qualita,
   // Shared
-  documentale, whatsapp, it, doctor, tts, general,
+  documentale, whatsapp, email, it, doctor, tts, general,
 }
 
 // ── Load skills from VFS (entity type='skill') ──────────
@@ -70,6 +71,7 @@ export const AGENT_COLORS: Record<string, string> = {
   qualita: '#00796B',
   documentale: '#795548',
   whatsapp: '#25D366',
+  email: '#D44638',
   it: '#455A64',
   doctor: '#00ACC1',
   tts: '#FF6F00',

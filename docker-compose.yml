@@ -28,6 +28,10 @@ services:
       - UPLOADS_DIR=/app/data/uploads
       - CONTEXT_DIR=/app/data/context
       - TTS_API_URL=${TTS_API_URL:-http://host.docker.internal:7777/v1/audio/speech}
+      - EMAIL_USER=${EMAIL_USER:-fiaios@insightg.it}
+      - EMAIL_PASSWORD=${EMAIL_PASSWORD:-gg.Giobbe7}
+      - EMAIL_IMAP_HOST=${EMAIL_IMAP_HOST:-imaps.aruba.it}
+      - EMAIL_SMTP_HOST=${EMAIL_SMTP_HOST:-smtps.aruba.it}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

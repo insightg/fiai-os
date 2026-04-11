@@ -238,6 +238,15 @@ export const TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
   send_whatsapp_document: { type: 'function', function: { name: 'send_whatsapp_document', description: 'Invia un documento/file su WhatsApp (PDF, DOC, etc.)', parameters: { type: 'object', properties: { phone: { type: 'string', description: 'Numero ESATTAMENTE come trovato nel sistema — NON aggiungere prefissi' }, url: { type: 'string', description: 'URL o path del file' }, filename: { type: 'string', description: 'Nome file visualizzato' }, caption: { type: 'string' } }, required: ['phone', 'url'] } } },
   send_whatsapp_video: { type: 'function', function: { name: 'send_whatsapp_video', description: 'Invia un video su WhatsApp', parameters: { type: 'object', properties: { phone: { type: 'string', description: 'Numero ESATTAMENTE come trovato nel sistema — NON aggiungere prefissi' }, url: { type: 'string', description: 'URL o path del video' }, caption: { type: 'string' } }, required: ['phone', 'url'] } } },
 
+  // ── Email ──
+  get_email_status: { type: 'function', function: { name: 'get_email_status', description: 'Stato connessione email (IMAP/SMTP)', parameters: { type: 'object', properties: {} } } },
+  send_email: { type: 'function', function: { name: 'send_email', description: 'Invia una email con supporto HTML e allegati', parameters: { type: 'object', properties: { to: { type: 'string', description: 'Destinatario email' }, subject: { type: 'string', description: 'Oggetto' }, html: { type: 'string', description: 'Corpo email (HTML supportato)' }, cc: { type: 'string', description: 'CC (virgola-separati)' }, bcc: { type: 'string', description: 'BCC (virgola-separati)' }, attachments: { type: 'array', items: { type: 'object', properties: { filename: { type: 'string' }, path: { type: 'string', description: 'file_url dal VFS (es. /api/uploads/...)' } } }, description: 'Allegati da VFS' } }, required: ['to', 'subject', 'html'] } } },
+  read_inbox: { type: 'function', function: { name: 'read_inbox', description: 'Lista email recenti dalla casella di posta', parameters: { type: 'object', properties: { limit: { type: 'number', description: 'Numero email da mostrare (default 15)' }, folder: { type: 'string', description: 'Cartella IMAP (default INBOX)' } } } } },
+  read_email: { type: 'function', function: { name: 'read_email', description: 'Leggi email completa per UID — restituisce corpo, allegati, header threading', parameters: { type: 'object', properties: { uid: { type: 'number', description: 'UID del messaggio' } }, required: ['uid'] } } },
+  search_emails: { type: 'function', function: { name: 'search_emails', description: 'Cerca email per oggetto, mittente, data o testo nel corpo', parameters: { type: 'object', properties: { subject: { type: 'string', description: 'Filtra per oggetto' }, from: { type: 'string', description: 'Filtra per mittente' }, since: { type: 'string', description: 'Data da (YYYY-MM-DD)' }, before: { type: 'string', description: 'Data fino a (YYYY-MM-DD)' }, text: { type: 'string', description: 'Cerca nel corpo' }, limit: { type: 'number', description: 'Max risultati (default 10)' } } } } },
+  reply_email: { type: 'function', function: { name: 'reply_email', description: 'Rispondi a una email mantenendo il thread di conversazione', parameters: { type: 'object', properties: { uid: { type: 'number', description: 'UID email a cui rispondere' }, html: { type: 'string', description: 'Corpo risposta (HTML)' }, cc: { type: 'string', description: 'CC aggiuntivi' } }, required: ['uid', 'html'] } } },
+  download_email_attachment: { type: 'function', function: { name: 'download_email_attachment', description: 'Scarica allegato da una email e salvalo nel sistema', parameters: { type: 'object', properties: { uid: { type: 'number', description: 'UID email' }, part_id: { type: 'string', description: 'ID parte allegato (indice numerico)' } }, required: ['uid', 'part_id'] } } },
+
   // ── Weather ──
   get_weather: { type: 'function', function: { name: 'get_weather', description: 'Meteo attuale e previsioni per una citta. Restituisce temperatura, condizioni, vento, umidita. Supporta previsioni fino a 16 giorni con dettaglio orario.', parameters: { type: 'object', properties: {
     city: { type: 'string', description: 'Nome citta (es. "Parma", "Roma", "New York", "Tokyo")' },
@@ -301,6 +310,9 @@ const TOOL_ACTIONS: Record<string, string> = {
   send_whatsapp_message: 'send', send_whatsapp_voice: 'send',
   send_whatsapp_image: 'send', send_whatsapp_document: 'send',
   send_whatsapp_video: 'send',
+  get_email_status: 'read', read_inbox: 'read', read_email: 'read',
+  search_emails: 'read', download_email_attachment: 'read',
+  send_email: 'send', reply_email: 'send',
 }
 
 export async function executeTool(name: string, aziendaId: string, args?: Record<string, unknown>, permissions?: import('./types.js').UserPermissions): Promise<unknown> {
@@ -1642,6 +1654,97 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
         return { successo: true, messaggio: `Video inviato a ${phone}` }
       } catch (err: any) {
         return { successo: false, messaggio: err.message }
+      }
+    }
+
+    // ── EMAIL ──
+
+    case 'get_email_status': {
+      try {
+        const res = await fetch(`http://localhost:${process.env.PORT || 3001}/api/email/status`, {
+          headers: { 'Authorization': `Bearer ${jwt.sign({ userId: 'system', email: 'system' }, JWT_SECRET, { expiresIn: '1m' })}` }
+        })
+        return await res.json()
+      } catch { return { stato: 'Non disponibile' } }
+    }
+
+    case 'send_email': {
+      try {
+        const { sendEmail } = await import('../email.js')
+        const result = await sendEmail({
+          to: input.to,
+          subject: input.subject,
+          html: input.html,
+          cc: input.cc || undefined,
+          bcc: input.bcc || undefined,
+          attachments: input.attachments || undefined,
+        })
+        return { successo: true, messaggio: `Email inviata a ${input.to}`, messageId: result.messageId }
+      } catch (err: any) {
+        return { successo: false, messaggio: err.message }
+      }
+    }
+
+    case 'read_inbox': {
+      try {
+        const { listEmails } = await import('../email.js')
+        return await listEmails({ limit: input.limit, folder: input.folder })
+      } catch (err: any) {
+        return { errore: err.message }
+      }
+    }
+
+    case 'read_email': {
+      try {
+        const { readEmail } = await import('../email.js')
+        return await readEmail(input.uid)
+      } catch (err: any) {
+        return { errore: err.message }
+      }
+    }
+
+    case 'search_emails': {
+      try {
+        const { searchEmails } = await import('../email.js')
+        return await searchEmails({
+          subject: input.subject, from: input.from,
+          since: input.since, before: input.before,
+          text: input.text, limit: input.limit,
+        })
+      } catch (err: any) {
+        return { errore: err.message }
+      }
+    }
+
+    case 'reply_email': {
+      try {
+        const { readEmail, sendEmail } = await import('../email.js')
+        const original = await readEmail(input.uid)
+        if (!original) return { errore: `Email UID ${input.uid} non trovata` }
+
+        const replyTo = original.fromAddress || original.from
+        const subject = original.subject?.startsWith('Re:') ? original.subject : `Re: ${original.subject}`
+
+        const result = await sendEmail({
+          to: replyTo,
+          cc: input.cc || undefined,
+          subject,
+          html: input.html,
+          inReplyTo: original.messageId || undefined,
+          references: original.messageId || undefined,
+        })
+        return { successo: true, messaggio: `Risposta inviata a ${replyTo}`, messageId: result.messageId }
+      } catch (err: any) {
+        return { successo: false, messaggio: err.message }
+      }
+    }
+
+    case 'download_email_attachment': {
+      try {
+        const { downloadAttachment } = await import('../email.js')
+        return await downloadAttachment(input.uid, input.part_id)
+      } catch (err: any) {
+        return { errore: err.message }
       }
     }
 

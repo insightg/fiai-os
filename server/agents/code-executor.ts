@@ -83,6 +83,14 @@ export async function executeCode(code: string, aziendaId: string): Promise<Code
     send_whatsapp_document: toolProxy('send_whatsapp_document'),
     send_whatsapp_video: toolProxy('send_whatsapp_video'),
     get_whatsapp_status: toolProxy('get_whatsapp_status'),
+    // Email
+    send_email: toolProxy('send_email'),
+    read_inbox: toolProxy('read_inbox'),
+    read_email: toolProxy('read_email'),
+    search_emails: toolProxy('search_emails'),
+    reply_email: toolProxy('reply_email'),
+    download_email_attachment: toolProxy('download_email_attachment'),
+    get_email_status: toolProxy('get_email_status'),
     // Media
     generate_image: toolProxy('generate_image'),
     generate_tts: toolProxy('generate_tts'),
