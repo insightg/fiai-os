@@ -3,7 +3,7 @@ import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { useAuthStore } from './store'
 import ChatLayout from './components/layout/ChatLayout'
 import Login from './pages/auth/Login'
-import AdminPage from './pages/admin/Admin'
+// Admin is now an overlay inside ChatLayout, no separate route needed
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
   const session = useAuthStore((s) => s.session)
@@ -55,7 +55,6 @@ export default function App() {
     <Routes>
       <Route path="/login" element={<GuestGuard><Login /></GuestGuard>} />
       <Route path="/" element={<AuthGuard><ChatLayout /></AuthGuard>} />
-      <Route path="/admin" element={<AuthGuard><AdminPage /></AuthGuard>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )

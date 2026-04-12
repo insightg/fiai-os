@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Users, Shield, Plus, Trash2, Check, X, ChevronDown, ChevronRight, Bot, Activity, Database, ArrowLeft, Settings, RefreshCw, Save, AlertTriangle } from 'lucide-react'
+import { Users, Shield, Plus, Trash2, Check, X, ChevronDown, ChevronRight, Bot, Activity, Database, RefreshCw, Save, AlertTriangle } from 'lucide-react'
 import { getAuthToken } from '../../lib/supabase'
 import toast from 'react-hot-toast'
 
@@ -75,14 +75,8 @@ export default function AdminPage() {
   return (
     <div className="min-h-screen bg-bg p-4 sm:p-6">
       <div className="max-w-6xl mx-auto">
-        <div className="flex items-center justify-between mb-5">
-          <div>
-            <h1 className="text-lg font-bold text-text">Amministrazione</h1>
-            <p className="text-[11px] text-text3 mt-0.5">Gestione utenti, agenti, permessi e sistema</p>
-          </div>
-          <a href="/" className="flex items-center gap-1 text-xs text-text3 hover:text-gold transition-colors">
-            <ArrowLeft size={14} /> Chat
-          </a>
+        <div className="mb-4">
+          <p className="text-[11px] text-text3">Gestione utenti, agenti, permessi e sistema</p>
         </div>
 
         <div className="flex gap-1 mb-4 overflow-x-auto pb-1">

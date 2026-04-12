@@ -49,6 +49,7 @@ import toast from 'react-hot-toast'
 import VoiceChat from '../VoiceChat'
 import ContextPanel from './ContextPanel'
 import ArtifactOverlay from './ArtifactOverlay'
+import AdminPage from '../../pages/admin/Admin'
 import JobMonitor from '../JobMonitor'
 import AudioRecorder from '../AudioRecorder'
 import Badge from '../ui/Badge'
@@ -603,6 +604,7 @@ export default function ChatLayout() {
   const [currentAgentColor, setCurrentAgentColor] = useState<string | null>(null)
   const [lastToolCalls, setLastToolCalls] = useState<Record<string, unknown>[]>([])
   const [artifactView, setArtifactView] = useState<any>(null)
+  const [showAdmin, setShowAdmin] = useState(false)
 
   // Load autonomous agents for sidebar
   const [sidebarAgents, setSidebarAgents] = useState<any[]>([])
@@ -1411,13 +1413,13 @@ export default function ChatLayout() {
               initials
             )}
           </div>
-          <a
-            href="/admin"
+          <button
+            onClick={() => setShowAdmin(true)}
             className="p-1.5 rounded-lg text-text3 hover:text-gold hover:bg-gold/10 transition-colors"
             title="Amministrazione"
           >
             <Settings size={18} />
-          </a>
+          </button>
           <button
             onClick={() => logout()}
             className="p-1.5 rounded-lg text-text3 hover:text-red hover:bg-red/10 transition-colors"
@@ -2051,6 +2053,23 @@ export default function ChatLayout() {
 
       {/* Job Monitor — floating badge */}
       <JobMonitor />
+
+      {/* Admin overlay — fullscreen modal */}
+      {showAdmin && (
+        <div className="fixed inset-0 z-50 bg-bg overflow-y-auto">
+          <div className="sticky top-0 z-10 bg-bg border-b border-border px-4 py-2 flex items-center justify-between">
+            <h2 className="text-sm font-bold text-text">Amministrazione</h2>
+            <button
+              onClick={() => setShowAdmin(false)}
+              className="p-1.5 rounded-lg text-text3 hover:text-text hover:bg-bg3 transition-colors"
+              title="Chiudi"
+            >
+              <X size={18} />
+            </button>
+          </div>
+          <AdminPage />
+        </div>
+      )}
     </div>
   )
 }
