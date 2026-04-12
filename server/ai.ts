@@ -415,7 +415,10 @@ REGOLE:
 
     const result = await callLLM(messages, true)
     const jsonMatch = result.match(/\{[\s\S]*\}/)
-    if (!jsonMatch) return defaultResult
+    if (!jsonMatch) {
+      console.warn(`[AnalyzeUpload] No JSON in LLM response for "${fileName}":`, result.substring(0, 200))
+      return defaultResult
+    }
 
     const parsed = JSON.parse(jsonMatch[0]) as UploadAnalysis
     return {
@@ -427,8 +430,8 @@ REGOLE:
       descrizione: parsed.descrizione || '',
       extracted_data: parsed.extracted_data || {},
     }
-  } catch (err) {
-    console.error('Upload analysis error:', err)
+  } catch (err: any) {
+    console.error(`[AnalyzeUpload] Error for "${fileName}":`, err.message?.substring(0, 100))
     return defaultResult
   }
 }
