@@ -1412,7 +1412,7 @@ export default function ChatLayout() {
             )}
           </div>
           <a
-            href="/app/admin"
+            href="/admin"
             className="p-1.5 rounded-lg text-text3 hover:text-gold hover:bg-gold/10 transition-colors"
             title="Amministrazione"
           >

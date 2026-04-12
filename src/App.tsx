@@ -55,7 +55,7 @@ export default function App() {
     <Routes>
       <Route path="/login" element={<GuestGuard><Login /></GuestGuard>} />
       <Route path="/" element={<AuthGuard><ChatLayout /></AuthGuard>} />
-      <Route path="/app/admin" element={<AuthGuard><AdminPage /></AuthGuard>} />
+      <Route path="/admin" element={<AuthGuard><AdminPage /></AuthGuard>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )
