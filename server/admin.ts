@@ -222,4 +222,159 @@ router.get('/entity-types', (req: AuthRequest, res: Response) => {
   res.json(types)
 })
 
+// ── AGENTS ──────────────────────────────────────────────
+
+router.get('/agents', (_req: AuthRequest, res: Response) => {
+  // Import agent config dynamically
+  import('./agents/config.js').then(({ AGENTS, AGENT_COLORS }) => {
+    const agents = Object.entries(AGENTS).map(([domain, agent]: [string, any]) => {
+      // Check for skill override in DB
+      const skill = db.prepare("SELECT metadata FROM entity WHERE type = 'skill' AND json_extract(metadata, '$.domain') = ?").get(domain) as any
+      const skillMeta = skill ? (typeof skill.metadata === 'string' ? JSON.parse(skill.metadata) : skill.metadata) : null
+
+      return {
+        domain,
+        name: agent.name,
+        color: AGENT_COLORS[domain] || agent.color,
+        model: agent.model || 'default (haiku-4.5)',
+        toolCount: agent.toolNames?.length || 0,
+        toolNames: agent.toolNames || [],
+        promptLength: agent.systemPrompt?.length || 0,
+        promptPreview: agent.systemPrompt?.substring(0, 200) || '',
+        hasSkillOverride: !!skillMeta,
+        skillRules: skillMeta?.rules || [],
+        skillModel: skillMeta?.model || null,
+      }
+    })
+    res.json(agents)
+  }).catch(err => res.status(500).json({ error: err.message }))
+})
+
+router.get('/agents/:domain', (_req: AuthRequest, res: Response) => {
+  import('./agents/config.js').then(({ AGENTS, AGENT_COLORS }) => {
+    const agent = (AGENTS as any)[_req.params.domain]
+    if (!agent) { res.status(404).json({ error: 'Agente non trovato' }); return }
+
+    const skill = db.prepare("SELECT metadata FROM entity WHERE type = 'skill' AND json_extract(metadata, '$.domain') = ?").get(_req.params.domain) as any
+    const skillMeta = skill ? (typeof skill.metadata === 'string' ? JSON.parse(skill.metadata) : skill.metadata) : null
+
+    res.json({
+      domain: _req.params.domain,
+      name: agent.name,
+      color: AGENT_COLORS[_req.params.domain] || agent.color,
+      model: agent.model || 'default (haiku-4.5)',
+      toolNames: agent.toolNames || [],
+      systemPrompt: agent.systemPrompt || '',
+      hasSkillOverride: !!skillMeta,
+      skillRules: skillMeta?.rules || [],
+      skillModel: skillMeta?.model || null,
+      skillPrompt: skillMeta?.system_prompt || null,
+    })
+  }).catch(err => res.status(500).json({ error: err.message }))
+})
+
+router.put('/agents/:domain', (req: AuthRequest, res: Response) => {
+  const { rules, model, system_prompt } = req.body
+  const domain = req.params.domain
+
+  // Upsert skill entity
+  const existing = db.prepare("SELECT id, metadata FROM entity WHERE type = 'skill' AND json_extract(metadata, '$.domain') = ? AND azienda_id = ?").get(domain, req.aziendaId) as any
+
+  const meta = {
+    domain,
+    ...(rules !== undefined ? { rules } : {}),
+    ...(model !== undefined ? { model } : {}),
+    ...(system_prompt !== undefined ? { system_prompt } : {}),
+  }
+
+  if (existing) {
+    const oldMeta = typeof existing.metadata === 'string' ? JSON.parse(existing.metadata) : existing.metadata
+    const merged = { ...oldMeta, ...meta }
+    db.prepare("UPDATE entity SET metadata = ?, updated_at = datetime('now') WHERE id = ?").run(JSON.stringify(merged), existing.id)
+  } else {
+    const id = crypto.randomUUID()
+    db.prepare("INSERT INTO entity (id, azienda_id, type, display_name, slug, metadata, path) VALUES (?,?,'skill',?,?,?,?)").run(
+      id, req.aziendaId, `Skill: ${domain}`, `skill-${domain}`,
+      JSON.stringify(meta), `/entity/skill/skill-${domain}`
+    )
+  }
+
+  res.json({ successo: true, messaggio: `Agente "${domain}" aggiornato. Riavvia il backend per applicare.` })
+})
+
+// ── AUDIT LOG ────────────────────────────────────────────
+
+router.get('/audit-log', (req: AuthRequest, res: Response) => {
+  const limit = parseInt(req.query.limit as string) || 50
+  const offset = parseInt(req.query.offset as string) || 0
+  const entityType = req.query.type as string
+  const action = req.query.action as string
+
+  let sql = 'SELECT a.*, e.display_name as entity_name FROM entity_audit a LEFT JOIN entity e ON e.id = a.entity_id WHERE 1=1'
+  const params: any[] = []
+
+  if (entityType) { sql += ' AND a.entity_type = ?'; params.push(entityType) }
+  if (action) { sql += ' AND a.action = ?'; params.push(action) }
+
+  sql += ' ORDER BY a.created_at DESC LIMIT ? OFFSET ?'
+  params.push(limit, offset)
+
+  const logs = db.prepare(sql).all(...params) as any[]
+  const total = db.prepare("SELECT COUNT(*) as c FROM entity_audit").get() as any
+
+  res.json({ logs, total: total.c })
+})
+
+// ── SYSTEM STATS ─────────────────────────────────────────
+
+router.get('/system', (req: AuthRequest, res: Response) => {
+  try {
+    // Entity counts by type
+    const typeCounts = db.prepare(`
+      SELECT type, COUNT(*) as count FROM entity
+      WHERE azienda_id = ? AND deleted_at IS NULL
+      AND type NOT IN ('chat_message','chat_session','agent_log','workflow_log','chunk')
+      GROUP BY type ORDER BY count DESC
+    `).all(req.aziendaId) as any[]
+
+    // Total entities
+    const totalEntities = db.prepare("SELECT COUNT(*) as c FROM entity WHERE azienda_id = ? AND deleted_at IS NULL").get(req.aziendaId) as any
+
+    // Documents with chunks
+    const docStats = db.prepare(`
+      SELECT COUNT(DISTINCT parent_id) as docs, COUNT(*) as chunks
+      FROM entity WHERE type = 'chunk' AND azienda_id = ?
+    `).get(req.aziendaId) as any
+
+    // Embedded entities
+    const embeddedCount = db.prepare("SELECT COUNT(*) as c FROM entity WHERE embedding IS NOT NULL AND azienda_id = ?").get(req.aziendaId) as any
+
+    // Users
+    const userCount = db.prepare("SELECT COUNT(*) as c FROM entity WHERE type = 'utente' AND azienda_id = ?").get(req.aziendaId) as any
+
+    // Recent audit log count
+    const recentAudits = db.prepare("SELECT COUNT(*) as c FROM entity_audit WHERE created_at > datetime('now', '-24 hours')").get() as any
+
+    // Chat sessions last 7 days
+    const recentSessions = db.prepare("SELECT COUNT(*) as c FROM chat_sessions WHERE azienda_id = ? AND created_at > datetime('now', '-7 days')").get(req.aziendaId) as any
+
+    // DB size
+    const dbSize = db.prepare("SELECT page_count * page_size as size FROM pragma_page_count(), pragma_page_size()").get() as any
+
+    res.json({
+      totalEntities: totalEntities.c,
+      typeCounts,
+      documents: docStats.docs || 0,
+      chunks: docStats.chunks || 0,
+      embeddedEntities: embeddedCount.c,
+      users: userCount.c,
+      recentAudits: recentAudits.c,
+      recentSessions: recentSessions.c,
+      dbSizeMB: Math.round((dbSize?.size || 0) / 1024 / 1024 * 10) / 10,
+    })
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message })
+  }
+})
+
 export default router

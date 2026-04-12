@@ -1411,6 +1411,13 @@ export default function ChatLayout() {
               initials
             )}
           </div>
+          <a
+            href="/app/admin"
+            className="p-1.5 rounded-lg text-text3 hover:text-gold hover:bg-gold/10 transition-colors"
+            title="Amministrazione"
+          >
+            <Settings size={18} />
+          </a>
           <button
             onClick={() => logout()}
             className="p-1.5 rounded-lg text-text3 hover:text-red hover:bg-red/10 transition-colors"
