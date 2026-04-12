@@ -1,6 +1,7 @@
 import type { AgentConfig, AgentResult, ToolDefinition, UserPermissions } from './types.js'
 import { TOOL_DEFINITIONS, executeTool } from './tool-registry.js'
 import db from '../db.js'
+import { getSetting } from '../settings.js'
 
 // ── Session context stats (shared with tool-registry for get_session_context) ──
 export interface SessionStats {
@@ -155,8 +156,11 @@ export async function executeAgent(
       return true
     })
 
+  // Inject company name into prompt template
+  const companyName = getSetting('company_name')
+
   // Build system prompt with context
-  let systemPrompt = agent.systemPrompt +
+  let systemPrompt = agent.systemPrompt.replace(/\{COMPANY_NAME\}/g, companyName) +
     '\n\nREGOLE FONDAMENTALI:' +
     '\n1. CERCA PRIMA, RISPONDI DOPO: usa SEMPRE i tool per cercare prima di rispondere. Per dati interni: find, retrieve, execute_code. Per informazioni dal web: web_search. Se l\'utente chiede "cerca sul web/online/internet" o informazioni che non possono essere nel sistema (es. elenchi aziende, notizie, informazioni generali), USA web_search. Basa la risposta sui risultati dei tool.' +
     '\n2. DIVIETO DI ALLUCINAZIONE: non aggiungere fatti non presenti nei risultati dei tool. Se non trovi nulla: "Non ho trovato questa informazione." In caso di dubbio, non scriverlo.' +
@@ -377,7 +381,7 @@ export async function directLLMResponse(
   conversationHistory?: ConversationMessage[]
 ): Promise<string> {
   let systemPrompt =
-    "Sei l'assistente AI di BERNARDINI S.R.L.. " +
+    "Sei l'assistente AI di " + getSetting('company_name') + ". " +
     'Rispondi sempre in italiano, in modo professionale e conciso. ' +
     'Puoi rispondere a saluti e domande conversazionali generiche. ' +
     'Per qualsiasi domanda su dati, documenti, persone, progetti o informazioni specifiche, ' +

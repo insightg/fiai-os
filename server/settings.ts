@@ -22,6 +22,10 @@ export interface SettingDef {
 }
 
 export const SETTINGS_REGISTRY: SettingDef[] = [
+  // Azienda
+  { key: 'company_name', category: 'azienda', envVar: 'COMPANY_NAME', description: 'Nome azienda (usato nei prompt degli agenti)', sensitive: false, defaultValue: 'BERNARDINI S.R.L.', requiresRestart: false },
+  { key: 'company_short_name', category: 'azienda', envVar: 'COMPANY_SHORT_NAME', description: 'Nome breve azienda', sensitive: false, defaultValue: 'BERNARDINI', requiresRestart: false },
+
   // API
   { key: 'openrouter_api_key', category: 'api', envVar: 'OPENROUTER_API_KEY', description: 'API key OpenRouter (LLM)', sensitive: true, defaultValue: '', requiresRestart: false },
   { key: 'embedding_model', category: 'api', envVar: 'EMBEDDING_MODEL', description: 'Modello embedding (es. openai/text-embedding-3-small)', sensitive: false, defaultValue: 'openai/text-embedding-3-small', requiresRestart: false },

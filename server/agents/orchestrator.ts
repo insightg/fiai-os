@@ -8,6 +8,7 @@ import { executeAgent, directLLMResponse } from './base-agent.js'
 // import { createPlan, executePlan, formatPlanResults } from './planner.js'
 import { checkInput, checkOutput } from './safety.js'
 import db from '../db.js'
+import { getSetting } from '../settings.js'
 
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions'
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || ''
@@ -99,8 +100,9 @@ function detectResponseMode(message: string, historyLength: number): ResponseMod
 
 // ── Classify Intent (LLM-based) ────────────────────────
 
-const CLASSIFICATION_PROMPT =
-  'Sei un classificatore di intenti per il gestionale BERNARDINI S.R.L. ' +
+function getClassificationPrompt() {
+  const cn = getSetting('company_name')
+  return 'Sei un classificatore di intenti per il gestionale ' + cn + '. ' +
   "Analizza il messaggio dell'utente e classifica il reparto/dominio principale. " +
   'I domini disponibili sono:\n' +
   "- direzione: overview aziendale, briefing, KPI strategici, riepilogo generale, stato azienda\n" +
@@ -133,6 +135,7 @@ const CLASSIFICATION_PROMPT =
   '- "overview con pipeline e scadenze" → domain="direzione", needsMultiAgent=true, secondaryDomains=["commerciale","amministrazione"]\n\n' +
   'CONTESTO: Se nella conversazione recente l\'utente stava interagendo con un agente specifico (es. documentale per analisi documenti, commerciale per clienti), e il nuovo messaggio sembra un follow-up o approfondimento sullo stesso tema, usa LO STESSO dominio. Non cambiare dominio a meno che il tema sia chiaramente diverso.\n\n' +
   'Rispondi SOLO con un JSON valido: {"domain": "...", "confidence": 0.0-1.0, "needsMultiAgent": false, "secondaryDomains": []}'
+}
 
 async function classifyIntent(message: string, conversationHistory?: ConversationMessage[]): Promise<ClassificationResult> {
   try {
@@ -151,7 +154,7 @@ async function classifyIntent(message: string, conversationHistory?: Conversatio
       body: JSON.stringify({
         model: CLASSIFIER_MODEL,
         messages: [
-          { role: 'system', content: CLASSIFICATION_PROMPT },
+          { role: 'system', content: getClassificationPrompt() },
           { role: 'user', content: contextText },
         ],
         max_tokens: 150,
@@ -328,7 +331,7 @@ async function synthesizeResults(
   agentResults: { agentName: string; text: string }[]
 ): Promise<string> {
   const systemPrompt =
-    "Sei l'assistente di BERNARDINI S.R.L.. Hai ricevuto risposte da diversi agenti specializzati. " +
+    "Sei l'assistente di " + getSetting('company_name') + ". Hai ricevuto risposte da diversi agenti specializzati. " +
     'Sintetizza le risposte in un unico messaggio coerente e completo in italiano. ' +
     'Mantieni tutte le informazioni importanti e presenta i dati in modo chiaro.'
 
@@ -483,7 +486,7 @@ export async function orchestrate(
             ? 'Grazie, terro conto del tuo feedback per migliorare.'
             : 'Mi dispiace. Cerchero di fare meglio la prossima volta.'
         return {
-          text: response, toolCalls: [], agentName: 'Assistente BERNARDINI',
+          text: response, toolCalls: [], agentName: 'Assistente',
           agentDomain: 'general', agentColor: AGENT_COLORS.general,
           suggestions: getSuggestions('general', []),
         }
@@ -494,7 +497,7 @@ export async function orchestrate(
     const context = buildContext('direzione', aziendaId, userId, sessionId)
     const minimalText = await directLLMResponse(message, context, conversationHistory)
     return {
-      text: minimalText, toolCalls: [], agentName: 'Assistente BERNARDINI',
+      text: minimalText, toolCalls: [], agentName: 'Assistente',
       agentDomain: 'general', agentColor: AGENT_COLORS.general,
       suggestions: getSuggestions('general', []),
     }
@@ -603,7 +606,7 @@ export async function orchestrate(
     if (validResults.length === 0) {
       const context = buildContext('direzione', aziendaId, userId, sessionId)
       const text = await directLLMResponse(message, context, conversationHistory)
-      return finalizeResult({ text, toolCalls: [], agentName: 'Assistente BERNARDINI', agentDomain: 'general', agentColor: AGENT_COLORS.general }, classification)
+      return finalizeResult({ text, toolCalls: [], agentName: 'Assistente', agentDomain: 'general', agentColor: AGENT_COLORS.general }, classification)
     }
 
     const allToolCalls = validResults.flatMap(r => r.toolCalls)

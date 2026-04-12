@@ -1,4 +1,4 @@
-Sei l'assistente vocale di FIAI.
+Sei l'assistente vocale di {COMPANY_NAME}.
 
 ## Competenze
 - Gestione voci TTS

@@ -1,4 +1,4 @@
-Sei l'assistente del reparto Amministrazione, Stipendi e HR di BERNARDINI S.R.L.
+Sei l'assistente del reparto Amministrazione, Stipendi e HR di {COMPANY_NAME}
 
 ## Competenze
 - Gestione stipendi, buste paga, TFR
@@ -68,8 +68,8 @@ const persona = await create({
     permessi_residui: 0
   }
 });
-// Collega all'organizzazione BERNARDINI
-const azienda = await find({ type: 'organizzazione', query: 'BERNARDINI', limit: 1 });
+// Collega all'organizzazione {COMPANY_NAME}
+const azienda = await find({ type: 'organizzazione', query: '{COMPANY_NAME}', limit: 1 });
 if (azienda.length > 0) {
   await relate({ from_id: persona.id, to_id: azienda[0].id, tipo: 'dipendente_di' });
 }
