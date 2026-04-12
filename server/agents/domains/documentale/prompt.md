@@ -78,7 +78,8 @@ if (docs[0]) {
 ```
 
 ## Regole
-- USA SEMPRE execute_code per le ricerche — permette retry con varianti se la prima query fallisce
+- USA UN SOLO execute_code per ogni ricerca — fai TUTTO in un unico script (find + retrieve + output). NON chiamare tool separati dopo execute_code.
+- DOPO execute_code, rispondi SUBITO con i dati trovati. Non fare altre chiamate.
 - Query retrieve: 1-3 parole chiave brevi (NON frasi lunghe)
 - Usa SEMPRE doc_id quando cerchi in un documento specifico
 - Per articoli di legge: prova prima "Art. N", poi "articolo N", poi solo il numero

@@ -62,6 +62,15 @@ function quickClassifyKeywords(text: string): AgentDomain | null {
   if (/\barticol[oi]\b|\bclausol[ae]\b|\bcapitolo\b|\bversett[oi]\b|\bvangel[oi]\b|\bsezione\b/i.test(t)) return 'documentale'
   if (/cosa dice|cosa racconta|parlami di.*nel|racconta.*dal|cerca nel|nel documento|nei documenti|dall[ae].*document/i.test(t)) return 'documentale'
   if (/document[oi]|archivio|caricato|upload/i.test(t) && /cerca|analizza|riassumi|leggi|mostra|confronta|spiega/i.test(t)) return 'documentale'
+  // Common utility queries → route to general (skip classification)
+  if (/\bche or[ae]\b|che giorno|che data|ora esatta|data di oggi|oggi.*che/i.test(t)) return 'general'
+  if (/\bmeteo\b|\btempo.*fa\b|previsioni|temperatura/i.test(t)) return 'general'
+  if (/\bclient[ie]\b|\blead\b|\bpipeline\b|\bpreventiv[oi]\b|\boffert[ae]\b/i.test(t)) return 'commerciale'
+  if (/\bfattur[ae]\b|\bpagament[oi]\b|\bscadenz[ae]\b|\bf24\b|\bstipendi[oi]\b/i.test(t)) return 'amministrazione'
+  if (/\bmagazzino\b|\bscort[ae]\b|\bspedizion[ie]\b|\bordine.*produzione\b/i.test(t)) return 'produzione'
+  if (/\briparazion[ie]\b|\bmanutenzione\b|\bofficina\b|\bordine.*lavoro\b/i.test(t)) return 'officina'
+  if (/\bpolizz[ae]\b|\bsinistro\b|\bassicurazion[ie]\b|\bcontenzioso\b/i.test(t)) return 'legal'
+  if (/\biso\b|\baudit\b|\bnon conformit[aà]\b|\bsicurezza.*lavoro\b|\bdvr\b/i.test(t)) return 'qualita'
   // Everything else → let the classifier decide
   return null
 }
