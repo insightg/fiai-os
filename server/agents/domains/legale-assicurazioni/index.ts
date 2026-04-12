@@ -11,7 +11,7 @@ const config: AgentConfig = {
   domain: 'legal',
   color: '#D32F2F',
   systemPrompt: prompt,
-  toolNames: [...GENERIC_TOOLS, 'retrieve', 'list_documents', 'send_whatsapp_message', 'send_whatsapp_voice', 'send_whatsapp_image', 'send_whatsapp_document'],
+  toolNames: [...GENERIC_TOOLS, 'retrieve', 'list_documents', 'send_whatsapp_message', 'send_whatsapp_voice', 'send_whatsapp_image', 'send_whatsapp_document', 'send_email', 'reply_email'],
   views,
 }
 

@@ -16,7 +16,7 @@ const config: AgentConfig = {
     'create_workflow', 'run_workflow', 'list_workflows',
     'update_skill', 'list_skills', 'add_agent_lesson',
     'create_group', 'add_to_group', 'remove_from_group', 'list_groups',
-    'send_whatsapp_message', 'send_whatsapp_voice', 'send_whatsapp_image', 'send_whatsapp_document'],
+    'send_whatsapp_message', 'send_whatsapp_voice', 'send_whatsapp_image', 'send_whatsapp_document', 'send_email', 'reply_email'],
   views,
 }
 

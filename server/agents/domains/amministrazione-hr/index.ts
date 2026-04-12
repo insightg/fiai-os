@@ -11,7 +11,7 @@ const config: AgentConfig = {
   domain: 'amministrazione',
   color: '#2D8B56',
   systemPrompt: prompt,
-  toolNames: [...GENERIC_TOOLS, 'send_whatsapp_message', 'send_whatsapp_voice', 'send_whatsapp_image', 'send_whatsapp_document'],
+  toolNames: [...GENERIC_TOOLS, 'send_whatsapp_message', 'send_whatsapp_voice', 'send_whatsapp_image', 'send_whatsapp_document', 'send_email', 'reply_email'],
   views,
 }
 

@@ -11,7 +11,7 @@ const config: AgentConfig = {
   domain: 'contabilita',
   color: '#6A1B9A',
   systemPrompt: prompt,
-  toolNames: [...GENERIC_TOOLS, 'send_whatsapp_message', 'send_whatsapp_voice', 'send_whatsapp_image', 'send_whatsapp_document'],
+  toolNames: [...GENERIC_TOOLS, 'send_whatsapp_message', 'send_whatsapp_voice', 'send_whatsapp_image', 'send_whatsapp_document', 'send_email', 'reply_email'],
   views,
 }
 

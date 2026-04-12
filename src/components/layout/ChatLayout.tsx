@@ -399,7 +399,7 @@ function MessageBubble({ message, activeSessionId, onAction }: { message: Displa
           )}
 
           {/* Rich tool result renderers FIRST (data before commentary) */}
-          {!isUser && message.toolCalls && message.toolCalls.length > 0 && (
+          {!isUser && Array.isArray(message.toolCalls) && message.toolCalls.length > 0 && (
             <div className="space-y-2 mb-3">
               {message.toolCalls.map((tc, idx) => {
                 const toolName = (tc as { tool: string }).tool
@@ -902,7 +902,7 @@ export default function ChatLayout() {
         id: m.id,
         role: m.ruolo,
         content: m.contenuto,
-        toolCalls: m.tool_calls ?? undefined,
+        toolCalls: m.tool_calls ? (typeof m.tool_calls === 'string' ? JSON.parse(m.tool_calls) : m.tool_calls) : undefined,
         timestamp: m.created_at,
       }))
       setMessages(displayMsgs)
@@ -1152,9 +1152,7 @@ export default function ChatLayout() {
 
       // Save to prompt history (persistent)
       setPromptHistory((prev) => [...prev, content])
-      if (user) {
-        supabase.from('prompt_history').insert({ user_id: user.id, prompt: content })
-      }
+      // Prompt history managed in-memory (via setPromptHistory above)
 
       // Reset textarea height
       if (inputRef.current) {
