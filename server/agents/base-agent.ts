@@ -90,6 +90,83 @@ async function fetchWithRetry(body: Record<string, unknown>, retries = 3): Promi
 
 export type ProgressCallback = (event: { type: string; [key: string]: unknown }) => void
 
+// ── Streaming LLM call (real token-by-token from OpenRouter) ──
+
+async function fetchStreaming(
+  body: Record<string, unknown>,
+  onToken: (token: string) => void
+): Promise<{ message: any; usage?: any }> {
+  const res = await fetch(OPENROUTER_API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+    },
+    body: JSON.stringify({ ...body, stream: true }),
+  })
+
+  if (!res.ok) {
+    const err = await res.text()
+    throw new Error(`OpenRouter stream error ${res.status}: ${err}`)
+  }
+
+  const reader = res.body!.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let fullContent = ''
+  let toolCalls: any[] = []
+  let finishReason = ''
+  let usage: any = null
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() || ''
+
+    for (const line of lines) {
+      const trimmed = line.trim()
+      if (!trimmed || !trimmed.startsWith('data: ')) continue
+      const data = trimmed.slice(6)
+      if (data === '[DONE]') continue
+
+      try {
+        const parsed = JSON.parse(data)
+        const delta = parsed.choices?.[0]?.delta
+        if (!delta) continue
+
+        // Text content
+        if (delta.content) {
+          fullContent += delta.content
+          onToken(delta.content)
+        }
+
+        // Tool calls (accumulated across chunks)
+        if (delta.tool_calls) {
+          for (const tc of delta.tool_calls) {
+            const idx = tc.index ?? 0
+            if (!toolCalls[idx]) toolCalls[idx] = { id: tc.id, type: 'function', function: { name: '', arguments: '' } }
+            if (tc.id) toolCalls[idx].id = tc.id
+            if (tc.function?.name) toolCalls[idx].function.name += tc.function.name
+            if (tc.function?.arguments) toolCalls[idx].function.arguments += tc.function.arguments
+          }
+        }
+
+        if (parsed.choices?.[0]?.finish_reason) finishReason = parsed.choices[0].finish_reason
+        if (parsed.usage) usage = parsed.usage
+      } catch {}
+    }
+  }
+
+  // Build message object matching non-streaming format
+  const message: any = { content: fullContent, role: 'assistant' }
+  if (toolCalls.length > 0) message.tool_calls = toolCalls
+
+  return { message, usage }
+}
+
 // ── Pruning: rimuove tool exchange vecchi quando i messaggi superano la soglia ──
 const MAX_MESSAGES_CHARS = 400000 // ~100K token, margine per i 200K del modello
 
@@ -264,23 +341,32 @@ export async function executeAgent(
         updatedAt: Date.now(),
       })
     }
-    const data = await fetchWithRetry({
-      model: agent.model || AGENT_MODEL,
-      messages: messagesToSend,
-      tools: tools.length > 0 ? tools : undefined,
-      max_tokens: 4096,
-    })
+    // Use streaming for the LLM call — tokens emitted via onProgress
+    let msg: any
+    let usage: any
 
-    // Track cost/tokens
-    if (data.usage) {
-      totalTokens += (data.usage.prompt_tokens || 0) + (data.usage.completion_tokens || 0)
-      totalCost += data.usage.total_cost || 0
+    if (onProgress) {
+      // Streaming mode: emit tokens in real-time
+      const streamResult = await fetchStreaming(
+        { model: agent.model || AGENT_MODEL, messages: messagesToSend, tools: tools.length > 0 ? tools : undefined, max_tokens: 4096 },
+        (token) => onProgress({ type: 'token', content: token })
+      )
+      msg = streamResult.message
+      usage = streamResult.usage
+    } else {
+      // Non-streaming fallback
+      const data = await fetchWithRetry({ model: agent.model || AGENT_MODEL, messages: messagesToSend, tools: tools.length > 0 ? tools : undefined, max_tokens: 4096 })
+      msg = data.choices?.[0]?.message
+      usage = data.usage
     }
 
-    const choice = data.choices?.[0]
-    const msg = choice?.message
+    // Track cost/tokens
+    if (usage) {
+      totalTokens += (usage.prompt_tokens || 0) + (usage.completion_tokens || 0)
+      totalCost += usage.total_cost || 0
+    }
 
-    if (choice?.finish_reason === 'tool_calls' || msg?.tool_calls) {
+    if (msg?.tool_calls?.length > 0) {
       apiMessages.push(msg)
       for (const tc of msg.tool_calls || []) {
         let fnArgs: Record<string, unknown> = {}
@@ -369,7 +455,8 @@ export async function executeAgent(
 export async function directLLMResponse(
   message: string,
   context: string,
-  conversationHistory?: ConversationMessage[]
+  conversationHistory?: ConversationMessage[],
+  onProgress?: ProgressCallback
 ): Promise<string> {
   let systemPrompt =
     "Sei l'assistente AI di " + getSetting('company_name') + ". " +
@@ -394,11 +481,14 @@ export async function directLLMResponse(
 
   messages.push({ role: 'user', content: message })
 
-  const data = await fetchWithRetry({
-    model: AGENT_MODEL,
-    messages,
-    max_tokens: 4096,
-  })
+  if (onProgress) {
+    const streamResult = await fetchStreaming(
+      { model: AGENT_MODEL, messages, max_tokens: 4096 },
+      (token) => onProgress({ type: 'token', content: token })
+    )
+    return streamResult.message.content ?? ''
+  }
 
+  const data = await fetchWithRetry({ model: AGENT_MODEL, messages, max_tokens: 4096 })
   return data.choices?.[0]?.message?.content ?? ''
 }

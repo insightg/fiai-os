@@ -495,7 +495,7 @@ export async function orchestrate(
 
     // Quick minimal response, no classification, no tools
     const context = buildContext('direzione', aziendaId, userId, sessionId)
-    const minimalText = await directLLMResponse(message, context, conversationHistory)
+    const minimalText = await directLLMResponse(message, context, conversationHistory, onProgress)
     return {
       text: minimalText, toolCalls: [], agentName: 'Assistente',
       agentDomain: 'general', agentColor: AGENT_COLORS.general,
@@ -605,7 +605,7 @@ export async function orchestrate(
 
     if (validResults.length === 0) {
       const context = buildContext('direzione', aziendaId, userId, sessionId)
-      const text = await directLLMResponse(message, context, conversationHistory)
+      const text = await directLLMResponse(message, context, conversationHistory, onProgress)
       return finalizeResult({ text, toolCalls: [], agentName: 'Assistente', agentDomain: 'general', agentColor: AGENT_COLORS.general }, classification)
     }
 

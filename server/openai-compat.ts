@@ -203,54 +203,39 @@ router.post('/chat/completions', async (req: Request, res: Response) => {
       res.flushHeaders()
 
       // Send initial chunk with role
-      const initialChunk = {
-        id: completionId,
-        object: 'chat.completion.chunk',
-        created,
-        model: modelName,
+      res.write(`data: ${JSON.stringify({
+        id: completionId, object: 'chat.completion.chunk', created, model: modelName,
         choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }],
-      }
-      res.write(`data: ${JSON.stringify(initialChunk)}\n\n`)
+      })}\n\n`)
 
-      // Get the full response
-      const result = await handleChatMessage(userText, auth.userId, auth.aziendaId, {
+      // Real streaming: orchestrator emits tokens via onProgress
+      const { orchestrate } = await import('./agents/orchestrator.js')
+      const result = await orchestrate(userText, auth.userId, auth.aziendaId, {
         format: responseFormat,
         sessionId,
-        channel: 'api',
         history,
         attachedImageBase64,
         permissions: auth.permissions,
+        onProgress: (event) => {
+          if (event.type === 'token' && event.content) {
+            res.write(`data: ${JSON.stringify({
+              id: completionId, object: 'chat.completion.chunk', created, model: modelName,
+              choices: [{ index: 0, delta: { content: event.content }, finish_reason: null }],
+            })}\n\n`)
+          }
+        },
       })
 
-      // Stream the response text in chunks (simulate token-by-token)
-      const text = result.text || ''
-      const chunkSize = 4 // characters per chunk — balance between granularity and overhead
-      for (let i = 0; i < text.length; i += chunkSize) {
-        const slice = text.slice(i, i + chunkSize)
-        const chunk = {
-          id: completionId,
-          object: 'chat.completion.chunk',
-          created,
-          model: modelName,
-          choices: [{ index: 0, delta: { content: slice }, finish_reason: null }],
-        }
-        res.write(`data: ${JSON.stringify(chunk)}\n\n`)
-      }
-
       // Send finish chunk
-      const finishChunk = {
-        id: completionId,
-        object: 'chat.completion.chunk',
-        created,
-        model: modelName,
+      res.write(`data: ${JSON.stringify({
+        id: completionId, object: 'chat.completion.chunk', created, model: modelName,
         choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
         usage: {
           prompt_tokens: result.totalTokens ? Math.floor(result.totalTokens * 0.7) : 0,
           completion_tokens: result.totalTokens ? Math.ceil(result.totalTokens * 0.3) : 0,
           total_tokens: result.totalTokens || 0,
         },
-      }
-      res.write(`data: ${JSON.stringify(finishChunk)}\n\n`)
+      })}\n\n`)
       res.write('data: [DONE]\n\n')
       res.end()
 

@@ -122,6 +122,75 @@ router.post('/message', authMiddleware(true), async (req: AuthRequest, res: Resp
   }
 })
 
+// ── SSE Streaming endpoint ───────────────────────────────
+
+router.post('/message/stream', authMiddleware(true), async (req: AuthRequest, res: Response) => {
+  const { message, format, sessionId, conversationHistory, history, attachedImageBase64, attachedAudioBase64 } = req.body
+  if (!message) { res.status(400).json({ error: 'message richiesto' }); return }
+
+  // Set SSE headers
+  res.setHeader('Content-Type', 'text/event-stream')
+  res.setHeader('Cache-Control', 'no-cache')
+  res.setHeader('Connection', 'keep-alive')
+  res.setHeader('X-Accel-Buffering', 'no')
+  res.flushHeaders()
+
+  const channel = (format === 'whatsapp') ? 'whatsapp' : 'web'
+  const resolvedSessionId = ensureSession(sessionId || '', req.userId || '', req.aziendaId || '', channel)
+
+  // Load history from DB if not provided
+  let chatHistory = history || conversationHistory
+  if (!chatHistory || chatHistory.length === 0) {
+    chatHistory = loadHistory(resolvedSessionId, 20)
+  }
+
+  // Save user message
+  saveMessage(resolvedSessionId, req.userId || '', 'user', message)
+
+  try {
+    const result = await orchestrate(message, req.userId || '', req.aziendaId || '', {
+      format: format || 'web',
+      sessionId: resolvedSessionId,
+      history: chatHistory,
+      attachedImageBase64,
+      attachedAudioBase64,
+      permissions: req.permissions,
+      onProgress: (event) => {
+        // Forward all progress events as SSE
+        res.write(`data: ${JSON.stringify(event)}\n\n`)
+      },
+    })
+
+    // Save assistant response
+    saveMessage(resolvedSessionId, req.userId || '', 'assistant', result.text, result.agentDomain, result.agentName, result.toolCalls)
+
+    // Auto-title
+    try {
+      const session = db.prepare("SELECT titolo FROM chat_sessions WHERE id = ?").get(resolvedSessionId) as any
+      if (session?.titolo === 'Nuova conversazione' && message.length > 3) {
+        db.prepare("UPDATE chat_sessions SET titolo = ? WHERE id = ?").run(message.substring(0, 60) + (message.length > 60 ? '...' : ''), resolvedSessionId)
+      }
+    } catch {}
+
+    // Send final result (without the full text since it was already streamed)
+    res.write(`data: ${JSON.stringify({
+      type: 'done',
+      agentName: result.agentName,
+      agentDomain: result.agentDomain,
+      agentColor: result.agentColor,
+      toolCalls: result.toolCalls,
+      suggestions: result.suggestions,
+      sessionId: resolvedSessionId,
+      totalTokens: result.totalTokens,
+    })}\n\n`)
+
+  } catch (err) {
+    res.write(`data: ${JSON.stringify({ type: 'error', message: (err as Error).message })}\n\n`)
+  }
+
+  res.end()
+})
+
 // ── Agent Views API ───────────────────────────────────
 
 router.get('/agent-views/:domain', authMiddleware(true), (req: AuthRequest, res: Response) => {

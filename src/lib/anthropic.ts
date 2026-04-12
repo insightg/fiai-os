@@ -16,60 +16,97 @@ export interface ToolUseEvent {
 export async function sendMessage(
   messages: ConversationMessage[],
   sessionId: string,
-  _onToolUse?: (event: ToolUseEvent) => void,
-  _onTextChunk?: (chunk: string) => void,
+  onToolUse?: (event: ToolUseEvent) => void,
+  onTextChunk?: (chunk: string) => void,
   attachedImageBase64?: string,
   attachedAudioBase64?: string
-): Promise<{ text: string; toolCalls: Record<string, unknown>[]; agentName?: string; agentDomain?: string; agentColor?: string; suggestions?: string[]; reasoning?: any }> {
+): Promise<{ text: string; toolCalls: Record<string, unknown>[]; agentName?: string; agentDomain?: string; agentColor?: string; suggestions?: string[]; reasoning?: any; sessionId?: string }> {
   const token = getAuthToken()
   const lastMsg = messages[messages.length - 1]
   const message = typeof lastMsg.content === 'string' ? lastMsg.content : JSON.stringify(lastMsg.content)
 
-  const res = await fetch('/api/chat/message', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify({
-      message,
-      sessionId,
-      history: messages.slice(0, -1).map(m => ({
-        role: m.role,
-        content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
-      })),
-      attachedImageBase64,
-      attachedAudioBase64,
-    }),
+  const body = JSON.stringify({
+    message,
+    sessionId,
+    history: messages.slice(0, -1).map(m => ({
+      role: m.role,
+      content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+    })),
+    attachedImageBase64,
+    attachedAudioBase64,
   })
 
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (token) headers['Authorization'] = `Bearer ${token}`
+
+  // Use SSE streaming endpoint for real-time token delivery
+  const res = await fetch('/api/chat/message/stream', { method: 'POST', headers, body })
+
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
-    throw new Error(err.error || `Errore ${res.status}`)
+    // Fallback to non-streaming on error
+    const fallback = await fetch('/api/chat/message', { method: 'POST', headers, body })
+    return await fallback.json()
   }
 
-  const result = await res.json()
+  // Parse SSE stream
+  const reader = res.body!.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let fullText = ''
+  const result: any = { text: '', toolCalls: [], agentName: '', agentDomain: '', agentColor: '', suggestions: [] }
 
-  // Save messages to DB
-  try {
-    const userContent = typeof lastMsg.content === 'string' ? lastMsg.content : JSON.stringify(lastMsg.content)
-    await supabase.from('chat_messages').insert({
-      session_id: sessionId,
-      ruolo: 'user',
-      contenuto: userContent,
-      tool_calls: null,
-    })
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
 
-    await supabase.from('chat_messages').insert({
-      session_id: sessionId,
-      ruolo: 'assistant',
-      contenuto: result.text,
-      tool_calls: result.toolCalls?.length > 0 ? result.toolCalls : null,
-    })
-  } catch {
-    console.warn('Errore nel salvataggio messaggi chat')
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() || ''
+
+    for (const line of lines) {
+      const trimmed = line.trim()
+      if (!trimmed || !trimmed.startsWith('data: ')) continue
+      try {
+        const event = JSON.parse(trimmed.slice(6))
+
+        switch (event.type) {
+          case 'token':
+            fullText += event.content
+            onTextChunk?.(event.content)
+            break
+          case 'tool_start':
+            onToolUse?.({ type: 'tool_start', tool: event.tool } as any)
+            break
+          case 'tool_done':
+            onToolUse?.({ type: 'tool_done', tool: event.tool, summary: event.summary } as any)
+            break
+          case 'status':
+          case 'agent':
+            // Agent selection events — can update UI header
+            if (event.agentName) result.agentName = event.agentName
+            if (event.agentDomain) result.agentDomain = event.agentDomain
+            if (event.agentColor) result.agentColor = event.agentColor
+            break
+          case 'done':
+            // Final result with metadata
+            result.agentName = event.agentName || result.agentName
+            result.agentDomain = event.agentDomain || result.agentDomain
+            result.agentColor = event.agentColor || result.agentColor
+            result.toolCalls = event.toolCalls || []
+            result.suggestions = event.suggestions || []
+            result.sessionId = event.sessionId
+            result.totalTokens = event.totalTokens
+            break
+          case 'error':
+            throw new Error(event.message)
+        }
+      } catch (e) {
+        if (e instanceof Error && e.message !== 'Unexpected end of JSON input') throw e
+      }
+    }
   }
 
+  result.text = fullText || result.text
   return result
 }
 
