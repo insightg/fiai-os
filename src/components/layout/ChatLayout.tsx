@@ -632,12 +632,17 @@ export default function ChatLayout() {
         }
       } catch {}
 
-      // Load doc/chunk counts
+      // Load doc/chunk counts via admin system endpoint
       try {
-        const { supabase } = await import('../../lib/supabase')
-        const { data: docs } = await supabase.from('entity').select('id', { count: 'exact', head: true }).eq('type', 'documento')
-        const { data: chunks } = await supabase.from('entity').select('id', { count: 'exact', head: true }).eq('type', 'chunk')
-        setSidebarStats({ docs: (docs as any)?.length || 0, chunks: (chunks as any)?.length || 0 })
+        const { getAuthToken } = await import('../../lib/supabase')
+        const token = getAuthToken()
+        if (token) {
+          const res = await fetch('/api/admin/system', { headers: { 'Authorization': `Bearer ${token}` } })
+          if (res.ok) {
+            const stats = await res.json()
+            setSidebarStats({ docs: stats.documents || 0, chunks: stats.chunks || 0 })
+          }
+        }
       } catch {}
     }
     loadSidebar()

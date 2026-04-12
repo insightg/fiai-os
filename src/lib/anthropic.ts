@@ -40,11 +40,14 @@ export async function sendMessage(
   if (token) headers['Authorization'] = `Bearer ${token}`
 
   // Use SSE streaming endpoint for real-time token delivery
-  const res = await fetch('/api/chat/message/stream', { method: 'POST', headers, body })
-
-  if (!res.ok) {
-    // Fallback to non-streaming on error
+  let res: Response
+  try {
+    res = await fetch('/api/chat/message/stream', { method: 'POST', headers, body })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  } catch {
+    // Fallback to non-streaming on network/HTTP2 error
     const fallback = await fetch('/api/chat/message', { method: 'POST', headers, body })
+    if (!fallback.ok) { const err = await fallback.json().catch(() => ({})); throw new Error((err as any).error || `HTTP ${fallback.status}`) }
     return await fallback.json()
   }
 
@@ -54,7 +57,9 @@ export async function sendMessage(
   let buffer = ''
   let fullText = ''
   const result: any = { text: '', toolCalls: [], agentName: '', agentDomain: '', agentColor: '', suggestions: [] }
+  let streamError = false
 
+  try {
   while (true) {
     const { done, value } = await reader.read()
     if (done) break
@@ -103,6 +108,16 @@ export async function sendMessage(
       } catch (e) {
         if (e instanceof Error && e.message !== 'Unexpected end of JSON input') throw e
       }
+    }
+  }
+  } catch (streamErr) {
+    // Stream interrupted (HTTP/2 error, network drop) — use what we have
+    streamError = true
+    console.warn('[Stream] Connection interrupted, using partial result')
+    if (!fullText && !result.agentName) {
+      // No data received at all — fallback to non-streaming
+      const fallback = await fetch('/api/chat/message', { method: 'POST', headers, body })
+      if (fallback.ok) return await fallback.json()
     }
   }
 
