@@ -523,9 +523,10 @@ router.post('/confirm', authMiddleware(true), async (req: AuthRequest, res: Resp
       : `/entity/${analysis.entity_type}/${slug}`
     const uploaderName = (db.prepare("SELECT display_name FROM entity WHERE id = ?").get(userId) as any)?.display_name || userId
 
-    db.prepare(`INSERT INTO entity (id, azienda_id, type, display_name, slug, stato, name_id, parent_id, user_id, file_url, numero, data, totale, body, categoria, metadata, path)
-      VALUES (?, ?, ?, ?, ?, 'processing', ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    db.prepare(`INSERT INTO entity (id, azienda_id, type, display_name, slug, stato, tags, name_id, parent_id, user_id, file_url, numero, data, totale, body, categoria, metadata, path)
+      VALUES (?, ?, ?, ?, ?, 'processing', ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       entityId, aziendaId, analysis.entity_type, finalDisplayName, slug,
+      JSON.stringify(analysis.tags || []),
       matchedNameId, userId, fileUrl,
       ed.numero || null, ed.data || null, ed.totale || null,
       extractedText || null,  // body: store full text temporarily, job will process it
