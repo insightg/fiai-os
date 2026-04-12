@@ -159,19 +159,32 @@ router.post('/chat/completions', async (req: Request, res: Response) => {
     ? lastUserMsg.content
     : lastUserMsg.content.filter((b: any) => b.type === 'text').map((b: any) => b.text).join('\n')
 
-  // Detect voice/audio mode:
-  //   1. Header: X-Response-Format: voice
-  //   2. Model name ending with "-voice" (e.g. "bernardini-os-voice", "commerciale-voice")
-  //   3. OpenAI modalities field includes "audio"
+  // Detect response profile from:
+  //   1. Header: X-Response-Format: voice|brief|json|report|custom
+  //   2. Model name suffix: bernardini-os-voice, commerciale-brief, etc.
+  //   3. OpenAI modalities field: ["audio"] → voice
+  //   4. Body field: response_format: "voice"
   const headerFormat = req.headers['x-response-format'] as string | undefined
   const modalities = req.body.modalities as string[] | undefined
-  const isVoice = headerFormat === 'voice'
-    || (model && typeof model === 'string' && model.endsWith('-voice'))
-    || (Array.isArray(modalities) && modalities.includes('audio'))
-  const responseFormat: 'web' | 'voice' = isVoice ? 'voice' : 'web'
+  const bodyFormat = req.body.response_format as string | undefined
 
-  // Strip "-voice" suffix from model name for routing
-  const cleanModel = (model && typeof model === 'string') ? model.replace(/-voice$/, '') : model
+  let responseFormat = 'web'
+  let cleanModel = (model && typeof model === 'string') ? model : ''
+
+  // Check for profile suffix in model name (e.g. "bernardini-os-voice" → profile "voice", model "bernardini-os")
+  const suffixMatch = cleanModel.match(/^(.+)-([a-z]+)$/)
+  if (suffixMatch) {
+    const { getResponseProfile: checkProfile } = await import('./settings.js')
+    if (checkProfile(suffixMatch[2])) {
+      responseFormat = suffixMatch[2]
+      cleanModel = suffixMatch[1]
+    }
+  }
+
+  // Header/body/modalities override model suffix
+  if (headerFormat) responseFormat = headerFormat
+  else if (bodyFormat) responseFormat = bodyFormat
+  else if (Array.isArray(modalities) && modalities.includes('audio')) responseFormat = 'voice'
 
   // Session ID: use custom from body, or generate persistent one per user
   const sessionId = req.body.session_id || `api-${auth.userId}-${cleanModel || 'default'}`

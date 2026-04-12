@@ -46,7 +46,7 @@ export async function handleChatMessage(
   userId: string,
   aziendaId: string,
   options?: {
-    format?: 'web' | 'whatsapp' | 'voice'
+    format?: string
     sessionId?: string
     channel?: string
     history?: { role: string; content: string }[]

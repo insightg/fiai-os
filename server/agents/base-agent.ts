@@ -1,7 +1,7 @@
 import type { AgentConfig, AgentResult, ToolDefinition, UserPermissions } from './types.js'
 import { TOOL_DEFINITIONS, executeTool } from './tool-registry.js'
 import db from '../db.js'
-import { getSetting } from '../settings.js'
+import { getSetting, getResponseProfile } from '../settings.js'
 
 // ── Session context stats (shared with tool-registry for get_session_context) ──
 export interface SessionStats {
@@ -138,7 +138,7 @@ export async function executeAgent(
   aziendaId: string,
   userId: string,
   context: string,
-  format: 'web' | 'whatsapp' | 'voice',
+  format: string,  // 'web' (default), 'whatsapp', 'voice', 'brief', 'json', 'report', or any custom profile slug
   conversationHistory?: ConversationMessage[],
   onProgress?: ProgressCallback,
   permissions?: UserPermissions,
@@ -182,21 +182,12 @@ export async function executeAgent(
     systemPrompt += '\n\n' + context.substring(0, 8000)
   }
 
-  if (format === 'whatsapp') {
-    systemPrompt += '\nFormatta per WhatsApp: *grassetto*, liste con -, niente tabelle markdown. Sii conciso.'
-  } else if (format === 'voice') {
-    systemPrompt += `
-FORMATO VOCALE — La tua risposta verra' letta ad alta voce da un sintetizzatore vocale.
-REGOLE DI FORMATTAZIONE VOCALE (OBBLIGATORIE):
-- Rispondi in modo DISCORSIVO e NATURALE, come se stessi parlando a voce con un collega.
-- VIETATO usare: tabelle, markdown, asterischi, elenchi puntati, titoli con #, emoji, parentesi, link, codice.
-- VIETATO elencare dati in formato lista. Integra i numeri nel discorso in modo fluido.
-- I numeri vanno scritti per esteso quando brevi (es. "tre clienti", "ventiquattro"), in cifre quando lunghi (es. "847.000 euro").
-- Le date vanno lette naturalmente: "undici aprile duemilaventisei", non "11/04/2026".
-- Usa frasi complete e connettori naturali: "per quanto riguarda", "inoltre", "in particolare".
-- Se ci sono molti dati, fai un RIASSUNTO discorsivo con i punti salienti, non un elenco completo.
-- Massimo 4-5 frasi per risposta. Se l'utente vuole approfondire, chiedera'.
-- Tono: professionale ma cordiale, come un assistente che riferisce a voce.`
+  // Apply response profile (voice, whatsapp, brief, json, report, or custom)
+  if (format && format !== 'web') {
+    const profilePrompt = getResponseProfile(format)
+    if (profilePrompt) {
+      systemPrompt += '\n' + profilePrompt
+    }
   }
   systemPrompt += '\nNon ripetere i dati grezzi dei tool nella risposta. Sintetizza in modo leggibile.'
 

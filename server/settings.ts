@@ -21,6 +21,109 @@ export interface SettingDef {
   requiresRestart: boolean
 }
 
+// ── Response Profile Defaults ────────────────────────────
+
+export const DEFAULT_RESPONSE_PROFILES: { slug: string; name: string; description: string; prompt: string }[] = [
+  {
+    slug: 'voice',
+    name: 'Vocale',
+    description: 'Per dispositivi audio / TTS — risposte discorsive senza markdown',
+    prompt: `FORMATO VOCALE — La tua risposta verra' letta ad alta voce da un sintetizzatore vocale.
+REGOLE DI FORMATTAZIONE VOCALE (OBBLIGATORIE):
+- Rispondi in modo DISCORSIVO e NATURALE, come se stessi parlando a voce con un collega.
+- VIETATO usare: tabelle, markdown, asterischi, elenchi puntati, titoli con #, emoji, parentesi, link, codice.
+- VIETATO elencare dati in formato lista. Integra i numeri nel discorso in modo fluido.
+- I numeri vanno scritti per esteso quando brevi (es. "tre clienti", "ventiquattro"), in cifre quando lunghi (es. "847.000 euro").
+- Le date vanno lette naturalmente: "undici aprile duemilaventisei", non "11/04/2026".
+- Usa frasi complete e connettori naturali: "per quanto riguarda", "inoltre", "in particolare".
+- Se ci sono molti dati, fai un RIASSUNTO discorsivo con i punti salienti, non un elenco completo.
+- Massimo 4-5 frasi per risposta. Se l'utente vuole approfondire, chiedera'.
+- Tono: professionale ma cordiale, come un assistente che riferisce a voce.`,
+  },
+  {
+    slug: 'brief',
+    name: 'Sintetico',
+    description: 'Risposte ultra-brevi, max 2 frasi — per notifiche, smartwatch, widget',
+    prompt: `FORMATO SINTETICO — Rispondi in massimo 1-2 frasi.
+- Vai dritto al punto, nessuna introduzione o convenevole.
+- Se ci sono dati, riporta solo il numero piu' importante.
+- Niente liste, tabelle, o formattazione complessa.
+- Se servono dettagli, suggerisci all'utente di chiedere approfondimenti.`,
+  },
+  {
+    slug: 'json',
+    name: 'JSON Strutturato',
+    description: 'Risposte in JSON puro — per integrazioni machine-to-machine',
+    prompt: `FORMATO JSON — Rispondi SOLO con un JSON valido, senza testo aggiuntivo.
+Struttura la risposta come:
+{"answer": "...", "data": [...], "suggestions": [...]}
+- "answer": la risposta testuale principale
+- "data": array di oggetti con i dati trovati (opzionale, solo se ci sono risultati dei tool)
+- "suggestions": array di stringhe con suggerimenti per il prossimo passo
+NON aggiungere MAI testo fuori dal JSON. Niente markdown, niente commenti.`,
+  },
+  {
+    slug: 'report',
+    name: 'Report',
+    description: 'Risposte dettagliate e strutturate — per documenti e analisi',
+    prompt: `FORMATO REPORT — Rispondi in modo strutturato e dettagliato, adatto a un documento professionale.
+- Usa titoli con ## e sottotitoli con ###
+- Usa elenchi puntati per i dati chiave
+- Includi tabelle markdown quando appropriato
+- Aggiungi una sezione "Conclusioni" o "Prossimi passi" alla fine
+- Tono formale e professionale
+- Non abbreviare — includi tutti i dati disponibili`,
+  },
+  {
+    slug: 'whatsapp',
+    name: 'WhatsApp',
+    description: 'Formattazione WhatsApp — grassetto con *, liste con -, conciso',
+    prompt: 'Formatta per WhatsApp: *grassetto*, liste con -, niente tabelle markdown. Sii conciso.',
+  },
+]
+
+// ── Response Profile Functions ───────────────────────────
+
+export function getResponseProfile(slug: string, aziendaId?: string): string | null {
+  // 1. Check DB for custom/edited profile
+  try {
+    const entity = db.prepare(
+      "SELECT body FROM entity WHERE type = 'response_profile' AND slug = ? AND deleted_at IS NULL" + (aziendaId ? " AND azienda_id = ?" : "") + " LIMIT 1"
+    ).get(...(aziendaId ? [slug, aziendaId] : [slug])) as any
+    if (entity?.body) return entity.body
+  } catch {}
+
+  // 2. Fallback to built-in default
+  const builtin = DEFAULT_RESPONSE_PROFILES.find(p => p.slug === slug)
+  return builtin?.prompt || null
+}
+
+export function listResponseProfiles(aziendaId?: string): { slug: string; name: string; description: string; source: 'db' | 'default' }[] {
+  const result: { slug: string; name: string; description: string; source: 'db' | 'default' }[] = []
+  const seen = new Set<string>()
+
+  // DB profiles first (overrides)
+  try {
+    const rows = db.prepare(
+      "SELECT slug, display_name, metadata FROM entity WHERE type = 'response_profile' AND deleted_at IS NULL" + (aziendaId ? " AND azienda_id = ?" : "") + " ORDER BY display_name"
+    ).all(...(aziendaId ? [aziendaId] : [])) as any[]
+    for (const r of rows) {
+      const meta = typeof r.metadata === 'string' ? JSON.parse(r.metadata) : (r.metadata || {})
+      result.push({ slug: r.slug, name: r.display_name, description: meta.description || '', source: 'db' })
+      seen.add(r.slug)
+    }
+  } catch {}
+
+  // Built-in defaults (only if not overridden)
+  for (const p of DEFAULT_RESPONSE_PROFILES) {
+    if (!seen.has(p.slug)) {
+      result.push({ slug: p.slug, name: p.name, description: p.description, source: 'default' })
+    }
+  }
+
+  return result
+}
+
 export const SETTINGS_REGISTRY: SettingDef[] = [
   // Azienda
   { key: 'company_name', category: 'azienda', envVar: 'COMPANY_NAME', description: 'Nome azienda (usato nei prompt degli agenti)', sensitive: false, defaultValue: 'BERNARDINI S.R.L.', requiresRestart: false },

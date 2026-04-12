@@ -8,7 +8,7 @@ import crypto from 'crypto'
 import bcrypt from 'bcryptjs'
 import { AuthRequest, authMiddleware } from './middleware.js'
 import db from './db.js'
-import { getSettingsDiscovery, setSetting, loadSettings } from './settings.js'
+import { getSettingsDiscovery, setSetting, loadSettings, listResponseProfiles, getResponseProfile, DEFAULT_RESPONSE_PROFILES } from './settings.js'
 
 const router = Router()
 
@@ -358,6 +358,61 @@ router.post('/settings/bulk', (req: AuthRequest, res: Response) => {
     setSetting(req.aziendaId || '', key, value as string)
   }
   res.json({ successo: true, count: Object.keys(settings).length })
+})
+
+// ── RESPONSE PROFILES ────────────────────────────────────
+
+router.get('/response-profiles', (req: AuthRequest, res: Response) => {
+  const profiles = listResponseProfiles(req.aziendaId)
+  // Enrich with full prompt for editing
+  const enriched = profiles.map(p => {
+    const prompt = getResponseProfile(p.slug, req.aziendaId) || ''
+    return { ...p, prompt }
+  })
+  res.json(enriched)
+})
+
+router.put('/response-profiles/:slug', (req: AuthRequest, res: Response) => {
+  const { name, description, prompt } = req.body
+  if (!prompt) { res.status(400).json({ error: 'prompt obbligatorio' }); return }
+  const slug = req.params.slug
+
+  const existing = db.prepare("SELECT id FROM entity WHERE type = 'response_profile' AND slug = ? AND azienda_id = ?").get(slug, req.aziendaId) as any
+  if (existing) {
+    db.prepare("UPDATE entity SET display_name = ?, body = ?, metadata = ?, updated_at = datetime('now') WHERE id = ?").run(
+      name || slug, prompt, JSON.stringify({ description: description || '' }), existing.id
+    )
+  } else {
+    const id = crypto.randomUUID()
+    db.prepare("INSERT INTO entity (id, azienda_id, type, display_name, slug, body, metadata, path) VALUES (?,?,'response_profile',?,?,?,?,?)").run(
+      id, req.aziendaId, name || slug, slug, prompt,
+      JSON.stringify({ description: description || '' }),
+      `/entity/response_profile/${slug}`
+    )
+  }
+  res.json({ successo: true })
+})
+
+router.post('/response-profiles', (req: AuthRequest, res: Response) => {
+  const { slug, name, description, prompt } = req.body
+  if (!slug || !prompt) { res.status(400).json({ error: 'slug e prompt obbligatori' }); return }
+  if (!/^[a-z][a-z0-9_-]*$/.test(slug)) { res.status(400).json({ error: 'slug deve essere lowercase alfanumerico (es. my-profile)' }); return }
+
+  const existing = db.prepare("SELECT id FROM entity WHERE type = 'response_profile' AND slug = ? AND azienda_id = ?").get(slug, req.aziendaId)
+  if (existing) { res.status(400).json({ error: 'Profilo con questo slug gia esistente' }); return }
+
+  const id = crypto.randomUUID()
+  db.prepare("INSERT INTO entity (id, azienda_id, type, display_name, slug, body, metadata, path) VALUES (?,?,'response_profile',?,?,?,?,?)").run(
+    id, req.aziendaId, name || slug, slug, prompt,
+    JSON.stringify({ description: description || '' }),
+    `/entity/response_profile/${slug}`
+  )
+  res.json({ successo: true, id, slug })
+})
+
+router.delete('/response-profiles/:slug', (req: AuthRequest, res: Response) => {
+  db.prepare("UPDATE entity SET deleted_at = datetime('now') WHERE type = 'response_profile' AND slug = ? AND azienda_id = ?").run(req.params.slug, req.aziendaId)
+  res.json({ successo: true })
 })
 
 // ── SYSTEM STATS ─────────────────────────────────────────

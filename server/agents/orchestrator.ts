@@ -373,7 +373,7 @@ export async function orchestrate(
   userId: string,
   aziendaId: string,
   options?: {
-    format?: 'web' | 'whatsapp' | 'voice'
+    format?: string
     sessionId?: string
     history?: ConversationMessage[]
     attachedImageBase64?: string

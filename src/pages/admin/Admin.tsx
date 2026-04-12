@@ -1057,7 +1057,7 @@ function ApiTab() {
           <Bot size={16} className="text-gold" />
           <h3 className="text-sm font-semibold text-text">Modelli disponibili</h3>
         </div>
-        <p className="text-[11px] text-text3 mb-2">Usa il campo <code className="bg-bg3 px-1 rounded">model</code> per scegliere l'agente. Aggiungi <code className="bg-bg3 px-1 rounded">-voice</code> per risposte vocali (senza markdown/tabelle).</p>
+        <p className="text-[11px] text-text3 mb-2">Usa il campo <code className="bg-bg3 px-1 rounded">model</code> per scegliere l'agente. Aggiungi un suffisso profilo (es. <code className="bg-bg3 px-1 rounded">-voice</code>, <code className="bg-bg3 px-1 rounded">-brief</code>, <code className="bg-bg3 px-1 rounded">-json</code>) per formati di risposta personalizzati.</p>
         <div className="overflow-x-auto">
           <table className="w-full text-[11px]">
             <thead><tr className="bg-bg3">
@@ -1082,6 +1082,9 @@ function ApiTab() {
           </table>
         </div>
       </div>
+
+      {/* Response Profiles */}
+      <ResponseProfilesSection />
 
       {/* ESP32 / Device Guide */}
       <div className="bg-bg2 border border-border rounded-xl p-4">
@@ -1157,6 +1160,150 @@ print(response.choices[0].message.content)`}</pre>
             </div>
           </div>
         </div>
+      </div>
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════
+// RESPONSE PROFILES SECTION
+// ═══════════════════════════════════════════════════════
+
+interface ResponseProfile { slug: string; name: string; description: string; prompt: string; source: 'db' | 'default' }
+
+function ResponseProfilesSection() {
+  const [profiles, setProfiles] = useState<ResponseProfile[]>([])
+  const [editingSlug, setEditingSlug] = useState<string | null>(null)
+  const [editPrompt, setEditPrompt] = useState('')
+  const [editName, setEditName] = useState('')
+  const [editDesc, setEditDesc] = useState('')
+  const [showNew, setShowNew] = useState(false)
+  const [newSlug, setNewSlug] = useState('')
+  const [newName, setNewName] = useState('')
+  const [newDesc, setNewDesc] = useState('')
+  const [newPrompt, setNewPrompt] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const load = useCallback(async () => {
+    const p = await api('/response-profiles')
+    setProfiles(Array.isArray(p) ? p : [])
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  const startEdit = (p: ResponseProfile) => {
+    setEditingSlug(p.slug)
+    setEditPrompt(p.prompt)
+    setEditName(p.name)
+    setEditDesc(p.description)
+  }
+
+  const saveEdit = async () => {
+    if (!editingSlug) return
+    setSaving(true)
+    await api(`/response-profiles/${editingSlug}`, 'PUT', { name: editName, description: editDesc, prompt: editPrompt })
+    toast.success('Profilo aggiornato')
+    setEditingSlug(null)
+    setSaving(false)
+    load()
+  }
+
+  const createProfile = async () => {
+    if (!newSlug || !newPrompt) { toast.error('Slug e prompt obbligatori'); return }
+    setSaving(true)
+    const res = await api('/response-profiles', 'POST', { slug: newSlug, name: newName || newSlug, description: newDesc, prompt: newPrompt })
+    if (res.error) { toast.error(res.error); setSaving(false); return }
+    toast.success('Profilo creato')
+    setShowNew(false)
+    setNewSlug(''); setNewName(''); setNewDesc(''); setNewPrompt('')
+    setSaving(false)
+    load()
+  }
+
+  const deleteProfile = async (slug: string) => {
+    if (!confirm(`Eliminare il profilo "${slug}"?`)) return
+    await api(`/response-profiles/${slug}`, 'DELETE')
+    toast.success('Profilo eliminato')
+    load()
+  }
+
+  return (
+    <div className="bg-bg2 border border-border rounded-xl p-4">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <Settings size={16} className="text-gold" />
+          <h3 className="text-sm font-semibold text-text">Profili di risposta</h3>
+        </div>
+        <button onClick={() => setShowNew(!showNew)} className="flex items-center gap-1 px-2 py-1 text-[10px] bg-gold hover:bg-gold-l text-white rounded-lg">
+          <Plus size={12} /> Nuovo profilo
+        </button>
+      </div>
+
+      <p className="text-[10px] text-text3 mb-3">
+        I profili controllano come gli agenti formattano le risposte. Usali con suffisso nel model (es. <code className="bg-bg3 px-1 rounded">-voice</code>), header <code className="bg-bg3 px-1 rounded">X-Response-Format</code>, o campo <code className="bg-bg3 px-1 rounded">response_format</code>.
+      </p>
+
+      {showNew && (
+        <div className="bg-bg3 rounded-lg p-3 mb-3 space-y-2">
+          <div className="grid grid-cols-3 gap-2">
+            <div>
+              <label className="text-[10px] text-text3 block mb-0.5">Slug (suffisso) *</label>
+              <input value={newSlug} onChange={e => setNewSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))} placeholder="es. telegram" className="w-full px-2 py-1 text-xs bg-bg border border-border rounded text-text font-mono" />
+            </div>
+            <div>
+              <label className="text-[10px] text-text3 block mb-0.5">Nome</label>
+              <input value={newName} onChange={e => setNewName(e.target.value)} placeholder="es. Telegram" className="w-full px-2 py-1 text-xs bg-bg border border-border rounded text-text" />
+            </div>
+            <div>
+              <label className="text-[10px] text-text3 block mb-0.5">Descrizione</label>
+              <input value={newDesc} onChange={e => setNewDesc(e.target.value)} placeholder="Per..." className="w-full px-2 py-1 text-xs bg-bg border border-border rounded text-text" />
+            </div>
+          </div>
+          <div>
+            <label className="text-[10px] text-text3 block mb-0.5">Prompt (istruzioni agente) *</label>
+            <textarea value={newPrompt} onChange={e => setNewPrompt(e.target.value)} rows={4} placeholder="FORMATO ... — Rispondi in modo ..." className="w-full px-2 py-1.5 text-xs bg-bg border border-border rounded text-text font-mono resize-y" />
+          </div>
+          <div className="flex gap-2 justify-end">
+            <button onClick={() => setShowNew(false)} className="px-2 py-1 text-xs text-text3 border border-border rounded">Annulla</button>
+            <button onClick={createProfile} disabled={saving} className="px-2 py-1 text-xs bg-gold text-white rounded disabled:opacity-50">Crea</button>
+          </div>
+        </div>
+      )}
+
+      <div className="space-y-1.5">
+        {profiles.map(p => (
+          <div key={p.slug} className="bg-bg3 rounded-lg overflow-hidden">
+            <div className="flex items-center justify-between px-3 py-2 cursor-pointer" onClick={() => editingSlug === p.slug ? setEditingSlug(null) : startEdit(p)}>
+              <div className="flex items-center gap-2">
+                <code className="text-xs text-gold font-mono">-{p.slug}</code>
+                <span className="text-xs text-text font-medium">{p.name}</span>
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-bg2 text-text3">{p.source === 'db' ? 'personalizzato' : 'predefinito'}</span>
+              </div>
+              <div className="flex items-center gap-1">
+                {p.source === 'db' && (
+                  <button onClick={e => { e.stopPropagation(); deleteProfile(p.slug) }} className="p-1 rounded hover:bg-red/10 text-text3 hover:text-red"><Trash2 size={12} /></button>
+                )}
+                {editingSlug === p.slug ? <ChevronDown size={14} className="text-text3" /> : <ChevronRight size={14} className="text-text3" />}
+              </div>
+            </div>
+
+            {editingSlug === p.slug && (
+              <div className="px-3 pb-3 space-y-2 border-t border-border pt-2">
+                <p className="text-[10px] text-text3">{p.description}</p>
+                <div className="grid grid-cols-2 gap-2">
+                  <input value={editName} onChange={e => setEditName(e.target.value)} placeholder="Nome" className="px-2 py-1 text-xs bg-bg border border-border rounded text-text" />
+                  <input value={editDesc} onChange={e => setEditDesc(e.target.value)} placeholder="Descrizione" className="px-2 py-1 text-xs bg-bg border border-border rounded text-text" />
+                </div>
+                <textarea value={editPrompt} onChange={e => setEditPrompt(e.target.value)} rows={6} className="w-full px-2 py-1.5 text-xs bg-bg border border-border rounded text-text font-mono resize-y leading-relaxed" />
+                <div className="flex justify-end">
+                  <button onClick={saveEdit} disabled={saving} className="flex items-center gap-1 px-3 py-1.5 text-xs bg-gold text-white rounded-lg disabled:opacity-50">
+                    <Save size={12} /> {saving ? 'Salvataggio...' : 'Salva'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
       </div>
     </div>
   )
