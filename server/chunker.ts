@@ -301,7 +301,7 @@ export function chunkDocument(text: string, entityType: string, filename: string
     template = getTemplateForStrategy(strategy)
     console.log(`[Chunker] Using strategy "${strategy}" → template "${template.id}"`)
   } else {
-    if (text.length < 500) return [] // Too short to chunk at all
+    if (text.length < 50) return [] // Too short to chunk at all (basically empty)
     if (text.length < 10000) {
       // Small document: single chunk with full content
       console.log(`[Chunker] Small doc (${text.length} chars), creating single chunk`)
