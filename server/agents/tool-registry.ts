@@ -328,7 +328,8 @@ function auditLog(entityId: string, entityType: string | null, action: string, b
 // ── Tool Result Cache (LRU per session, TTL 60s) ──
 const toolCache = new Map<string, { result: unknown; ts: number }>()
 const TOOL_CACHE_TTL = 60000
-const CACHEABLE_TOOLS = new Set(['find', 'search', 'retrieve', 'list_documents', 'read_inbox', 'get_email_status', 'get_whatsapp_status', 'get_datetime', 'get_weather'])
+// Cache only tools with stable, repeatable results — NOT retrieve (LLM variants), NOT get_datetime (time-sensitive)
+const CACHEABLE_TOOLS = new Set(['find', 'search', 'list_documents', 'get_email_status', 'get_whatsapp_status', 'get_weather'])
 
 function getCacheKey(name: string, aziendaId: string, args: any): string {
   return `${name}:${aziendaId}:${JSON.stringify(args || {})}`
@@ -2095,10 +2096,14 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
 
   const result = await _executeTool(name, aziendaId, args, permissions)
 
-  // Save to cache for read-only tools (only on success)
+  // Save to cache for read-only tools (only on non-empty success)
   if (CACHEABLE_TOOLS.has(name) && result && !(result as any)?.errore) {
-    const cacheKey = getCacheKey(name, aziendaId, args)
-    toolCache.set(cacheKey, { result, ts: Date.now() })
+    // Don't cache empty arrays (failed searches should be retryable)
+    const isEmpty = Array.isArray(result) && result.length === 0
+    if (!isEmpty) {
+      const cacheKey = getCacheKey(name, aziendaId, args)
+      toolCache.set(cacheKey, { result, ts: Date.now() })
+    }
   }
 
   return result
