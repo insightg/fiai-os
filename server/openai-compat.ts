@@ -28,7 +28,7 @@ interface ResolvedAuth {
   permissions: UserPermissions
 }
 
-function resolveAuth(req: Request): ResolvedAuth | null {
+async function resolveAuth(req: Request): Promise<ResolvedAuth | null> {
   const authHeader = req.headers.authorization
   const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null
   if (!token) return null
@@ -63,8 +63,36 @@ function resolveAuth(req: Request): ResolvedAuth | null {
     return { userId: decoded.userId, aziendaId, permissions }
   } catch { /* not a valid JWT, try API key */ }
 
-  // 2) Try API key (entity type='api_key', slug=token)
+  // 2) Try API key — check api_tokens table (hashed) then legacy entity table
   try {
+    const bcryptMod = await import('bcryptjs')
+    // Check new api_tokens table
+    const allTokens = db.prepare(
+      "SELECT id, user_id, azienda_id, token_hash FROM api_tokens WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > datetime('now'))"
+    ).all() as any[]
+    for (const t of allTokens) {
+      if (await bcryptMod.compare(token, t.token_hash)) {
+        // Update last_used_at
+        db.prepare("UPDATE api_tokens SET last_used_at = datetime('now') WHERE id = ?").run(t.id)
+        // Load user permissions from groups
+        let permissions: UserPermissions
+        try {
+          const groups = db.prepare(
+            "SELECT e.display_name, e.metadata FROM relations r JOIN entity e ON e.id = r.to_id WHERE r.from_id = ? AND r.tipo = 'membro_di_gruppo'"
+          ).all(t.user_id) as any[]
+          const groupData = groups.map((g: any) => {
+            const m = typeof g.metadata === 'string' ? JSON.parse(g.metadata) : (g.metadata || {})
+            return { name: g.display_name, permissions: m.permissions || {}, agentPermissions: m.agentPermissions || undefined }
+          })
+          permissions = new UserPermissions(groupData)
+        } catch {
+          permissions = new UserPermissions([])
+        }
+        return { userId: t.user_id, aziendaId: t.azienda_id, permissions }
+      }
+    }
+
+    // Fallback: legacy entity-based API keys (plaintext slug match)
     const keyEntity = db.prepare(
       "SELECT id, azienda_id, metadata FROM entity WHERE type = 'api_key' AND slug = ? AND (stato IS NULL OR stato = 'active')"
     ).get(token) as any
@@ -72,8 +100,6 @@ function resolveAuth(req: Request): ResolvedAuth | null {
       const meta = typeof keyEntity.metadata === 'string' ? JSON.parse(keyEntity.metadata) : (keyEntity.metadata || {})
       const userId = meta.user_id || keyEntity.id
       const aziendaId = keyEntity.azienda_id || ''
-
-      // API keys get admin permissions by default (they're pre-authorized)
       const permissions = new UserPermissions([
         { name: 'api_key', permissions: { '*': ['read', 'create', 'update', 'delete', 'send'] } }
       ])
@@ -87,7 +113,7 @@ function resolveAuth(req: Request): ResolvedAuth | null {
 // ── POST /v1/chat/completions ─────────────────────────────
 
 router.post('/chat/completions', async (req: Request, res: Response) => {
-  const auth = resolveAuth(req)
+  const auth = await resolveAuth(req)
   if (!auth) {
     res.status(401).json({
       error: { message: 'Invalid authentication. Provide a valid Bearer token (JWT or API key).', type: 'invalid_request_error', code: 'invalid_api_key' }
@@ -147,8 +173,8 @@ router.post('/chat/completions', async (req: Request, res: Response) => {
   // Strip "-voice" suffix from model name for routing
   const cleanModel = (model && typeof model === 'string') ? model.replace(/-voice$/, '') : model
 
-  // Use 'model' field as optional session hint (can pass domain name)
-  const sessionId = `openai-${cleanModel || 'default'}-${auth.userId}`
+  // Session ID: use custom from body, or generate persistent one per user
+  const sessionId = req.body.session_id || `api-${auth.userId}-${cleanModel || 'default'}`
 
   const completionId = `chatcmpl-${crypto.randomUUID().replace(/-/g, '').slice(0, 29)}`
   const created = Math.floor(Date.now() / 1000)
@@ -177,6 +203,7 @@ router.post('/chat/completions', async (req: Request, res: Response) => {
       const result = await handleChatMessage(userText, auth.userId, auth.aziendaId, {
         format: responseFormat,
         sessionId,
+        channel: 'api',
         history,
         attachedImageBase64,
         permissions: auth.permissions,
@@ -219,6 +246,7 @@ router.post('/chat/completions', async (req: Request, res: Response) => {
       const result = await handleChatMessage(userText, auth.userId, auth.aziendaId, {
         format: responseFormat,
         sessionId,
+        channel: 'api',
         history,
         attachedImageBase64,
         permissions: auth.permissions,
@@ -276,8 +304,8 @@ router.post('/chat/completions', async (req: Request, res: Response) => {
 
 // ── GET /v1/models ────────────────────────────────────────
 
-router.get('/models', (req: Request, res: Response) => {
-  const auth = resolveAuth(req)
+router.get('/models', async (req: Request, res: Response) => {
+  const auth = await resolveAuth(req)
   if (!auth) {
     res.status(401).json({
       error: { message: 'Invalid authentication.', type: 'invalid_request_error', code: 'invalid_api_key' }
@@ -316,7 +344,7 @@ router.get('/models', (req: Request, res: Response) => {
 // Utility: generate an API key for device authentication
 
 router.post('/api-keys', async (req: Request, res: Response) => {
-  const auth = resolveAuth(req)
+  const auth = await resolveAuth(req)
   if (!auth || !auth.permissions.isAdmin) {
     res.status(403).json({
       error: { message: 'Admin access required to create API keys.', type: 'invalid_request_error', code: 'forbidden' }
@@ -349,8 +377,8 @@ router.post('/api-keys', async (req: Request, res: Response) => {
 
 // ── GET /v1/api-keys ──────────────────────────────────────
 
-router.get('/api-keys', (req: Request, res: Response) => {
-  const auth = resolveAuth(req)
+router.get('/api-keys', async (req: Request, res: Response) => {
+  const auth = await resolveAuth(req)
   if (!auth || !auth.permissions.isAdmin) {
     res.status(403).json({
       error: { message: 'Admin access required.', type: 'invalid_request_error', code: 'forbidden' }
@@ -375,8 +403,8 @@ router.get('/api-keys', (req: Request, res: Response) => {
 
 // ── DELETE /v1/api-keys/:id ───────────────────────────────
 
-router.delete('/api-keys/:id', (req: Request, res: Response) => {
-  const auth = resolveAuth(req)
+router.delete('/api-keys/:id', async (req: Request, res: Response) => {
+  const auth = await resolveAuth(req)
   if (!auth || !auth.permissions.isAdmin) {
     res.status(403).json({
       error: { message: 'Admin access required.', type: 'invalid_request_error', code: 'forbidden' }

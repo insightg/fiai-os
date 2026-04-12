@@ -25,6 +25,17 @@ import { initEmbeddings } from './embeddings.js'
 import { initAutonomousAgents } from './agents/autonomous.js'
 import { initWorkflows } from './agents/workflows.js'
 
+// Pre-migration: add columns to existing tables (idempotent, must run BEFORE schema SQL)
+try { db.exec("ALTER TABLE user_profiles ADD COLUMN tts_voice TEXT DEFAULT 'Vivian'") } catch {}
+try { db.exec("ALTER TABLE chat_sessions ADD COLUMN channel TEXT DEFAULT 'web'") } catch {}
+try { db.exec("ALTER TABLE chat_sessions ADD COLUMN agent_domain TEXT") } catch {}
+try { db.exec("ALTER TABLE chat_sessions ADD COLUMN deleted_at TEXT") } catch {}
+try { db.exec("ALTER TABLE chat_messages ADD COLUMN user_id TEXT") } catch {}
+try { db.exec("ALTER TABLE chat_messages ADD COLUMN agent_domain TEXT") } catch {}
+try { db.exec("ALTER TABLE chat_messages ADD COLUMN agent_name TEXT") } catch {}
+try { db.exec("ALTER TABLE entity ADD COLUMN deleted_at TEXT") } catch {}
+try { db.exec("CREATE TABLE IF NOT EXISTS api_tokens (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, azienda_id TEXT NOT NULL, token_hash TEXT NOT NULL, token_preview TEXT NOT NULL, name TEXT DEFAULT 'API Key', expires_at TEXT, revoked_at TEXT, last_used_at TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')))") } catch {}
+
 // Run migrations on startup
 const migrationPath = path.join(import.meta.dirname || '.', 'migrations', 'init-sqlite.sql')
 if (fs.existsSync(migrationPath)) {
@@ -32,12 +43,6 @@ if (fs.existsSync(migrationPath)) {
   db.exec(sql)
   console.log('SQLite migrations applied.')
 }
-
-// Legacy migration (kept for backward compat, no-op if column exists)
-try { db.exec("ALTER TABLE user_profiles ADD COLUMN tts_voice TEXT DEFAULT 'Vivian'") } catch {}
-// Add deleted_at for soft delete
-try { db.exec("ALTER TABLE entity ADD COLUMN deleted_at TEXT") } catch {}
-
 // FTS triggers: only INSERT triggers (standalone FTS5 can't do delete/update safely)
 try {
   db.exec("DROP TRIGGER IF EXISTS chunk_fts_au")

@@ -134,11 +134,12 @@ async function handleIncomingMessage(msg: WAMessage) {
       pendingLogins.delete(lidId)
 
       if (match) {
-        // Login OK — save LID mapping
+        // Login OK — save LID mapping + auth timestamp
         const userPhone = pending.telefono?.replace(/^\+/, '') || lidId
-        db.prepare("UPDATE entity SET metadata = json_set(metadata, '$.whatsapp_lid', ?, '$.whatsapp_active', 1) WHERE id = ?").run(lidId, pending.id)
+        db.prepare("UPDATE entity SET metadata = json_set(metadata, '$.whatsapp_lid', ?, '$.whatsapp_active', 1, '$.whatsapp_auth_at', ?) WHERE id = ?").run(lidId, new Date().toISOString(), pending.id)
         lidPhoneMap.set(lidId, userPhone)
-        await sock.sendMessage(sender, { text: `✅ Autenticato come *${pending.display_name}*!\n\nOra puoi usare BERNARDINI da WhatsApp.` })
+        const { getSetting } = await import('./settings.js')
+        await sock.sendMessage(sender, { text: `✅ Autenticato come *${pending.display_name}*!\n\nOra puoi usare ${getSetting('company_short_name') || 'il sistema'} da WhatsApp. La sessione scade dopo 1 ora.` })
       } else {
         await sock.sendMessage(sender, { text: '❌ Password errata. Riprova scrivendo la tua email.' })
       }
@@ -160,7 +161,8 @@ async function handleIncomingMessage(msg: WAMessage) {
     }
 
     // First contact — ask for email
-    await sock.sendMessage(sender, { text: '👋 Benvenuto in *BERNARDINI*!\n\nPer autenticarti, invia la tua *email* di accesso:' })
+    const { getSetting } = await import('./settings.js')
+    await sock.sendMessage(sender, { text: `👋 Benvenuto in *${getSetting('company_short_name') || 'il sistema'}*!\n\nPer autenticarti, invia la tua *email* di accesso:` })
     return
   }
 
@@ -188,8 +190,64 @@ async function handleIncomingMessage(msg: WAMessage) {
   // No fallback — VFS only
 
   if (!waUser) {
-    await sock.sendMessage(sender, { text: '⚠️ Numero non riconosciuto.\n\nChiedi al tuo amministratore di collegare questo numero al tuo profilo BERNARDINI.' })
+    await sock.sendMessage(sender, { text: '⚠️ Numero non riconosciuto.\n\nChiedi al tuo amministratore di collegare questo numero al tuo profilo.' })
     return
+  }
+
+  // Check WhatsApp auth expiry (1 hour)
+  const waMeta = typeof waUser.metadata === 'string' ? JSON.parse(waUser.metadata) : (waUser.metadata || {})
+  const authAt = waMeta.whatsapp_auth_at ? new Date(waMeta.whatsapp_auth_at).getTime() : 0
+  const AUTH_TTL = 3600000 // 1 hour
+  if (Date.now() - authAt > AUTH_TTL) {
+    // Auth expired or never authenticated via password
+    const lidId = sender.endsWith('@lid') ? sender.replace('@lid', '') : ''
+    if (lidId) {
+      // LID user needs re-auth
+      await sock.sendMessage(sender, { text: '🔒 *Sessione scaduta*\n\nPer continuare, invia la tua *email* di accesso:' })
+      // Clear LID mapping to force re-auth
+      lidPhoneMap.delete(lidId)
+      return
+    }
+    // Phone users: check if they've ever authenticated via password
+    if (!waMeta.whatsapp_auth_at) {
+      // First time: require auth
+      await sock.sendMessage(sender, { text: '🔒 Per usare il sistema via WhatsApp, invia la tua *email* di accesso:' })
+      return
+    }
+    // Phone user with expired auth — start login flow
+    pendingLogins.set(phone, { ...waUser, _awaitingEmail: true })
+    await sock.sendMessage(sender, { text: '🔒 *Sessione scaduta* (1 ora).\n\nInvia la tua *email* per riautenticarti:' })
+    return
+  }
+
+  // Check if phone user has pending re-auth
+  const phonePending = pendingLogins.get(phone)
+  if (phonePending) {
+    if (phonePending._awaitingEmail) {
+      // Expecting email
+      const emailMatch = text.trim().match(/^[^\s@]+@[^\s@]+\.[^\s@]+$/)
+      if (emailMatch && emailMatch[0].toLowerCase() === (phonePending.email || '').toLowerCase()) {
+        phonePending._awaitingEmail = false
+        pendingLogins.set(phone, phonePending)
+        await sock.sendMessage(sender, { text: `👤 *${phonePending.nome || phonePending.display_name}*\n\nInvia la tua *password*:` })
+      } else {
+        await sock.sendMessage(sender, { text: '❌ Email non corrisponde al tuo profilo. Riprova.' })
+      }
+      return
+    } else {
+      // Expecting password
+      const bcryptMod = await import('bcryptjs')
+      const meta = typeof phonePending.metadata === 'string' ? JSON.parse(phonePending.metadata) : phonePending.metadata
+      const match = await bcryptMod.compare(text.trim(), meta?.password_hash || '')
+      pendingLogins.delete(phone)
+      if (match) {
+        db.prepare("UPDATE entity SET metadata = json_set(metadata, '$.whatsapp_auth_at', ?) WHERE id = ?").run(new Date().toISOString(), phonePending.user_id)
+        await sock.sendMessage(sender, { text: `✅ Riautenticato come *${phonePending.nome || phonePending.display_name}*! Sessione valida per 1 ora.` })
+      } else {
+        await sock.sendMessage(sender, { text: '❌ Password errata. Scrivi la tua email per riprovare.' })
+      }
+      return
+    }
   }
 
   // Handle document uploads
@@ -436,32 +494,12 @@ async function archivePendingDocument(sender: string, pending: typeof pendingArc
   }
 }
 
-// ── Conversation History per sender (for multi-turn WhatsApp) ──
+// ── Session management (persistent in DB via handleChatMessage) ──
 
-const conversationHistory = new Map<string, { role: string; content: string }[]>()
-const senderSessions = new Map<string, string>()
-
-function getConversationHistory(sender: string): { role: string; content: string }[] {
-  if (!conversationHistory.has(sender)) {
-    conversationHistory.set(sender, [])
-  }
-  return conversationHistory.get(sender)!
-}
-
-function addToHistory(sender: string, role: string, content: string): void {
-  const history = getConversationHistory(sender)
-  history.push({ role, content })
-  // Keep last 10 messages
-  if (history.length > 10) {
-    history.splice(0, history.length - 10)
-  }
-}
-
-function getSessionId(sender: string): string {
-  if (!senderSessions.has(sender)) {
-    senderSessions.set(sender, `wa-${sender.replace(/\D/g, '')}-${Date.now()}`)
-  }
-  return senderSessions.get(sender)!
+function getWhatsAppSessionId(userId: string): string {
+  // One session per user per day (allows natural conversation continuity)
+  const today = new Date().toISOString().split('T')[0]
+  return `wa-${userId}-${today}`
 }
 
 // ── Use shared server-side orchestrator ──────────────────
@@ -473,20 +511,14 @@ async function callAgent(userMessage: string, userId: string, sender: string): P
   const rel = db.prepare("SELECT to_id FROM relations WHERE from_id = ? AND tipo = 'membro_di' LIMIT 1").get(userId) as any
   const aziendaId = rel?.to_id || (db.prepare("SELECT azienda_id FROM entity WHERE id = ?").get(userId) as any)?.azienda_id || ''
 
-  const history = getConversationHistory(sender)
-  const sessionId = getSessionId(sender)
+  const sessionId = getWhatsAppSessionId(userId)
 
-  // Add user message to history
-  addToHistory(sender, 'user', userMessage)
-
+  // handleChatMessage now handles history loading from DB + persistence
   const result = await handleChatMessage(userMessage, userId, aziendaId, {
     format: 'whatsapp',
     sessionId,
-    history: history.slice(0, -1), // exclude current message (already passed as `message`)
+    channel: 'whatsapp',
   })
-
-  // Add assistant response to history
-  addToHistory(sender, 'assistant', result.text)
 
   return result
 }

@@ -32,12 +32,15 @@ CREATE TABLE IF NOT EXISTS user_profiles (
   created_at       TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- ── Chat (legacy frontend tables) ─────────────────────────
+-- ── Chat sessions & messages (unified across all channels) ──
 CREATE TABLE IF NOT EXISTS chat_sessions (
   id          TEXT PRIMARY KEY,
   azienda_id  TEXT,
   user_id     TEXT,
   titolo      TEXT NOT NULL DEFAULT 'Nuova conversazione',
+  channel     TEXT DEFAULT 'web',
+  agent_domain TEXT,
+  deleted_at  TEXT,
   created_at  TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -45,10 +48,27 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
 CREATE TABLE IF NOT EXISTS chat_messages (
   id          TEXT PRIMARY KEY,
   session_id  TEXT NOT NULL,
+  user_id     TEXT,
   ruolo       TEXT NOT NULL,
   contenuto   TEXT NOT NULL,
   tool_calls  TEXT,
+  agent_domain TEXT,
+  agent_name  TEXT,
   created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- ── API Tokens (per-user, hashed) ───────────────────────────
+CREATE TABLE IF NOT EXISTS api_tokens (
+  id           TEXT PRIMARY KEY,
+  user_id      TEXT NOT NULL,
+  azienda_id   TEXT NOT NULL,
+  token_hash   TEXT NOT NULL,
+  token_preview TEXT NOT NULL,
+  name         TEXT DEFAULT 'API Key',
+  expires_at   TEXT,
+  revoked_at   TEXT,
+  last_used_at TEXT,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- ── Entity (VFS — everything) ─────────────────────────────
@@ -153,4 +173,11 @@ CREATE INDEX IF NOT EXISTS idx_audit_date ON entity_audit(created_at);
 
 -- ── Chat indexes ──────────────────────────────────────────
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_user ON chat_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_user_updated ON chat_sessions(user_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_channel ON chat_sessions(channel);
 CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_session_created ON chat_messages(session_id, created_at);
+
+-- ── API Token indexes ────────────────────────────────────
+CREATE INDEX IF NOT EXISTS idx_tokens_hash ON api_tokens(token_hash);
+CREATE INDEX IF NOT EXISTS idx_tokens_user ON api_tokens(user_id);

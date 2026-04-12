@@ -171,4 +171,104 @@ router.get('/session', async (req: Request, res: Response) => {
   }
 })
 
+// ── CONVERSATION SESSIONS ────────────────────────────────
+
+import { AuthRequest, authMiddleware } from './middleware.js'
+
+// GET /api/auth/sessions — list user's conversations
+router.get('/sessions', authMiddleware(true), (req: AuthRequest, res: Response) => {
+  const limit = parseInt(req.query.limit as string) || 50
+  const channel = req.query.channel as string
+  let sql = `SELECT id, titolo, channel, agent_domain, created_at, updated_at,
+    (SELECT COUNT(*) FROM chat_messages WHERE session_id = s.id) as message_count
+    FROM chat_sessions s WHERE s.user_id = ? AND s.deleted_at IS NULL`
+  const params: any[] = [req.userId]
+  if (channel) { sql += ' AND s.channel = ?'; params.push(channel) }
+  sql += ' ORDER BY s.updated_at DESC LIMIT ?'
+  params.push(limit)
+  const sessions = db.prepare(sql).all(...params)
+  res.json(sessions)
+})
+
+// POST /api/auth/sessions — create new session
+router.post('/sessions', authMiddleware(true), (req: AuthRequest, res: Response) => {
+  const { titolo, channel } = req.body
+  const id = crypto.randomUUID()
+  db.prepare("INSERT INTO chat_sessions (id, azienda_id, user_id, titolo, channel) VALUES (?,?,?,?,?)").run(
+    id, req.aziendaId || '', req.userId, titolo || 'Nuova conversazione', channel || 'web'
+  )
+  res.json({ id, titolo: titolo || 'Nuova conversazione', channel: channel || 'web' })
+})
+
+// GET /api/auth/sessions/:id/messages — get session messages
+router.get('/sessions/:id/messages', authMiddleware(true), (req: AuthRequest, res: Response) => {
+  // Verify session ownership
+  const session = db.prepare("SELECT user_id FROM chat_sessions WHERE id = ? AND deleted_at IS NULL").get(req.params.id) as any
+  if (!session || session.user_id !== req.userId) {
+    res.status(404).json({ error: 'Sessione non trovata' }); return
+  }
+  const limit = parseInt(req.query.limit as string) || 200
+  const messages = db.prepare(
+    "SELECT id, ruolo, contenuto, tool_calls, agent_domain, agent_name, created_at FROM chat_messages WHERE session_id = ? ORDER BY created_at ASC LIMIT ?"
+  ).all(req.params.id, limit)
+  res.json(messages)
+})
+
+// DELETE /api/auth/sessions/:id — soft delete session
+router.delete('/sessions/:id', authMiddleware(true), (req: AuthRequest, res: Response) => {
+  const session = db.prepare("SELECT user_id FROM chat_sessions WHERE id = ? AND deleted_at IS NULL").get(req.params.id) as any
+  if (!session || session.user_id !== req.userId) {
+    res.status(404).json({ error: 'Sessione non trovata' }); return
+  }
+  db.prepare("UPDATE chat_sessions SET deleted_at = datetime('now') WHERE id = ?").run(req.params.id)
+  res.json({ successo: true })
+})
+
+// PUT /api/auth/sessions/:id — rename session
+router.put('/sessions/:id', authMiddleware(true), (req: AuthRequest, res: Response) => {
+  const session = db.prepare("SELECT user_id FROM chat_sessions WHERE id = ? AND deleted_at IS NULL").get(req.params.id) as any
+  if (!session || session.user_id !== req.userId) {
+    res.status(404).json({ error: 'Sessione non trovata' }); return
+  }
+  const { titolo } = req.body
+  if (titolo) db.prepare("UPDATE chat_sessions SET titolo = ?, updated_at = datetime('now') WHERE id = ?").run(titolo, req.params.id)
+  res.json({ successo: true })
+})
+
+// ── API TOKENS (per-user) ───────────────────────────────
+
+// POST /api/auth/tokens — generate API token
+router.post('/tokens', authMiddleware(true), async (req: AuthRequest, res: Response) => {
+  const { name, expires_in_days } = req.body
+  const rawKey = `brd-${crypto.randomBytes(32).toString('hex')}`
+  const tokenHash = await bcrypt.hash(rawKey, 10)
+  const preview = `brd-****${rawKey.slice(-8)}`
+  const id = crypto.randomUUID()
+  const expiresAt = expires_in_days ? new Date(Date.now() + expires_in_days * 86400000).toISOString() : null
+
+  db.prepare("INSERT INTO api_tokens (id, user_id, azienda_id, token_hash, token_preview, name, expires_at) VALUES (?,?,?,?,?,?,?)").run(
+    id, req.userId, req.aziendaId || '', tokenHash, preview, name || 'API Key', expiresAt
+  )
+
+  res.json({ id, key: rawKey, preview, name: name || 'API Key', expires_at: expiresAt, note: 'Salva questa chiave — non verra mostrata di nuovo.' })
+})
+
+// GET /api/auth/tokens — list user's tokens
+router.get('/tokens', authMiddleware(true), (req: AuthRequest, res: Response) => {
+  const tokens = db.prepare(
+    "SELECT id, token_preview, name, expires_at, revoked_at, last_used_at, created_at FROM api_tokens WHERE user_id = ? ORDER BY created_at DESC"
+  ).all(req.userId)
+  res.json(tokens)
+})
+
+// DELETE /api/auth/tokens/:id — revoke token
+router.delete('/tokens/:id', authMiddleware(true), (req: AuthRequest, res: Response) => {
+  const token = db.prepare("SELECT user_id FROM api_tokens WHERE id = ?").get(req.params.id) as any
+  if (!token || token.user_id !== req.userId) {
+    res.status(404).json({ error: 'Token non trovato' }); return
+  }
+  db.prepare("UPDATE api_tokens SET revoked_at = datetime('now') WHERE id = ?").run(req.params.id)
+  res.json({ successo: true })
+})
+
 export default router
