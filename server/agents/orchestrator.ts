@@ -47,32 +47,129 @@ const imageHistory = new Map<string, string[]>()
 
 // Minimal fast-path — only for cases where the planner would waste time
 // All business domain routing is handled by the planner LLM
-function quickClassifyKeywords(text: string): AgentDomain | null {
-  const t = text.toLowerCase().trim()
-  // TTS keywords → route to TTS agent
-  if (/\btts\b|sintesi vocale|lista voci|imposta voce|clona.*voce|voce predefinita/.test(t)) return 'tts'
-  // Email keywords → route to Email agent (BEFORE WhatsApp to avoid catch-all overlap on "invia mail")
-  if (/\bemail\b|\be-?mail\b|\bmail\b|\bposta\b|\binbox\b|\bcasella\b|invia.*(?:email|mail)|leggi.*(?:email|mail)|manda.*(?:email|mail)|scrivi.*(?:email|mail)/i.test(t)) return 'email'
-  // WhatsApp keywords → route to WhatsApp agent (only when WhatsApp is explicitly mentioned)
-  if (/\bwhatsapp\b|\bwhapp\b|\bwapp\b|manda.*whatsapp|invia.*whatsapp|vocale.*whatsapp/i.test(t)) return 'whatsapp'
-  // Document keywords → route to Documentale (has retrieve, list_documents, explore_document)
-  // Catches ANY reference to documents, books, or content search — regardless of topic
-  if (/\bbibbia\b|\bcodice civile\b|\bcontratto\b|\bnormativa\b|\bmanuale\b|\breport\b|\blibro\b/i.test(t)) return 'documentale'
-  if (/analizza.*document|cerca.*document|cerca.*dentro|contenuto.*document|riassumi.*document/i.test(t)) return 'documentale'
-  if (/\barticol[oi]\b|\bclausol[ae]\b|\bcapitolo\b|\bversett[oi]\b|\bvangel[oi]\b|\bsezione\b/i.test(t)) return 'documentale'
-  if (/cosa dice|cosa racconta|parlami di.*nel|racconta.*dal|cerca nel|nel documento|nei documenti|dall[ae].*document/i.test(t)) return 'documentale'
-  if (/document[oi]|archivio|caricato|upload/i.test(t) && /cerca|analizza|riassumi|leggi|mostra|confronta|spiega/i.test(t)) return 'documentale'
-  // Common utility queries → route to general (skip classification)
-  if (/\bche or[ae]\b|che giorno|che data|ora esatta|data di oggi|oggi.*che/i.test(t)) return 'general'
-  if (/\bmeteo\b|\btempo.*fa\b|previsioni|temperatura/i.test(t)) return 'general'
-  if (/\bclient[ie]\b|\blead\b|\bpipeline\b|\bpreventiv[oi]\b|\boffert[ae]\b/i.test(t)) return 'commerciale'
-  if (/\bfattur[ae]\b|\bpagament[oi]\b|\bscadenz[ae]\b|\bf24\b|\bstipendi[oi]\b/i.test(t)) return 'amministrazione'
-  if (/\bmagazzino\b|\bscort[ae]\b|\bspedizion[ie]\b|\bordine.*produzione\b/i.test(t)) return 'produzione'
-  if (/\briparazion[ie]\b|\bmanutenzione\b|\bofficina\b|\bordine.*lavoro\b/i.test(t)) return 'officina'
-  if (/\bpolizz[ae]\b|\bsinistro\b|\bassicurazion[ie]\b|\bcontenzioso\b/i.test(t)) return 'legal'
-  if (/\biso\b|\baudit\b|\bnon conformit[aà]\b|\bsicurezza.*lavoro\b|\bdvr\b/i.test(t)) return 'qualita'
-  // Everything else → let the classifier decide
-  return null
+// ── Scoring-based classifier (fast, handles multi-domain) ──
+
+const DOMAIN_KEYWORDS: Record<string, { words: string[]; weight: number }[]> = {
+  direzione: [
+    { words: ['overview', 'kpi', 'briefing', 'strategico', 'riepilogo', 'stato azienda', 'andamento', 'cruscotto', 'dashboard'], weight: 3 },
+    { words: ['fatturato', 'margini', 'trend', 'crescita', 'cda', 'board'], weight: 2 },
+  ],
+  commerciale: [
+    { words: ['cliente', 'clienti', 'lead', 'prospect', 'pipeline', 'opportunità'], weight: 3 },
+    { words: ['preventivo', 'preventivi', 'offerta', 'offerte', 'trattativa', 'vendita', 'vendite'], weight: 3 },
+    { words: ['ordine', 'ordini', 'commessa', 'gdo', 'retail', 'listino'], weight: 2 },
+  ],
+  amministrazione: [
+    { words: ['stipendio', 'stipendi', 'busta paga', 'buste paga', 'cedolino', 'tfr'], weight: 3 },
+    { words: ['f24', 'cu', '770', 'irpef', 'inps', 'contributi', 'fiscale'], weight: 3 },
+    { words: ['ferie', 'permessi', 'malattia', 'assunzione', 'assunzioni', 'contratto lavoro', 'recruiting'], weight: 3 },
+    { words: ['fattura', 'fatture', 'pagamento', 'pagamenti', 'scadenza', 'scadenze', 'incasso'], weight: 2 },
+    { words: ['dipendente', 'dipendenti', 'personale', 'hr', 'risorse umane'], weight: 2 },
+  ],
+  contabilita: [
+    { words: ['costo', 'costi', 'margine', 'margini', 'centro di costo', 'centri costo'], weight: 3 },
+    { words: ['budget', 'forecast', 'scostamento', 'scostamenti', 'consuntivo', 'preventivo industriale'], weight: 3 },
+    { words: ['valorizzazione', 'inventario', 'commessa', 'contabilità industriale'], weight: 3 },
+  ],
+  produzione: [
+    { words: ['magazzino', 'scorte', 'giacenze', 'livello minimo', 'sottoscorta'], weight: 3 },
+    { words: ['spedizione', 'spedizioni', 'consegna', 'consegne', 'logistica', 'trasporto'], weight: 3 },
+    { words: ['produzione', 'ordine produzione', 'pianificazione', 'scheduling', 'materie prime'], weight: 3 },
+    { words: ['fornitore', 'fornitori', 'approvvigionamento'], weight: 2 },
+  ],
+  officina: [
+    { words: ['riparazione', 'riparazioni', 'manutenzione', 'officina', 'intervento', 'interventi'], weight: 3 },
+    { words: ['mezzo', 'mezzi', 'attrezzatura', 'attrezzature', 'ricambio', 'ricambi'], weight: 3 },
+    { words: ['ordine lavoro', 'odl', 'tecnico', 'guasto'], weight: 3 },
+  ],
+  legal: [
+    { words: ['polizza', 'polizze', 'assicurazione', 'assicurazioni', 'sinistro', 'sinistri'], weight: 3 },
+    { words: ['contenzioso', 'causa', 'cause', 'avvocato', 'tribunale', 'udienza'], weight: 3 },
+    { words: ['revisione', 'bollo', 'immatricolazione', 'parco mezzi'], weight: 2 },
+    { words: ['contratto', 'contratti', 'clausola', 'compliance'], weight: 2 },
+  ],
+  qualita: [
+    { words: ['iso', 'iso 9001', 'certificazione', 'audit', 'qualità'], weight: 3 },
+    { words: ['non conformità', 'nc', 'azione correttiva', 'reclamo'], weight: 3 },
+    { words: ['dvr', 'sicurezza lavoro', 'dpi', 'infortunio', 'formazione sicurezza'], weight: 3 },
+    { words: ['ambiente', 'rifiuti', 'emissioni', 'arpa', 'asl'], weight: 2 },
+  ],
+  documentale: [
+    { words: ['documento', 'documenti', 'archivio', 'documentale'], weight: 2 },
+    { words: ['articolo', 'articoli', 'codice civile', 'normativa', 'legge', 'regolamento'], weight: 3 },
+    { words: ['bibbia', 'vangelo', 'capitolo', 'versetto', 'sezione'], weight: 3 },
+    { words: ['cerca nel', 'nel documento', 'nei documenti', 'contenuto', 'riassumi'], weight: 2 },
+    { words: ['manuale', 'procedura', 'specifica', 'prescrizione'], weight: 2 },
+  ],
+  email: [
+    { words: ['email', 'e-mail', 'mail', 'posta', 'inbox', 'casella'], weight: 3 },
+    { words: ['invia email', 'invia mail', 'manda mail', 'scrivi mail', 'leggi mail', 'leggi email'], weight: 4 },
+  ],
+  whatsapp: [
+    { words: ['whatsapp', 'wapp', 'whapp'], weight: 4 },
+    { words: ['invia whatsapp', 'manda whatsapp', 'vocale whatsapp'], weight: 5 },
+  ],
+  tts: [
+    { words: ['tts', 'sintesi vocale', 'voce', 'leggi ad alta voce', 'pronuncia'], weight: 3 },
+    { words: ['lista voci', 'imposta voce', 'clona voce'], weight: 4 },
+  ],
+  general: [
+    { words: ['che ore', 'che ora', 'che giorno', 'che data', 'ora esatta', 'data oggi', 'ore sono', 'giorno è'], weight: 4 },
+    { words: ['meteo', 'tempo fa', 'previsioni', 'temperatura', 'piove', 'che tempo'], weight: 4 },
+    { words: ['genera immagine', 'crea immagine', 'disegna', 'genera pdf'], weight: 3 },
+    { words: ['ciao', 'buongiorno', 'buonasera', 'grazie', 'salve'], weight: 1 },
+  ],
+  it: [
+    { words: ['costi api', 'openrouter', 'token', 'agente autonomo', 'workflow'], weight: 3 },
+    { words: ['utenti sistema', 'configurazione', 'debug', 'diagnostica'], weight: 2 },
+  ],
+}
+
+const SCORE_THRESHOLD_CONFIDENT = 4   // >= 4: route directly (no LLM)
+const SCORE_THRESHOLD_MULTI = 3       // secondary domains with >= 3 included in multi-agent
+
+function scoreClassify(text: string): ClassificationResult | null {
+  const t = text.toLowerCase()
+  const scores: Record<string, number> = {}
+
+  for (const [domain, groups] of Object.entries(DOMAIN_KEYWORDS)) {
+    let score = 0
+    for (const group of groups) {
+      for (const keyword of group.words) {
+        if (t.includes(keyword)) {
+          score += group.weight
+        }
+      }
+    }
+    if (score > 0) scores[domain] = score
+  }
+
+  const sorted = Object.entries(scores).sort((a, b) => b[1] - a[1])
+  if (sorted.length === 0) return null
+
+  const [topDomain, topScore] = sorted[0]
+
+  // Not confident enough → let LLM decide
+  if (topScore < SCORE_THRESHOLD_CONFIDENT) return null
+
+  // Check for multi-domain
+  const secondaryDomains = sorted.slice(1)
+    .filter(([, score]) => score >= SCORE_THRESHOLD_MULTI)
+    .map(([domain]) => domain as AgentDomain)
+
+  const needsMultiAgent = secondaryDomains.length > 0 && topScore < 6
+
+  // Confidence: normalize score (4=0.7, 6=0.85, 8+=0.95)
+  const confidence = Math.min(0.95, 0.5 + topScore * 0.075)
+
+  console.log(`[ScoreClassify] Scores: ${sorted.map(([d, s]) => `${d}=${s}`).join(', ')} → ${topDomain} (${confidence.toFixed(2)})${needsMultiAgent ? ' MULTI: ' + secondaryDomains.join(',') : ''}`)
+
+  return {
+    domain: topDomain as AgentDomain,
+    confidence,
+    needsMultiAgent,
+    secondaryDomains: needsMultiAgent ? secondaryDomains : [],
+  }
 }
 
 // ── Response Mode Detection ────────────────────────────
@@ -515,8 +612,8 @@ export async function orchestrate(
   // ── ITERATION mode: reuse last domain ──
   if (responseMode === 'iteration' && sessionId) {
     // Check keywords first — they override session domain if they match
-    const keywordOverride = quickClassifyKeywords(message)
-    const lastDomain = keywordOverride || getSessionDomain(sessionId)
+    const scoreOverride = scoreClassify(message)
+    const lastDomain = scoreOverride?.domain || getSessionDomain(sessionId)
     if (lastDomain && lastDomain !== 'general' && lastDomain !== 'image' && lastDomain !== 'tts') {
       const agent = AGENTS[lastDomain]
       if (agent) {
@@ -534,11 +631,10 @@ export async function orchestrate(
 
   // ── FULL: Classify → Agent-Native Tool Calling ──
   onProgress({ type: 'status', content: 'Classificazione dominio...' })
-  const quickDomain = quickClassifyKeywords(message)
 
-  let classification: ClassificationResult = quickDomain
-    ? { domain: quickDomain as AgentDomain, confidence: 0.95, needsMultiAgent: false }
-    : await classifyIntent(message, conversationHistory)
+  // Try fast score-based classification first; fallback to LLM if unsure
+  const scoreResult = scoreClassify(message)
+  let classification: ClassificationResult = scoreResult || await classifyIntent(message, conversationHistory)
 
   // Normalize domain aliases
   if (classification.domain === 'image' as any) classification.domain = 'marketing' as AgentDomain

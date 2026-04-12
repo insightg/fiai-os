@@ -1217,15 +1217,16 @@ export default function ChatLayout() {
           audioBase64ForCloning
         )
 
-        // Finalize: add or replace with complete result
+        // Finalize: enrich streaming message with metadata (keep streamed content, don't overwrite)
         if (streamingMsgAdded) {
           setMessages((prev) =>
             prev.map((m) =>
               m.id === assistantMsgId
                 ? {
                     ...m,
-                    content: result.text,
-                    toolCalls: result.toolCalls.length > 0 ? result.toolCalls : undefined,
+                    // Keep the streamed content — only overwrite if result has more (tool results added after stream)
+                    content: m.content || result.text,
+                    toolCalls: result.toolCalls?.length > 0 ? result.toolCalls : undefined,
                     agentName: result.agentName,
                     agentDomain: result.agentDomain,
                     agentColor: result.agentColor,
