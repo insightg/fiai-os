@@ -315,7 +315,34 @@ const TOOL_ACTIONS: Record<string, string> = {
   send_email: 'send', reply_email: 'send',
 }
 
-export async function executeTool(name: string, aziendaId: string, args?: Record<string, unknown>, permissions?: import('./types.js').UserPermissions): Promise<unknown> {
+function auditLog(entityId: string, entityType: string | null, action: string, beforeData: any, afterData: any) {
+  try {
+    db.prepare("INSERT INTO entity_audit (id, entity_id, entity_type, action, before_data, after_data) VALUES (?,?,?,?,?,?)").run(
+      crypto.randomUUID(), entityId, entityType, action,
+      beforeData ? JSON.stringify(beforeData) : null,
+      afterData ? JSON.stringify(afterData) : null
+    )
+  } catch {}
+}
+
+// ── Tool Result Cache (LRU per session, TTL 60s) ──
+const toolCache = new Map<string, { result: unknown; ts: number }>()
+const TOOL_CACHE_TTL = 60000
+const CACHEABLE_TOOLS = new Set(['find', 'search', 'retrieve', 'list_documents', 'read_inbox', 'get_email_status', 'get_whatsapp_status', 'get_datetime', 'get_weather'])
+
+function getCacheKey(name: string, aziendaId: string, args: any): string {
+  return `${name}:${aziendaId}:${JSON.stringify(args || {})}`
+}
+
+// Clean stale cache entries periodically
+setInterval(() => {
+  const now = Date.now()
+  for (const [key, entry] of toolCache) {
+    if (now - entry.ts > TOOL_CACHE_TTL) toolCache.delete(key)
+  }
+}, 30000)
+
+async function _executeTool(name: string, aziendaId: string, args?: Record<string, unknown>, permissions?: import('./types.js').UserPermissions): Promise<unknown> {
   const input = (args || {}) as any
 
   // Permission check
@@ -340,7 +367,7 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
 
       // MODE 1: SQL (structural filters)
       if (hasStructuralFilters || !queryStr) {
-        let sql = 'SELECT e.id, e.type, e.display_name, e.slug, e.stato, e.email, e.telefono, e.tags, e.name_id, e.parent_id, e.file_url, e.numero, e.data, e.totale, e.categoria, e.metadata, e.path, e.created_at FROM entity e WHERE e.azienda_id = ?'
+        let sql = 'SELECT e.id, e.type, e.display_name, e.slug, e.stato, e.email, e.telefono, e.tags, e.name_id, e.parent_id, e.file_url, e.numero, e.data, e.totale, e.categoria, e.metadata, e.path, e.created_at FROM entity e WHERE e.azienda_id = ? AND e.deleted_at IS NULL'
         const params: any[] = [aziendaId]
         if (type) { sql += ' AND e.type = ?'; params.push(type) }
         if (tags?.length) { for (const tag of tags) { sql += " AND e.tags LIKE ?"; params.push(`%"${tag}"%`) } }
@@ -419,6 +446,7 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
 
       // Emit events
       emit(`entity_created:${type}`, { aziendaId, recordId: id, recordType: 'entity', entityType: type, tags: input.tags })
+      auditLog(id, type, 'create', null, { display_name: input.display_name, type, tags: input.tags })
 
       return { successo: true, id, type, display_name: input.display_name, tags: input.tags, messaggio: `"${input.display_name}" creato` }
     }
@@ -452,26 +480,40 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
       values.push(input.id, aziendaId)
       db.prepare(`UPDATE entity SET ${updates.join(', ')} WHERE id = ? AND azienda_id = ?`).run(...values)
 
+      const afterRecord = db.prepare('SELECT display_name, type, stato, tags, metadata FROM entity WHERE id = ?').get(input.id) as any
+      auditLog(input.id, afterRecord?.type, 'update', { metadata: existing.metadata }, afterRecord)
+
       return { successo: true, messaggio: `Record aggiornato` }
     }
 
     // ── DELETE ──
     case 'delete_record': {
       if (!input.id) return { errore: 'id obbligatorio' }
-      const target = db.prepare('SELECT display_name, type FROM entity WHERE id = ? AND azienda_id = ?').get(input.id, aziendaId) as any
+      const target = db.prepare('SELECT display_name, type FROM entity WHERE id = ? AND azienda_id = ? AND deleted_at IS NULL').get(input.id, aziendaId) as any
       if (!target) return { errore: 'Record non trovato' }
-      // Delete children first (chunks, sub-entities) — CASCADE should handle it but be explicit
-      const children = db.prepare('DELETE FROM entity WHERE parent_id = ?').run(input.id)
-      // Delete vec0 entries for chunks
-      try { db.prepare('DELETE FROM chunk_vec WHERE chunk_id IN (SELECT id FROM entity WHERE parent_id = ?)').run(input.id) } catch {}
-      // Delete the record itself
-      db.prepare('DELETE FROM entity WHERE id = ? AND azienda_id = ?').run(input.id, aziendaId)
-      // Clean relations
-      db.prepare("DELETE FROM relations WHERE from_id = ? OR to_id = ?").run(input.id, input.id)
-      const msg = children.changes > 0
-        ? `"${target.display_name}" eliminato con ${children.changes} elementi collegati`
-        : `"${target.display_name}" eliminato`
-      return { successo: true, messaggio: msg }
+
+      const now = new Date().toISOString()
+      if (input.permanent === true) {
+        // Hard delete — only when explicitly requested
+        const children = db.prepare('DELETE FROM entity WHERE parent_id = ?').run(input.id)
+        try { db.prepare('DELETE FROM chunk_vec WHERE chunk_id IN (SELECT id FROM entity WHERE parent_id = ?)').run(input.id) } catch {}
+        db.prepare('DELETE FROM entity WHERE id = ? AND azienda_id = ?').run(input.id, aziendaId)
+        db.prepare("DELETE FROM relations WHERE from_id = ? OR to_id = ?").run(input.id, input.id)
+        auditLog(input.id, target.type, 'hard_delete', { display_name: target.display_name }, null)
+        const msg = children.changes > 0
+          ? `"${target.display_name}" eliminato permanentemente con ${children.changes} elementi collegati`
+          : `"${target.display_name}" eliminato permanentemente`
+        return { successo: true, messaggio: msg }
+      } else {
+        // Soft delete — default behavior
+        db.prepare("UPDATE entity SET deleted_at = ?, updated_at = ? WHERE id = ? AND azienda_id = ?").run(now, now, input.id, aziendaId)
+        const children = db.prepare("UPDATE entity SET deleted_at = ?, updated_at = ? WHERE parent_id = ? AND deleted_at IS NULL").run(now, now, input.id)
+        auditLog(input.id, target.type, 'soft_delete', { display_name: target.display_name }, null)
+        const msg = children.changes > 0
+          ? `"${target.display_name}" archiviato con ${children.changes} elementi collegati (recuperabile)`
+          : `"${target.display_name}" archiviato (recuperabile)`
+        return { successo: true, messaggio: msg }
+      }
     }
 
     // ── RELATE ──
@@ -2037,4 +2079,27 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
     default:
       return { errore: `Tool "${name}" non disponibile` }
   }
+}
+
+// Public wrapper with caching for read-only tools
+export async function executeTool(name: string, aziendaId: string, args?: Record<string, unknown>, permissions?: import('./types.js').UserPermissions): Promise<unknown> {
+  // Check cache for read-only tools
+  if (CACHEABLE_TOOLS.has(name)) {
+    const cacheKey = getCacheKey(name, aziendaId, args)
+    const cached = toolCache.get(cacheKey)
+    if (cached && Date.now() - cached.ts < TOOL_CACHE_TTL) {
+      console.log(`[ToolCache] HIT: ${name}`)
+      return cached.result
+    }
+  }
+
+  const result = await _executeTool(name, aziendaId, args, permissions)
+
+  // Save to cache for read-only tools (only on success)
+  if (CACHEABLE_TOOLS.has(name) && result && !(result as any)?.errore) {
+    const cacheKey = getCacheKey(name, aziendaId, args)
+    toolCache.set(cacheKey, { result, ts: Date.now() })
+  }
+
+  return result
 }

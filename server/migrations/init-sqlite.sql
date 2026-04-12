@@ -77,7 +77,8 @@ CREATE TABLE IF NOT EXISTS entity (
   path          TEXT NOT NULL DEFAULT '',
   ordine        INTEGER DEFAULT 0,
   created_at    TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+  updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  deleted_at    TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_entity_azienda ON entity(azienda_id);
@@ -109,6 +110,9 @@ CREATE TABLE IF NOT EXISTS relations (
 CREATE INDEX IF NOT EXISTS idx_relations_from ON relations(from_id);
 CREATE INDEX IF NOT EXISTS idx_relations_to ON relations(to_id);
 CREATE INDEX IF NOT EXISTS idx_relations_tipo ON relations(tipo);
+CREATE INDEX IF NOT EXISTS idx_relations_from_tipo ON relations(from_id, tipo);
+CREATE INDEX IF NOT EXISTS idx_relations_to_tipo ON relations(to_id, tipo);
+CREATE INDEX IF NOT EXISTS idx_relations_azienda ON relations(azienda_id);
 
 -- ── FTS for document chunks (standalone) ──────────────────
 CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5(
@@ -130,6 +134,22 @@ CREATE TRIGGER IF NOT EXISTS entity_fts_ai AFTER INSERT ON entity BEGIN
   INSERT INTO entity_fts(rowid, display_name, type, metadata)
   VALUES (NEW.rowid, NEW.display_name, NEW.type, NEW.metadata);
 END;
+
+-- ── Audit log ─────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS entity_audit (
+  id          TEXT PRIMARY KEY,
+  entity_id   TEXT NOT NULL,
+  entity_type TEXT,
+  action      TEXT NOT NULL,
+  user_id     TEXT,
+  before_data TEXT,
+  after_data  TEXT,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_entity ON entity_audit(entity_id);
+CREATE INDEX IF NOT EXISTS idx_audit_user ON entity_audit(user_id);
+CREATE INDEX IF NOT EXISTS idx_audit_date ON entity_audit(created_at);
 
 -- ── Chat indexes ──────────────────────────────────────────
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_user ON chat_sessions(user_id);

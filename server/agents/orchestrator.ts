@@ -24,7 +24,19 @@ interface ConversationMessage {
 type ResponseMode = 'minimal' | 'iteration' | 'full'
 
 // ── Caches ─────────────────────────────────────────────
-const sessionDomainCache = new Map<string, AgentDomain>()
+const sessionDomainCache = new Map<string, { domain: AgentDomain; ts: number }>()
+const SESSION_DOMAIN_TTL = 600000 // 10 minutes
+
+function getSessionDomain(sessionId: string): AgentDomain | undefined {
+  const entry = sessionDomainCache.get(sessionId)
+  if (!entry) return undefined
+  if (Date.now() - entry.ts > SESSION_DOMAIN_TTL) { sessionDomainCache.delete(sessionId); return undefined }
+  return entry.domain
+}
+
+function setSessionDomain(sessionId: string, domain: AgentDomain) {
+  sessionDomainCache.set(sessionId, { domain, ts: Date.now() })
+}
 const contextCache = new Map<string, { content: string; ts: number }>()
 
 // ── Image History (for analysis/rework) ────────────────
@@ -436,7 +448,7 @@ export async function orchestrate(
 
     // Cache domain for ITERATION mode
     if (sessionId && result.agentDomain !== 'general') {
-      sessionDomainCache.set(sessionId, result.agentDomain as AgentDomain)
+      setSessionDomain(sessionId, result.agentDomain as AgentDomain)
     }
 
     return { ...result, suggestions }
@@ -450,7 +462,7 @@ export async function orchestrate(
 
   // ── Response Mode Routing ──
   const responseMode = detectResponseMode(message, historyLength)
-  const cachedDomain = sessionId ? sessionDomainCache.get(sessionId) : undefined
+  const cachedDomain = sessionId ? getSessionDomain(sessionId) : undefined
   console.log(`[Orchestrate] responseMode=${responseMode}, cachedDomain=${cachedDomain || 'none'}`)
 
   if (responseMode === 'minimal') {
@@ -463,7 +475,7 @@ export async function orchestrate(
           sessionId,
           type: 'explicit_rating',
           rating,
-          domain: sessionDomainCache.get(sessionId) || 'general',
+          domain: getSessionDomain(sessionId) || 'general',
         })
         const response = rating >= 7
           ? 'Grazie per il feedback positivo!'
@@ -492,7 +504,7 @@ export async function orchestrate(
   if (responseMode === 'iteration' && sessionId) {
     // Check keywords first — they override session domain if they match
     const keywordOverride = quickClassifyKeywords(message)
-    const lastDomain = keywordOverride || sessionDomainCache.get(sessionId)
+    const lastDomain = keywordOverride || getSessionDomain(sessionId)
     if (lastDomain && lastDomain !== 'general' && lastDomain !== 'image' && lastDomain !== 'tts') {
       const agent = AGENTS[lastDomain]
       if (agent) {
@@ -518,7 +530,7 @@ export async function orchestrate(
 
   // Very low confidence + no session context → route to general with disambiguation hint
   if (classification.confidence <= 0.4) {
-    const lastDomain = sessionId ? sessionDomainCache.get(sessionId) : undefined
+    const lastDomain = sessionId ? getSessionDomain(sessionId) : undefined
     if (!lastDomain || lastDomain === 'general') {
       console.log(`[Classify] Very low confidence (${classification.confidence}), routing to general for disambiguation`)
       classification = { domain: 'general', confidence: 0.5, needsMultiAgent: false }
@@ -529,7 +541,7 @@ export async function orchestrate(
 
   // Low confidence + session has previous domain → prefer session domain (contextual continuity)
   if (classification.confidence < 0.7 && sessionId) {
-    const lastDomain = sessionDomainCache.get(sessionId)
+    const lastDomain = getSessionDomain(sessionId)
     if (lastDomain && lastDomain !== 'general') {
       console.log(`[Classify] Low confidence (${classification.confidence}), using session domain: ${lastDomain}`)
       classification = { domain: lastDomain, confidence: 0.8, needsMultiAgent: false }

@@ -35,6 +35,8 @@ if (fs.existsSync(migrationPath)) {
 
 // Add tts_voice column if missing
 try { db.exec("ALTER TABLE user_profiles ADD COLUMN tts_voice TEXT DEFAULT 'Vivian'") } catch {}
+// Add deleted_at for soft delete
+try { db.exec("ALTER TABLE entity ADD COLUMN deleted_at TEXT") } catch {}
 
 // FTS triggers: only INSERT triggers (standalone FTS5 can't do delete/update safely)
 try {
