@@ -1,17 +1,21 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Users, Shield, Plus, Trash2, Check, X, ChevronDown, ChevronRight, Bot, Activity, Database, RefreshCw, Save, AlertTriangle } from 'lucide-react'
+import { Users, Shield, Plus, Trash2, Check, X, ChevronDown, ChevronRight, Bot, Activity, Database, RefreshCw, Save, AlertTriangle, Settings, Eye, EyeOff } from 'lucide-react'
 import { getAuthToken } from '../../lib/supabase'
 import toast from 'react-hot-toast'
 
 interface User { id: string; display_name: string; email: string; ruolo: string; cognome: string; groups: { id: string; name: string }[]; created_at: string }
-interface Group { id: string; name: string; permissions: Record<string, string[]>; members: { id: string; display_name: string; email: string }[] }
+interface Group { id: string; name: string; permissions: Record<string, string[]>; agentPermissions: Record<string, string[]>; members: { id: string; display_name: string; email: string }[] }
 interface Agent { domain: string; name: string; color: string; model: string; toolCount: number; toolNames: string[]; promptLength: number; promptPreview: string; hasSkillOverride: boolean; skillRules: string[]; skillModel: string | null }
 interface AuditEntry { id: string; entity_id: string; entity_type: string; action: string; entity_name: string; before_data: string; after_data: string; created_at: string }
 interface SystemStats { totalEntities: number; typeCounts: { type: string; count: number }[]; documents: number; chunks: number; embeddedEntities: number; users: number; recentAudits: number; recentSessions: number; dbSizeMB: number }
+interface SystemSetting { key: string; category: string; envVar: string; description: string; sensitive: boolean; defaultValue: string; requiresRestart: boolean; value: string; source: 'db' | 'env' | 'default' }
 
 const ACTIONS = ['read', 'create', 'update', 'delete', 'send'] as const
+const AGENT_ACTIONS = ['chat', 'configure'] as const
 const ENTITY_TYPES = ['commerciale', 'fattura', 'fattura_passiva', 'preventivo', 'ordine', 'progetto', 'documento', 'contratto', 'conto', 'movimento', 'rimborso', 'annuncio', 'evento']
 const TYPE_ALIASES: Record<string, string[]> = { 'commerciale': ['organizzazione', 'persona'] }
+const AGENT_SETTINGS_MAP: Record<string, string> = { email: 'email', tts: 'tts', general: 'api', it: 'api' }
+const CATEGORY_LABELS: Record<string, string> = { api: 'API & Modelli', email: 'Email (IMAP/SMTP)', whatsapp: 'WhatsApp', tts: 'Text-to-Speech', storage: 'Archiviazione', auth: 'Autenticazione', system: 'Sistema' }
 
 function api(path: string, method = 'GET', body?: any) {
   const token = getAuthToken()
@@ -22,7 +26,7 @@ function api(path: string, method = 'GET', body?: any) {
   }).then(r => r.json())
 }
 
-type Tab = 'users' | 'groups' | 'agents' | 'audit' | 'system'
+type Tab = 'users' | 'groups' | 'agents' | 'audit' | 'settings'
 
 export default function AdminPage() {
   const [tab, setTab] = useState<Tab>('users')
@@ -60,7 +64,8 @@ export default function AdminPage() {
   useEffect(() => { load() }, [load])
   useEffect(() => { if (tab === 'agents') loadAgents() }, [tab, loadAgents])
   useEffect(() => { if (tab === 'audit') loadAudit() }, [tab, loadAudit])
-  useEffect(() => { if (tab === 'system') loadSystem() }, [tab, loadSystem])
+  useEffect(() => { if (tab === 'settings') loadSystem() }, [tab, loadSystem])
+  useEffect(() => { if (tab === 'groups') { loadAgents(); load() } }, [tab, loadAgents, load])
 
   if (error) return <div className="p-8 text-red text-sm">{error}</div>
 
@@ -69,7 +74,7 @@ export default function AdminPage() {
     { id: 'groups', label: 'Gruppi', icon: Shield, count: groups.length },
     { id: 'agents', label: 'Agenti', icon: Bot, count: agents.length },
     { id: 'audit', label: 'Audit Log', icon: Activity },
-    { id: 'system', label: 'Sistema', icon: Database },
+    { id: 'settings', label: 'Impostazioni', icon: Settings },
   ]
 
   return (
@@ -102,13 +107,13 @@ export default function AdminPage() {
         ) : tab === 'users' ? (
           <UsersTab users={users} groups={groups} onReload={load} />
         ) : tab === 'groups' ? (
-          <GroupsTab groups={groups} users={users} onReload={load} />
+          <GroupsTab groups={groups} users={users} agents={agents} onReload={load} />
         ) : tab === 'agents' ? (
           <AgentsTab agents={agents} onReload={loadAgents} />
         ) : tab === 'audit' ? (
           <AuditTab logs={auditLogs} onReload={loadAudit} />
         ) : (
-          <SystemTab stats={systemStats} onReload={loadSystem} />
+          <SettingsTab stats={systemStats} onReload={loadSystem} />
         )}
       </div>
     </div>
@@ -210,14 +215,14 @@ function UsersTab({ users, groups, onReload }: { users: User[]; groups: Group[];
 // GROUPS TAB
 // ═══════════════════════════════════════════════════════
 
-function GroupsTab({ groups, users, onReload }: { groups: Group[]; users: User[]; onReload: () => void }) {
+function GroupsTab({ groups, users, agents, onReload }: { groups: Group[]; users: User[]; agents: Agent[]; onReload: () => void }) {
   const [showNew, setShowNew] = useState(false)
   const [newName, setNewName] = useState('')
   const [expandedId, setExpandedId] = useState<string | null>(null)
 
   const createGroup = async () => {
     if (!newName) return
-    await api('/groups', 'POST', { name: newName, permissions: {} })
+    await api('/groups', 'POST', { name: newName, permissions: {}, agentPermissions: {} })
     toast.success(`Gruppo "${newName}" creato`)
     setNewName('')
     setShowNew(false)
@@ -240,6 +245,19 @@ function GroupsTab({ groups, users, onReload }: { groups: Group[]; users: User[]
       else { perms[rt] = [...current, action] }
     }
     await api(`/groups/${groupId}`, 'PUT', { permissions: perms })
+    onReload()
+  }
+
+  const toggleAgentPerm = async (groupId: string, group: Group, domain: string, action: string) => {
+    const agentPerms = { ...(group.agentPermissions || {}) }
+    const current = agentPerms[domain] || []
+    if (current.includes(action)) {
+      agentPerms[domain] = current.filter(a => a !== action)
+      if (agentPerms[domain].length === 0) delete agentPerms[domain]
+    } else {
+      agentPerms[domain] = [...current, action]
+    }
+    await api(`/groups/${groupId}`, 'PUT', { agentPermissions: agentPerms })
     onReload()
   }
 
@@ -288,6 +306,7 @@ function GroupsTab({ groups, users, onReload }: { groups: Group[]; users: User[]
 
           {expandedId === g.id && (
             <div className="p-4 space-y-4">
+              {/* Members */}
               <div>
                 <h4 className="text-xs font-semibold text-text3 uppercase tracking-wider mb-2">Membri</h4>
                 <div className="flex flex-wrap gap-2 mb-2">
@@ -306,8 +325,9 @@ function GroupsTab({ groups, users, onReload }: { groups: Group[]; users: User[]
                 </select>
               </div>
 
+              {/* Entity Permissions */}
               <div>
-                <h4 className="text-xs font-semibold text-text3 uppercase tracking-wider mb-2">Permessi</h4>
+                <h4 className="text-xs font-semibold text-text3 uppercase tracking-wider mb-2">Permessi Entita</h4>
                 <div className="overflow-x-auto">
                   <table className="w-full text-[10px]">
                     <thead><tr className="bg-bg3">
@@ -334,6 +354,44 @@ function GroupsTab({ groups, users, onReload }: { groups: Group[]; users: User[]
                   </table>
                 </div>
               </div>
+
+              {/* Agent Permissions */}
+              <div>
+                <h4 className="text-xs font-semibold text-text3 uppercase tracking-wider mb-2">Accesso Agenti</h4>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-[10px]">
+                    <thead><tr className="bg-bg3">
+                      <th className="px-2 py-1.5 text-left text-text3 font-medium w-40">Agente</th>
+                      {AGENT_ACTIONS.map(a => <th key={a} className="px-2 py-1.5 text-center text-text3 font-medium w-20">{a}</th>)}
+                    </tr></thead>
+                    <tbody>
+                      {agents.map(agent => {
+                        const agentPerms = g.agentPermissions || {}
+                        return (
+                          <tr key={agent.domain} className="border-t border-border">
+                            <td className="px-2 py-1 text-text font-medium">
+                              <div className="flex items-center gap-1.5">
+                                <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: agent.color }} />
+                                {agent.name}
+                              </div>
+                            </td>
+                            {AGENT_ACTIONS.map(a => {
+                              const has = (agentPerms[agent.domain] || []).includes(a)
+                              return (
+                                <td key={a} className="px-2 py-1 text-center">
+                                  <button onClick={() => toggleAgentPerm(g.id, g, agent.domain, a)} className={`w-5 h-5 rounded flex items-center justify-center transition-colors ${has ? 'bg-green/20 text-green' : 'bg-bg3 text-text3 hover:bg-bg4'}`}>
+                                    {has && <Check size={12} />}
+                                  </button>
+                                </td>
+                              )
+                            })}
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
           )}
         </div>
@@ -345,6 +403,107 @@ function GroupsTab({ groups, users, onReload }: { groups: Group[]; users: User[]
 // ═══════════════════════════════════════════════════════
 // AGENTS TAB
 // ═══════════════════════════════════════════════════════
+
+function AgentSettingsSection({ domain }: { domain: string }) {
+  const [settings, setSettings] = useState<SystemSetting[]>([])
+  const [editValues, setEditValues] = useState<Record<string, string>>({})
+  const [visibleKeys, setVisibleKeys] = useState<Set<string>>(new Set())
+  const [savingKey, setSavingKey] = useState<string | null>(null)
+  const [loaded, setLoaded] = useState(false)
+
+  const category = AGENT_SETTINGS_MAP[domain]
+
+  useEffect(() => {
+    if (!category) return
+    setLoaded(false)
+    api('/settings').then(res => {
+      const grouped = res.grouped || {}
+      const catSettings: SystemSetting[] = grouped[category] || []
+      setSettings(catSettings)
+      const vals: Record<string, string> = {}
+      catSettings.forEach(s => { vals[s.key] = s.value || '' })
+      setEditValues(vals)
+      setLoaded(true)
+    }).catch(() => setLoaded(true))
+  }, [category])
+
+  const saveSetting = async (key: string) => {
+    setSavingKey(key)
+    try {
+      const res = await api(`/settings/${key}`, 'PUT', { value: editValues[key] })
+      if (res.error) { toast.error(res.error) } else { toast.success('Impostazione salvata') }
+    } catch (e: any) { toast.error(e.message) }
+    finally { setSavingKey(null) }
+  }
+
+  const toggleVisible = (key: string) => {
+    setVisibleKeys(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key); else next.add(key)
+      return next
+    })
+  }
+
+  if (!category) {
+    return (
+      <div className="bg-bg3 rounded-lg p-3 text-xs text-text3 italic">
+        Nessuna configurazione dinamica per questo agente.
+      </div>
+    )
+  }
+
+  if (!loaded) return <div className="text-text3 text-xs p-3">Caricamento impostazioni...</div>
+
+  if (settings.length === 0) {
+    return (
+      <div className="bg-bg3 rounded-lg p-3 text-xs text-text3 italic">
+        Nessuna impostazione trovata per la categoria "{CATEGORY_LABELS[category] || category}".
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-2">
+      {settings.map(s => (
+        <div key={s.key} className="bg-bg3 rounded-lg p-3 space-y-1.5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-text font-medium">{s.description || s.key}</span>
+              <span className={`text-[9px] px-1.5 py-0.5 rounded font-medium ${
+                s.source === 'db' ? 'bg-green/10 text-green' : s.source === 'env' ? 'bg-blue/10 text-blue' : 'bg-bg4 text-text3'
+              }`}>{s.source.toUpperCase()}</span>
+              {s.requiresRestart && <span className="text-[9px] px-1.5 py-0.5 rounded bg-yellow/10 text-yellow">restart</span>}
+            </div>
+          </div>
+          <div className="flex gap-2 items-center">
+            <div className="relative flex-1">
+              <input
+                type={s.sensitive && !visibleKeys.has(s.key) ? 'password' : 'text'}
+                value={editValues[s.key] || ''}
+                onChange={e => setEditValues(prev => ({ ...prev, [s.key]: e.target.value }))}
+                placeholder={s.defaultValue || s.envVar}
+                className="w-full px-3 py-1.5 text-xs bg-bg2 border border-border rounded-lg text-text pr-8"
+              />
+              {s.sensitive && (
+                <button onClick={() => toggleVisible(s.key)} className="absolute right-2 top-1/2 -translate-y-1/2 text-text3 hover:text-text2">
+                  {visibleKeys.has(s.key) ? <EyeOff size={12} /> : <Eye size={12} />}
+                </button>
+              )}
+            </div>
+            <button
+              onClick={() => saveSetting(s.key)}
+              disabled={savingKey === s.key}
+              className="px-2.5 py-1.5 text-xs bg-gold hover:bg-gold-l text-white rounded-lg disabled:opacity-50 shrink-0"
+            >
+              {savingKey === s.key ? '...' : <Save size={12} />}
+            </button>
+          </div>
+          <div className="text-[10px] text-text3">{s.envVar}</div>
+        </div>
+      ))}
+    </div>
+  )
+}
 
 function AgentsTab({ agents, onReload }: { agents: Agent[]; onReload: () => void }) {
   const [expandedDomain, setExpandedDomain] = useState<string | null>(null)
@@ -469,6 +628,12 @@ function AgentsTab({ agents, onReload }: { agents: Agent[]; onReload: () => void
                   placeholder="Es. anthropic/claude-sonnet-4 (vuoto = default)" className="w-full px-3 py-1.5 text-xs bg-bg3 border border-border rounded-lg text-text" />
               </div>
 
+              {/* Agent-specific settings */}
+              <div>
+                <h4 className="text-xs font-semibold text-text3 uppercase tracking-wider mb-2">Configurazione</h4>
+                <AgentSettingsSection domain={agent.domain} />
+              </div>
+
               {/* Save */}
               <div className="flex justify-end">
                 <button onClick={saveAgent} disabled={saving} className="flex items-center gap-1.5 px-4 py-2 text-xs bg-gold hover:bg-gold-l text-white rounded-lg disabled:opacity-50">
@@ -547,11 +712,52 @@ function AuditTab({ logs, onReload }: { logs: AuditEntry[]; onReload: () => void
 }
 
 // ═══════════════════════════════════════════════════════
-// SYSTEM TAB
+// SETTINGS TAB
 // ═══════════════════════════════════════════════════════
 
-function SystemTab({ stats, onReload }: { stats: SystemStats | null; onReload: () => void }) {
-  if (!stats) return <div className="text-text3 text-sm p-8 text-center">Caricamento statistiche...</div>
+function SettingsTab({ stats, onReload }: { stats: SystemStats | null; onReload: () => void }) {
+  const [allSettings, setAllSettings] = useState<Record<string, SystemSetting[]>>({})
+  const [editValues, setEditValues] = useState<Record<string, string>>({})
+  const [visibleKeys, setVisibleKeys] = useState<Set<string>>(new Set())
+  const [expandedCats, setExpandedCats] = useState<Set<string>>(new Set())
+  const [savingKey, setSavingKey] = useState<string | null>(null)
+  const [settingsLoaded, setSettingsLoaded] = useState(false)
+
+  useEffect(() => {
+    api('/settings').then(res => {
+      const grouped: Record<string, SystemSetting[]> = res.grouped || {}
+      setAllSettings(grouped)
+      const vals: Record<string, string> = {}
+      Object.values(grouped).flat().forEach(s => { vals[s.key] = s.value || '' })
+      setEditValues(vals)
+      setSettingsLoaded(true)
+    }).catch(() => setSettingsLoaded(true))
+  }, [])
+
+  const saveSetting = async (key: string) => {
+    setSavingKey(key)
+    try {
+      const res = await api(`/settings/${key}`, 'PUT', { value: editValues[key] })
+      if (res.error) { toast.error(res.error) } else { toast.success('Impostazione salvata') }
+    } catch (e: any) { toast.error(e.message) }
+    finally { setSavingKey(null) }
+  }
+
+  const toggleVisible = (key: string) => {
+    setVisibleKeys(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key); else next.add(key)
+      return next
+    })
+  }
+
+  const toggleCategory = (cat: string) => {
+    setExpandedCats(prev => {
+      const next = new Set(prev)
+      if (next.has(cat)) next.delete(cat); else next.add(cat)
+      return next
+    })
+  }
 
   return (
     <div className="space-y-4">
@@ -562,39 +768,110 @@ function SystemTab({ stats, onReload }: { stats: SystemStats | null; onReload: (
       </div>
 
       {/* Stats cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        {[
-          { label: 'Entita totali', value: stats.totalEntities, icon: Database },
-          { label: 'Utenti', value: stats.users, icon: Users },
-          { label: 'Documenti', value: stats.documents, icon: Settings },
-          { label: 'Chunk indicizzati', value: stats.chunks, icon: Activity },
-          { label: 'Entita con embedding', value: stats.embeddedEntities, icon: Bot },
-          { label: 'Sessioni (7gg)', value: stats.recentSessions, icon: Activity },
-          { label: 'Audit (24h)', value: stats.recentAudits, icon: AlertTriangle },
-          { label: 'DB size', value: `${stats.dbSizeMB} MB`, icon: Database },
-        ].map((s, i) => (
-          <div key={i} className="bg-bg2 border border-border rounded-xl p-4">
-            <div className="flex items-center gap-2 mb-2">
-              <s.icon size={14} className="text-gold" />
-              <span className="text-[10px] text-text3 uppercase tracking-wider">{s.label}</span>
-            </div>
-            <div className="text-lg font-bold text-text">{s.value}</div>
+      {stats && (
+        <>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {[
+              { label: 'Entita totali', value: stats.totalEntities, icon: Database },
+              { label: 'Utenti', value: stats.users, icon: Users },
+              { label: 'Documenti', value: stats.documents, icon: Settings },
+              { label: 'Chunk indicizzati', value: stats.chunks, icon: Activity },
+              { label: 'Entita con embedding', value: stats.embeddedEntities, icon: Bot },
+              { label: 'Sessioni (7gg)', value: stats.recentSessions, icon: Activity },
+              { label: 'Audit (24h)', value: stats.recentAudits, icon: AlertTriangle },
+              { label: 'DB size', value: `${stats.dbSizeMB} MB`, icon: Database },
+            ].map((s, i) => (
+              <div key={i} className="bg-bg2 border border-border rounded-xl p-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <s.icon size={14} className="text-gold" />
+                  <span className="text-[10px] text-text3 uppercase tracking-wider">{s.label}</span>
+                </div>
+                <div className="text-lg font-bold text-text">{s.value}</div>
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
 
-      {/* Entity type breakdown */}
-      <div className="bg-bg2 border border-border rounded-xl p-4">
-        <h3 className="text-xs font-semibold text-text3 uppercase tracking-wider mb-3">Entita per tipo</h3>
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-          {stats.typeCounts.map(tc => (
-            <div key={tc.type} className="flex items-center justify-between bg-bg3 rounded-lg px-3 py-2">
-              <span className="text-xs text-text">{tc.type}</span>
-              <span className="text-xs font-bold text-gold">{tc.count}</span>
+          {/* Entity type breakdown */}
+          <div className="bg-bg2 border border-border rounded-xl p-4">
+            <h3 className="text-xs font-semibold text-text3 uppercase tracking-wider mb-3">Entita per tipo</h3>
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+              {stats.typeCounts.map(tc => (
+                <div key={tc.type} className="flex items-center justify-between bg-bg3 rounded-lg px-3 py-2">
+                  <span className="text-xs text-text">{tc.type}</span>
+                  <span className="text-xs font-bold text-gold">{tc.count}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Settings editor by category */}
+      {settingsLoaded && (
+        <div className="space-y-3">
+          <h3 className="text-xs font-semibold text-text3 uppercase tracking-wider">Impostazioni di sistema</h3>
+
+          {Object.entries(allSettings).map(([category, settings]) => (
+            <div key={category} className="bg-bg2 border border-border rounded-xl overflow-hidden">
+              <div
+                className="flex items-center justify-between px-4 py-3 bg-bg3/50 cursor-pointer"
+                onClick={() => toggleCategory(category)}
+              >
+                <div className="flex items-center gap-2">
+                  {expandedCats.has(category) ? <ChevronDown size={14} className="text-text3" /> : <ChevronRight size={14} className="text-text3" />}
+                  <Settings size={14} className="text-gold" />
+                  <span className="text-sm font-medium text-text">{CATEGORY_LABELS[category] || category}</span>
+                  <span className="text-[10px] text-text3 bg-bg3 px-1.5 py-0.5 rounded">{settings.length}</span>
+                </div>
+              </div>
+
+              {expandedCats.has(category) && (
+                <div className="p-4 space-y-3">
+                  {settings.map(s => (
+                    <div key={s.key} className="bg-bg3 rounded-lg p-3 space-y-1.5">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs text-text font-medium">{s.description || s.key}</span>
+                        <span className={`text-[9px] px-1.5 py-0.5 rounded font-medium ${
+                          s.source === 'db' ? 'bg-green/10 text-green' : s.source === 'env' ? 'bg-blue/10 text-blue' : 'bg-bg4 text-text3'
+                        }`}>{s.source.toUpperCase()}</span>
+                        {s.requiresRestart && <span className="text-[9px] px-1.5 py-0.5 rounded bg-yellow/10 text-yellow">restart</span>}
+                      </div>
+                      <div className="flex gap-2 items-center">
+                        <div className="relative flex-1">
+                          <input
+                            type={s.sensitive && !visibleKeys.has(s.key) ? 'password' : 'text'}
+                            value={editValues[s.key] || ''}
+                            onChange={e => setEditValues(prev => ({ ...prev, [s.key]: e.target.value }))}
+                            placeholder={s.defaultValue || s.envVar}
+                            className="w-full px-3 py-1.5 text-xs bg-bg2 border border-border rounded-lg text-text pr-8"
+                          />
+                          {s.sensitive && (
+                            <button onClick={() => toggleVisible(s.key)} className="absolute right-2 top-1/2 -translate-y-1/2 text-text3 hover:text-text2">
+                              {visibleKeys.has(s.key) ? <EyeOff size={12} /> : <Eye size={12} />}
+                            </button>
+                          )}
+                        </div>
+                        <button
+                          onClick={() => saveSetting(s.key)}
+                          disabled={savingKey === s.key}
+                          className="px-2.5 py-1.5 text-xs bg-gold hover:bg-gold-l text-white rounded-lg disabled:opacity-50 shrink-0"
+                        >
+                          {savingKey === s.key ? '...' : <Save size={12} />}
+                        </button>
+                      </div>
+                      <div className="text-[10px] text-text3">{s.envVar}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           ))}
         </div>
-      </div>
+      )}
+
+      {!settingsLoaded && (
+        <div className="text-text3 text-sm p-4 text-center">Caricamento impostazioni...</div>
+      )}
     </div>
   )
 }

@@ -48,7 +48,7 @@ export function authMiddleware(required = true) {
         ).all(decoded.userId) as any[]
         const groupData = groups.map(g => {
           const m = typeof g.metadata === 'string' ? JSON.parse(g.metadata) : (g.metadata || {})
-          return { name: g.display_name, permissions: m.permissions || {} }
+          return { name: g.display_name, permissions: m.permissions || {}, agentPermissions: m.agentPermissions || undefined }
         })
         req.permissions = new UserPermissions(groupData)
       } catch {

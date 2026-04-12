@@ -1,13 +1,16 @@
 // ── Permissions ─────────────────────────────────────────
 
 export type PermAction = 'read' | 'create' | 'update' | 'delete' | 'send'
+export type AgentPermAction = 'chat' | 'configure'
 
 export class UserPermissions {
   private perms: Map<string, Set<PermAction>>  // entityType → actions
+  private agentPerms: Map<string, Set<AgentPermAction>>  // agentDomain → actions
   private groupNames: string[]
 
-  constructor(groupPermissions: { name: string; permissions: Record<string, PermAction[]> }[]) {
+  constructor(groupPermissions: { name: string; permissions: Record<string, PermAction[]>; agentPermissions?: Record<string, AgentPermAction[]> }[]) {
     this.perms = new Map()
+    this.agentPerms = new Map()
     this.groupNames = groupPermissions.map(g => g.name)
 
     // Merge all group permissions (union)
@@ -17,11 +20,21 @@ export class UserPermissions {
         for (const a of actions) existing.add(a)
         this.perms.set(entityType, existing)
       }
+
+      // Merge agent permissions
+      if (group.agentPermissions) {
+        for (const [domain, actions] of Object.entries(group.agentPermissions)) {
+          const existing = this.agentPerms.get(domain) || new Set()
+          for (const a of actions) existing.add(a)
+          this.agentPerms.set(domain, existing)
+        }
+      }
     }
 
-    // No groups → default read only
+    // No groups → default read only + chat all agents
     if (groupPermissions.length === 0) {
       this.perms.set('*', new Set(['read']))
+      this.agentPerms.set('*', new Set(['chat']))
     }
   }
 
@@ -47,6 +60,18 @@ export class UserPermissions {
     // Fallback to wildcard '*'
     const wildcard = this.perms.get('*')
     return wildcard ? wildcard.has(action) : false
+  }
+
+  canAgent(action: AgentPermAction, domain: string): boolean {
+    // Check domain-specific agent permissions
+    const domainPerms = this.agentPerms.get(domain)
+    if (domainPerms) return domainPerms.has(action)
+    // Fallback to wildcard
+    const wildcard = this.agentPerms.get('*')
+    if (wildcard) return wildcard.has(action)
+    // No agent permissions set → default allow chat
+    if (this.agentPerms.size === 0) return action === 'chat'
+    return false
   }
 
   get isAdmin(): boolean {

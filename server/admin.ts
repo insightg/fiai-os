@@ -8,6 +8,7 @@ import crypto from 'crypto'
 import bcrypt from 'bcryptjs'
 import { AuthRequest, authMiddleware } from './middleware.js'
 import db from './db.js'
+import { getSettingsDiscovery, setSetting, loadSettings } from './settings.js'
 
 const router = Router()
 
@@ -147,6 +148,7 @@ router.get('/groups', (req: AuthRequest, res: Response) => {
       id: g.id,
       name: g.display_name,
       permissions: meta.permissions || {},
+      agentPermissions: meta.agentPermissions || {},
       members,
     }
   })
@@ -171,15 +173,19 @@ router.post('/groups', (req: AuthRequest, res: Response) => {
 })
 
 router.put('/groups/:id', (req: AuthRequest, res: Response) => {
-  const { name, permissions } = req.body
-  const group = db.prepare("SELECT id FROM entity WHERE id = ? AND type = 'gruppo'").get(req.params.id)
+  const { name, permissions, agentPermissions } = req.body
+  const group = db.prepare("SELECT id, metadata FROM entity WHERE id = ? AND type = 'gruppo'").get(req.params.id) as any
   if (!group) { res.status(404).json({ error: 'Gruppo non trovato' }); return }
 
-  const updates: string[] = []
-  const params: any[] = []
+  // Merge metadata instead of replacing — preserve fields not being updated
+  const oldMeta = typeof group.metadata === 'string' ? JSON.parse(group.metadata) : (group.metadata || {})
+  const newMeta = { ...oldMeta }
+  if (permissions !== undefined) newMeta.permissions = permissions
+  if (agentPermissions !== undefined) newMeta.agentPermissions = agentPermissions
+
+  const updates: string[] = ['metadata = ?']
+  const params: any[] = [JSON.stringify(newMeta)]
   if (name) { updates.push('display_name = ?'); params.push(name) }
-  if (permissions) { updates.push('metadata = ?'); params.push(JSON.stringify({ permissions })) }
-  if (updates.length === 0) { res.json({ successo: true }); return }
 
   params.push(req.params.id)
   db.prepare(`UPDATE entity SET ${updates.join(', ')} WHERE id = ?`).run(...params)
@@ -323,6 +329,35 @@ router.get('/audit-log', (req: AuthRequest, res: Response) => {
   const total = db.prepare("SELECT COUNT(*) as c FROM entity_audit").get() as any
 
   res.json({ logs, total: total.c })
+})
+
+// ── SETTINGS ─────────────────────────────────────────────
+
+router.get('/settings', (req: AuthRequest, res: Response) => {
+  const settings = getSettingsDiscovery(req.aziendaId || '')
+  // Group by category
+  const grouped: Record<string, typeof settings> = {}
+  for (const s of settings) {
+    if (!grouped[s.category]) grouped[s.category] = []
+    grouped[s.category].push(s)
+  }
+  res.json({ settings, grouped })
+})
+
+router.put('/settings/:key', (req: AuthRequest, res: Response) => {
+  const { value } = req.body
+  if (value === undefined) { res.status(400).json({ error: 'value obbligatorio' }); return }
+  setSetting(req.aziendaId || '', req.params.key, value)
+  res.json({ successo: true, key: req.params.key })
+})
+
+router.post('/settings/bulk', (req: AuthRequest, res: Response) => {
+  const { settings } = req.body
+  if (!settings || typeof settings !== 'object') { res.status(400).json({ error: 'settings object obbligatorio' }); return }
+  for (const [key, value] of Object.entries(settings)) {
+    setSetting(req.aziendaId || '', key, value as string)
+  }
+  res.json({ successo: true, count: Object.keys(settings).length })
 })
 
 // ── SYSTEM STATS ─────────────────────────────────────────

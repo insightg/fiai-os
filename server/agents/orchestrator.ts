@@ -508,6 +508,10 @@ export async function orchestrate(
     if (lastDomain && lastDomain !== 'general' && lastDomain !== 'image' && lastDomain !== 'tts') {
       const agent = AGENTS[lastDomain]
       if (agent) {
+        // Check agent permission
+        if (permissions && !permissions.canAgent('chat', lastDomain)) {
+          return { text: `Non hai accesso all'agente **${agent.name}**. Contatta l'amministratore per richiedere i permessi.`, toolCalls: [], agentName: 'Sistema', agentDomain: 'general', agentColor: AGENT_COLORS.general }
+        }
         const context = buildContext(lastDomain, aziendaId, userId, sessionId)
         const result = await executeAgent(message, agent, aziendaId, userId, context, format, conversationHistory, onProgress, permissions, sessionId)
         return finalizeResult(result)
@@ -582,7 +586,7 @@ export async function orchestrate(
   // ── Multi-agent execution ──
   if (classification.needsMultiAgent && classification.secondaryDomains && classification.secondaryDomains.length > 0) {
     const allDomains: AgentDomain[] = [classification.domain, ...classification.secondaryDomains]
-    const uniqueDomains = [...new Set(allDomains)].filter(d => d !== 'general')
+    const uniqueDomains = [...new Set(allDomains)].filter(d => d !== 'general' && (!permissions || permissions.canAgent('chat', d)))
 
     const agentPromises = uniqueDomains
       .map(async (domain) => {
@@ -617,6 +621,15 @@ export async function orchestrate(
 
   // ── Single agent — direct execution with native tool calling ──
   const agent = AGENTS[classification.domain] || AGENTS.direzione || AGENTS.general
+
+  // Check agent permission
+  if (permissions && !permissions.canAgent('chat', classification.domain)) {
+    return {
+      text: `Non hai accesso all'agente **${agent.name}** (${classification.domain}). Contatta l'amministratore per richiedere i permessi.`,
+      toolCalls: [], agentName: 'Sistema', agentDomain: 'general', agentColor: AGENT_COLORS.general,
+    }
+  }
+
   onProgress({ type: 'agent', content: `${agent.name} sta elaborando...`, domain: classification.domain, agentName: agent.name, agentColor: agent.color })
 
   // Context with 60s cache + system summary
