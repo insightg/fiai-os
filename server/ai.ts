@@ -354,57 +354,58 @@ export async function analyzeUpload(
   }
 
   try {
-    const prompt = `Analizza questo file e identifica cosa è. Restituisci SOLO un JSON valido.
+    const prompt = `Analyze this file and classify it. The document may be in ANY language (Italian, English, German, French, etc.). Always respond in Italian with a valid JSON.
 
 FILE: ${fileName}
-TIPO: ${mimeType || 'sconosciuto'}
-${isImage ? 'Il file è un\'immagine.' : ''}
+MIME: ${mimeType || 'unknown'}
+${isImage ? 'This is an image file.' : ''}
 
-${customCategories?.length ? `\nCATEGORIE CUSTOM DISPONIBILI:\n${customCategories.map(c => `- ${c.name}: ${c.description} (keywords: ${c.keywords.join(', ')})`).join('\n')}\n` : ''}
-${!isImage ? `CONTENUTO (prime 3000 car.):
+${customCategories?.length ? `\nCUSTOM CATEGORIES:\n${customCategories.map(c => `- ${c.name}: ${c.description} (keywords: ${c.keywords.join(', ')})`).join('\n')}\n` : ''}
+${!isImage ? `CONTENT (first 3000 chars):
 ${content.substring(0, 3000)}` : ''}
 
-Rispondi con questo JSON:
+Respond with ONLY this JSON (no other text):
 {
   "entity_type": "fattura_passiva|contratto|cv|preventivo|report|foto|audio|documento",
-  "display_name": "nome leggibile del documento",
-  "suggested_name": "nome azienda o persona collegata (null se non identificabile)",
-  "categoria": "amministrazione|legale|hr|commerciale|marketing|produzione|normative|contratti|documentazione_tecnica|altro${customCategories?.length ? '|' + customCategories.map(c => c.name).join('|') : ''}",
-  "tags": ["tag1", "tag2"],
-  "descrizione": "breve descrizione del contenuto",
+  "display_name": "human-readable document name in Italian (e.g. 'Fattura RunPod - 04/03/2026')",
+  "suggested_name": "main company or person name mentioned (null if not identifiable)",
+  "categoria": "amministrazione|legale|hr|commerciale|marketing|produzione|normative|contratti|documentazione_tecnica|fatture|altro${customCategories?.length ? '|' + customCategories.map(c => c.name).join('|') : ''}",
+  "tags": ["tag1", "tag2", "tag3"],
+  "descrizione": "brief description of the content in Italian",
   "extracted_data": {
-    "numero": "numero documento se presente",
-    "data": "data in formato YYYY-MM-DD se presente",
+    "numero": "document/invoice number if present",
+    "data": "date in YYYY-MM-DD format if present",
     "totale": 0.00,
-    "fornitore": "ragione sociale se fattura",
-    "piva": "P.IVA se presente",
-    "email": "email se presente",
-    "telefono": "telefono se presente",
-    "nome_persona": "nome persona se CV/contatto",
-    "autore": "autore del documento se identificabile (es. nome scrittore, legislatore, ente)"
+    "fornitore": "supplier/vendor name if invoice",
+    "piva": "VAT/Tax ID if present",
+    "email": "email if present",
+    "telefono": "phone if present",
+    "nome_persona": "person name if CV/contact",
+    "autore": "document author if identifiable"
   },
   "chunk_strategy": "by_article|by_chapter|by_section|by_paragraph|by_page|by_verse|by_heading|none"
 }
 
-REGOLE:
-- entity_type "fattura_passiva" se è una fattura/ricevuta con importi
-- entity_type "contratto" se è un accordo/contratto con clausole
-- entity_type "cv" se è un curriculum/CV con competenze
-- entity_type "preventivo" se è un'offerta/preventivo commerciale
-- entity_type "report" se è un report/analisi con dati
-- entity_type "foto" se è un'immagine senza testo significativo
-- entity_type "documento" per tutto il resto
-- In extracted_data metti SOLO i campi che riesci a estrarre dal contenuto
-- suggested_name: la persona o azienda PIU' rilevante nel documento
-- chunk_strategy: come dividere il documento in sezioni ricercabili:
-  "by_article" se è una legge/codice con articoli numerati (Art. 1, Art. 2...)
-  "by_chapter" se è un libro/romanzo con capitoli (Capitolo 1, Cap. I...)
-  "by_section" se è un contratto/manuale con sezioni numerate (1. Premesse, 2. Oggetto...)
-  "by_paragraph" se è narrativa/saggio/testo continuo
-  "by_page" se è un report/presentazione/documento misto senza struttura chiara
-  "by_verse" se è un testo sacro/religioso con versetti numerati (Bibbia, Corano, etc.) o poesia con versi/canti
-  "by_heading" se è documentazione tecnica con heading markdown (#, ##)
-  "none" se è un documento breve (<5 pagine), immagine, o non necessita divisione`
+CLASSIFICATION RULES:
+- "fattura_passiva": invoices, receipts, bills with amounts (ANY language — look for: Invoice, Fattura, Rechnung, Facture, total, amount, $, €)
+- "contratto": agreements, contracts with clauses
+- "cv": resumes, CVs with skills/experience
+- "preventivo": quotes, proposals, estimates
+- "report": reports, analyses with data/charts
+- "foto": images without significant text
+- "documento": everything else
+- extracted_data: include ONLY fields you can extract from content
+- display_name: ALWAYS in Italian, translate if needed (e.g. "Invoice" → "Fattura")
+- tags: mix of Italian and original language terms for searchability
+- chunk_strategy:
+  "by_article" for laws/codes with numbered articles
+  "by_chapter" for books with chapters
+  "by_section" for contracts/manuals with numbered sections
+  "by_paragraph" for narrative/essay text
+  "by_page" for reports/mixed documents
+  "by_verse" for religious/poetic texts with verses
+  "by_heading" for technical docs with markdown headings
+  "none" for short documents (<5 pages) or images`
 
     const messages: OpenRouterMessage[] = isImage
       ? [{ role: 'user', content: [
@@ -413,10 +414,18 @@ REGOLE:
         ] }]
       : [{ role: 'user', content: prompt }]
 
-    const result = await callLLM(messages, true)
-    const jsonMatch = result.match(/\{[\s\S]*\}/)
+    let result = await callLLM(messages, true)
+    let jsonMatch = result.match(/\{[\s\S]*\}/)
+
+    // Retry once if empty or no JSON
+    if (!jsonMatch || !result.trim()) {
+      console.warn(`[AnalyzeUpload] Empty/no-JSON response for "${fileName}", retrying...`)
+      result = await callLLM(messages, false) // retry without json_mode
+      jsonMatch = result.match(/\{[\s\S]*\}/)
+    }
+
     if (!jsonMatch) {
-      console.warn(`[AnalyzeUpload] No JSON in LLM response for "${fileName}":`, result.substring(0, 200))
+      console.warn(`[AnalyzeUpload] Failed after retry for "${fileName}":`, result.substring(0, 200))
       return defaultResult
     }
 
