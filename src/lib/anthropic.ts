@@ -111,14 +111,17 @@ export async function sendMessage(
     }
   }
   } catch (streamErr) {
-    // Stream interrupted (HTTP/2 error, network drop) — use what we have
     streamError = true
     console.warn('[Stream] Connection interrupted, using partial result')
-    if (!fullText && !result.agentName) {
-      // No data received at all — fallback to non-streaming
+  }
+
+  // If stream produced no text (interrupted before tokens arrived), fallback to non-streaming
+  if (!fullText) {
+    try {
+      console.warn('[Stream] No text received, falling back to non-streaming')
       const fallback = await fetch('/api/chat/message', { method: 'POST', headers, body })
       if (fallback.ok) return await fallback.json()
-    }
+    } catch {}
   }
 
   result.text = fullText || result.text
