@@ -110,61 +110,52 @@ export async function sendMessage(
   return result
 }
 
-// ── Session Management (stays frontend-side) ────────────────
+// ── Session Management (via backend API) ────────────────────
+
+function authHeaders(): Record<string, string> {
+  const token = getAuthToken()
+  return { 'Content-Type': 'application/json', ...(token ? { 'Authorization': `Bearer ${token}` } : {}) }
+}
+
 export async function createChatSession(title: string): Promise<string | null> {
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return null
-
-  const { data: profile } = await supabase
-    .from('entity')
-    .select('azienda_id')
-    .eq('id', user.id)
-    .single()
-
-  if (!profile) return null
-
-  const { data, error } = await supabase
-    .from('chat_sessions')
-    .insert({
-      azienda_id: (profile as { azienda_id: string }).azienda_id,
-      user_id: user.id,
-      titolo: title,
-    })
-    .select('id')
-    .single()
-
-  if (error) return null
-  return (data as { id: string }).id
+  try {
+    const res = await fetch('/api/auth/sessions', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ titolo: title }) })
+    const data = await res.json()
+    return data.id || null
+  } catch { return null }
 }
 
 export async function fetchChatSessions(): Promise<
-  { id: string; titolo: string; created_at: string; updated_at: string }[]
+  { id: string; titolo: string; created_at: string; updated_at: string; channel?: string; message_count?: number }[]
 > {
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return []
-
-  const { data } = await supabase
-    .from('chat_sessions')
-    .select('id, titolo, created_at, updated_at')
-    .eq('user_id', user.id)
-    .order('updated_at', { ascending: false })
-
-  return (data ?? []) as { id: string; titolo: string; created_at: string; updated_at: string }[]
+  try {
+    const res = await fetch('/api/auth/sessions', { headers: authHeaders() })
+    const data = await res.json()
+    return Array.isArray(data) ? data : []
+  } catch { return [] }
 }
 
 export async function fetchSessionMessages(sessionId: string): Promise<ChatMessage[]> {
-  const { data } = await supabase
-    .from('chat_messages')
-    .select('*')
-    .eq('session_id', sessionId)
-    .order('created_at', { ascending: true })
-
-  return (data ?? []) as ChatMessage[]
+  try {
+    const res = await fetch(`/api/auth/sessions/${sessionId}/messages`, { headers: authHeaders() })
+    const data = await res.json()
+    return (Array.isArray(data) ? data : []).map((m: any) => ({
+      id: m.id,
+      session_id: sessionId,
+      ruolo: m.ruolo,
+      contenuto: m.contenuto,
+      tool_calls: m.tool_calls,
+      created_at: m.created_at,
+      agent_domain: m.agent_domain,
+      agent_name: m.agent_name,
+    }))
+  } catch { return [] }
 }
 
 export async function updateSessionTitle(sessionId: string, title: string): Promise<void> {
-  await supabase
-    .from('chat_sessions')
-    .update({ titolo: title, updated_at: new Date().toISOString() })
-    .eq('id', sessionId)
+  await fetch(`/api/auth/sessions/${sessionId}`, { method: 'PUT', headers: authHeaders(), body: JSON.stringify({ titolo: title }) })
+}
+
+export async function deleteChatSession(sessionId: string): Promise<void> {
+  await fetch(`/api/auth/sessions/${sessionId}`, { method: 'DELETE', headers: authHeaders() })
 }

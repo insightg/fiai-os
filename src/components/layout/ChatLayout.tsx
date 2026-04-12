@@ -61,6 +61,7 @@ import {
   fetchChatSessions,
   fetchSessionMessages,
   updateSessionTitle,
+  deleteChatSession,
   type ConversationMessage,
   type ToolUseEvent,
 } from '../../lib/anthropic'
@@ -933,8 +934,7 @@ export default function ChatLayout() {
   const deleteSession = useCallback(async (sessionId: string, e: React.MouseEvent) => {
     e.stopPropagation()
     try {
-      await supabase.from('chat_messages').delete().eq('session_id', sessionId)
-      await supabase.from('chat_sessions').delete().eq('id', sessionId)
+      await deleteChatSession(sessionId)
       setSessions((prev) => prev.filter((s) => s.id !== sessionId))
       if (activeSessionId === sessionId) {
         setActiveSessionId(null)
