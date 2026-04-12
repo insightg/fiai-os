@@ -301,7 +301,20 @@ export function chunkDocument(text: string, entityType: string, filename: string
     template = getTemplateForStrategy(strategy)
     console.log(`[Chunker] Using strategy "${strategy}" → template "${template.id}"`)
   } else {
-    if (text.length < 10000) return [] // Too short for auto-chunk
+    if (text.length < 500) return [] // Too short to chunk at all
+    if (text.length < 10000) {
+      // Small document: single chunk with full content
+      console.log(`[Chunker] Small doc (${text.length} chars), creating single chunk`)
+      return [{
+        display_name: filename?.replace(/\.[^.]+$/, '') || 'Documento',
+        content: text,
+        chunk_index: 0,
+        chunk_total: 1,
+        heading_path: '',
+        char_offset_start: 0,
+        char_offset_end: text.length,
+      }]
+    }
     template = findTemplate(text, entityType)
     console.log(`[Chunker] Auto-detected template "${template.id}"`)
   }
