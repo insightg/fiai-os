@@ -65,9 +65,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       .eq('id', user.id)
       .single()
     if (error || !data) {
-      // Fallback: try user_profiles (legacy)
-      const { data: legacy } = await supabase.from('user_profiles').select('*').eq('id', user.id).single()
-      if (legacy) { set({ profile: legacy as UserProfile }); return }
       set({ error: error?.message || 'Profilo non trovato' })
       return
     }

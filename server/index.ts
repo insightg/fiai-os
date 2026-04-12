@@ -33,7 +33,7 @@ if (fs.existsSync(migrationPath)) {
   console.log('SQLite migrations applied.')
 }
 
-// Add tts_voice column if missing
+// Legacy migration (kept for backward compat, no-op if column exists)
 try { db.exec("ALTER TABLE user_profiles ADD COLUMN tts_voice TEXT DEFAULT 'Vivian'") } catch {}
 // Add deleted_at for soft delete
 try { db.exec("ALTER TABLE entity ADD COLUMN deleted_at TEXT") } catch {}

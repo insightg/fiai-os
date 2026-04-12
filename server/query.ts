@@ -35,12 +35,12 @@ interface ParsedRelation {
 // ── Allowed tables (whitelist for safety) ───────────────────
 
 const ALLOWED_TABLES = new Set([
-  // VFS
+  // VFS (unified)
   'entity', 'relations',
-  // Used by frontend (auth + chat)
-  'user_profiles', 'chat_sessions', 'chat_messages',
-  // Legacy (read-only, for backward compat)
-  'aziende', 'users',
+  // Chat history
+  'chat_sessions', 'chat_messages',
+  // Audit
+  'entity_audit',
 ])
 
 // ── Known FK mappings for joins ─────────────────────────────

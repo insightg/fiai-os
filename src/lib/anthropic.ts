@@ -79,7 +79,7 @@ export async function createChatSession(title: string): Promise<string | null> {
   if (!user) return null
 
   const { data: profile } = await supabase
-    .from('user_profiles')
+    .from('entity')
     .select('azienda_id')
     .eq('id', user.id)
     .single()
