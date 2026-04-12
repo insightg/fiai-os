@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Users, Shield, Plus, Trash2, Check, X, ChevronDown, ChevronRight, Bot, Activity, Database, RefreshCw, Save, AlertTriangle, Settings, Eye, EyeOff } from 'lucide-react'
+import { Users, Shield, Plus, Trash2, Check, X, ChevronDown, ChevronRight, Bot, Activity, Database, RefreshCw, Save, AlertTriangle, Settings, Eye, EyeOff, Key, Cpu, Copy, Clock } from 'lucide-react'
 import { getAuthToken } from '../../lib/supabase'
 import toast from 'react-hot-toast'
 
@@ -9,6 +9,7 @@ interface Agent { domain: string; name: string; color: string; model: string; to
 interface AuditEntry { id: string; entity_id: string; entity_type: string; action: string; entity_name: string; before_data: string; after_data: string; created_at: string }
 interface SystemStats { totalEntities: number; typeCounts: { type: string; count: number }[]; documents: number; chunks: number; embeddedEntities: number; users: number; recentAudits: number; recentSessions: number; dbSizeMB: number }
 interface SystemSetting { key: string; category: string; envVar: string; description: string; sensitive: boolean; defaultValue: string; requiresRestart: boolean; value: string; source: 'db' | 'env' | 'default' }
+interface ApiToken { id: string; token_preview: string; name: string; expires_at: string | null; revoked_at: string | null; last_used_at: string | null; created_at: string }
 
 const ACTIONS = ['read', 'create', 'update', 'delete', 'send'] as const
 const AGENT_ACTIONS = ['chat', 'configure'] as const
@@ -26,7 +27,16 @@ function api(path: string, method = 'GET', body?: any) {
   }).then(r => r.json())
 }
 
-type Tab = 'users' | 'groups' | 'agents' | 'audit' | 'settings'
+function authApi(path: string, method = 'GET', body?: any) {
+  const token = getAuthToken()
+  return fetch(`/api/auth${path}`, {
+    method,
+    headers: { 'Content-Type': 'application/json', ...(token ? { 'Authorization': `Bearer ${token}` } : {}) },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  }).then(r => r.json())
+}
+
+type Tab = 'users' | 'groups' | 'agents' | 'api' | 'audit' | 'settings'
 
 export default function AdminPage() {
   const [tab, setTab] = useState<Tab>('users')
@@ -73,6 +83,7 @@ export default function AdminPage() {
     { id: 'users', label: 'Utenti', icon: Users, count: users.length },
     { id: 'groups', label: 'Gruppi', icon: Shield, count: groups.length },
     { id: 'agents', label: 'Agenti', icon: Bot, count: agents.length },
+    { id: 'api', label: 'API & Devices', icon: Key },
     { id: 'audit', label: 'Audit Log', icon: Activity },
     { id: 'settings', label: 'Impostazioni', icon: Settings },
   ]
@@ -110,6 +121,8 @@ export default function AdminPage() {
           <GroupsTab groups={groups} users={users} agents={agents} onReload={load} />
         ) : tab === 'agents' ? (
           <AgentsTab agents={agents} onReload={loadAgents} />
+        ) : tab === 'api' ? (
+          <ApiTab />
         ) : tab === 'audit' ? (
           <AuditTab logs={auditLogs} onReload={loadAudit} />
         ) : (
@@ -872,6 +885,279 @@ function SettingsTab({ stats, onReload }: { stats: SystemStats | null; onReload:
       {!settingsLoaded && (
         <div className="text-text3 text-sm p-4 text-center">Caricamento impostazioni...</div>
       )}
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════
+// API & DEVICES TAB
+// ═══════════════════════════════════════════════════════
+
+function ApiTab() {
+  const [tokens, setTokens] = useState<ApiToken[]>([])
+  const [newName, setNewName] = useState('')
+  const [newExpiry, setNewExpiry] = useState('90')
+  const [createdKey, setCreatedKey] = useState('')
+  const [creating, setCreating] = useState(false)
+  const [copied, setCopied] = useState('')
+
+  const loadTokens = useCallback(async () => {
+    const t = await authApi('/tokens')
+    setTokens(Array.isArray(t) ? t : [])
+  }, [])
+
+  useEffect(() => { loadTokens() }, [loadTokens])
+
+  const createToken = async () => {
+    setCreating(true)
+    try {
+      const res = await authApi('/tokens', 'POST', {
+        name: newName || 'API Key',
+        expires_in_days: newExpiry ? parseInt(newExpiry) : null,
+      })
+      if (res.key) {
+        setCreatedKey(res.key)
+        setNewName('')
+        loadTokens()
+        toast.success('Token creato')
+      } else {
+        toast.error(res.error || 'Errore')
+      }
+    } finally { setCreating(false) }
+  }
+
+  const revokeToken = async (id: string, name: string) => {
+    if (!confirm(`Revocare "${name}"? Le device che lo usano smetteranno di funzionare.`)) return
+    await authApi(`/tokens/${id}`, 'DELETE')
+    toast.success('Token revocato')
+    loadTokens()
+  }
+
+  const copyToClipboard = (text: string, label: string) => {
+    navigator.clipboard.writeText(text)
+    setCopied(label)
+    setTimeout(() => setCopied(''), 2000)
+    toast.success('Copiato!')
+  }
+
+  const baseUrl = typeof window !== 'undefined' ? window.location.origin : 'https://bernardini.insightg.eu'
+
+  return (
+    <div className="space-y-4">
+      {/* Header info */}
+      <div className="bg-bg2 border border-border rounded-xl p-4">
+        <div className="flex items-center gap-2 mb-2">
+          <Cpu size={16} className="text-gold" />
+          <h3 className="text-sm font-semibold text-text">API OpenAI-Compatible</h3>
+        </div>
+        <p className="text-[11px] text-text3 mb-3">
+          Qualsiasi device o applicazione che supporta lo standard OpenAI (ESP32, Home Assistant, app custom) puo collegarsi a {'{COMPANY_NAME}'} usando questi endpoint.
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          <div className="bg-bg3 rounded-lg p-3">
+            <div className="text-[10px] text-text3 uppercase tracking-wider mb-1">Base URL</div>
+            <div className="flex items-center gap-2">
+              <code className="text-xs text-gold font-mono flex-1">{baseUrl}/v1</code>
+              <button onClick={() => copyToClipboard(`${baseUrl}/v1`, 'url')} className="p-1 rounded hover:bg-bg4 text-text3">
+                {copied === 'url' ? <Check size={12} className="text-green" /> : <Copy size={12} />}
+              </button>
+            </div>
+          </div>
+          <div className="bg-bg3 rounded-lg p-3">
+            <div className="text-[10px] text-text3 uppercase tracking-wider mb-1">Endpoint Chat</div>
+            <code className="text-xs text-text2 font-mono">POST /v1/chat/completions</code>
+          </div>
+          <div className="bg-bg3 rounded-lg p-3">
+            <div className="text-[10px] text-text3 uppercase tracking-wider mb-1">Lista Modelli (Agenti)</div>
+            <code className="text-xs text-text2 font-mono">GET /v1/models</code>
+          </div>
+          <div className="bg-bg3 rounded-lg p-3">
+            <div className="text-[10px] text-text3 uppercase tracking-wider mb-1">Auth Header</div>
+            <code className="text-xs text-text2 font-mono">Authorization: Bearer brd-...</code>
+          </div>
+        </div>
+      </div>
+
+      {/* Token Management */}
+      <div className="bg-bg2 border border-border rounded-xl p-4">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <Key size={16} className="text-gold" />
+            <h3 className="text-sm font-semibold text-text">Token API</h3>
+          </div>
+          <button onClick={loadTokens} className="p-1 rounded hover:bg-bg3 text-text3"><RefreshCw size={14} /></button>
+        </div>
+
+        {/* Create new token */}
+        <div className="bg-bg3 rounded-lg p-3 mb-3">
+          <div className="flex gap-2 items-end">
+            <div className="flex-1">
+              <label className="text-[10px] text-text3 block mb-1">Nome dispositivo</label>
+              <input value={newName} onChange={e => setNewName(e.target.value)} placeholder="Es. ESP32 Ufficio, Home Assistant" className="w-full px-3 py-1.5 text-xs bg-bg border border-border rounded-lg text-text" />
+            </div>
+            <div className="w-28">
+              <label className="text-[10px] text-text3 block mb-1">Scadenza (giorni)</label>
+              <input value={newExpiry} onChange={e => setNewExpiry(e.target.value)} placeholder="90" type="number" className="w-full px-3 py-1.5 text-xs bg-bg border border-border rounded-lg text-text" />
+            </div>
+            <button onClick={createToken} disabled={creating} className="px-3 py-1.5 text-xs bg-gold hover:bg-gold-l text-white rounded-lg disabled:opacity-50 whitespace-nowrap">
+              <Plus size={12} className="inline mr-1" /> Genera
+            </button>
+          </div>
+        </div>
+
+        {/* Show created key (only once) */}
+        {createdKey && (
+          <div className="bg-green/5 border border-green/20 rounded-lg p-3 mb-3">
+            <div className="text-xs text-green font-medium mb-1">Token generato — copialo ora, non verra mostrato di nuovo!</div>
+            <div className="flex items-center gap-2">
+              <code className="text-xs text-text font-mono bg-bg3 px-2 py-1 rounded flex-1 select-all">{createdKey}</code>
+              <button onClick={() => copyToClipboard(createdKey, 'key')} className="px-2 py-1 text-xs bg-green/10 text-green rounded hover:bg-green/20">
+                {copied === 'key' ? <Check size={12} /> : <Copy size={12} />}
+              </button>
+              <button onClick={() => setCreatedKey('')} className="p-1 rounded hover:bg-bg3 text-text3"><X size={14} /></button>
+            </div>
+          </div>
+        )}
+
+        {/* Token list */}
+        {tokens.length === 0 ? (
+          <p className="text-[11px] text-text3 text-center py-4">Nessun token creato</p>
+        ) : (
+          <div className="space-y-1.5">
+            {tokens.map(t => (
+              <div key={t.id} className={`flex items-center gap-3 bg-bg3 rounded-lg px-3 py-2 ${t.revoked_at ? 'opacity-40' : ''}`}>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-medium text-text">{t.name}</span>
+                    <code className="text-[10px] text-text3 font-mono">{t.token_preview}</code>
+                    {t.revoked_at && <span className="text-[10px] px-1.5 py-0.5 rounded bg-red/10 text-red">revocato</span>}
+                  </div>
+                  <div className="flex gap-3 mt-0.5 text-[10px] text-text3">
+                    <span>Creato: {new Date(t.created_at).toLocaleDateString('it-IT')}</span>
+                    {t.expires_at && <span>Scade: {new Date(t.expires_at).toLocaleDateString('it-IT')}</span>}
+                    {t.last_used_at && (
+                      <span className="flex items-center gap-0.5"><Clock size={10} /> Ultimo uso: {new Date(t.last_used_at).toLocaleDateString('it-IT')}</span>
+                    )}
+                  </div>
+                </div>
+                {!t.revoked_at && (
+                  <button onClick={() => revokeToken(t.id, t.name)} className="p-1.5 rounded hover:bg-red/10 text-text3 hover:text-red" title="Revoca">
+                    <Trash2 size={14} />
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Model options */}
+      <div className="bg-bg2 border border-border rounded-xl p-4">
+        <div className="flex items-center gap-2 mb-3">
+          <Bot size={16} className="text-gold" />
+          <h3 className="text-sm font-semibold text-text">Modelli disponibili</h3>
+        </div>
+        <p className="text-[11px] text-text3 mb-2">Usa il campo <code className="bg-bg3 px-1 rounded">model</code> per scegliere l'agente. Aggiungi <code className="bg-bg3 px-1 rounded">-voice</code> per risposte vocali (senza markdown/tabelle).</p>
+        <div className="overflow-x-auto">
+          <table className="w-full text-[11px]">
+            <thead><tr className="bg-bg3">
+              <th className="px-3 py-1.5 text-left text-text3 font-medium">Model ID</th>
+              <th className="px-3 py-1.5 text-left text-text3 font-medium">Descrizione</th>
+              <th className="px-3 py-1.5 text-left text-text3 font-medium">Voice</th>
+            </tr></thead>
+            <tbody>
+              <tr className="border-t border-border">
+                <td className="px-3 py-1.5"><code className="text-gold font-mono">bernardini-os</code></td>
+                <td className="px-3 py-1.5 text-text2">Auto-routing — il sistema sceglie l'agente giusto</td>
+                <td className="px-3 py-1.5"><code className="text-text3 font-mono">bernardini-os-voice</code></td>
+              </tr>
+              {['direzione', 'commerciale', 'amministrazione', 'produzione', 'email', 'whatsapp'].map(d => (
+                <tr key={d} className="border-t border-border">
+                  <td className="px-3 py-1.5"><code className="text-text font-mono">{d}</code></td>
+                  <td className="px-3 py-1.5 text-text2">Forza agente {d}</td>
+                  <td className="px-3 py-1.5"><code className="text-text3 font-mono">{d}-voice</code></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* ESP32 / Device Guide */}
+      <div className="bg-bg2 border border-border rounded-xl p-4">
+        <div className="flex items-center gap-2 mb-3">
+          <Cpu size={16} className="text-gold" />
+          <h3 className="text-sm font-semibold text-text">Guida Integrazione Device</h3>
+        </div>
+
+        <div className="space-y-3">
+          {/* ESP32 */}
+          <div className="bg-bg3 rounded-lg p-3">
+            <h4 className="text-xs font-semibold text-text mb-2">ESP32 / Arduino</h4>
+            <p className="text-[10px] text-text3 mb-2">Configura il tuo ESP32 come client OpenAI. Usa il modello <code className="bg-bg px-1 rounded">bernardini-os-voice</code> per risposte ottimizzate per TTS.</p>
+            <pre className="text-[10px] text-text2 font-mono bg-bg rounded-lg p-2 overflow-x-auto whitespace-pre">{`// Arduino / ESP32 — configurazione
+#define API_BASE_URL "${baseUrl}/v1"
+#define API_KEY      "brd-... (il tuo token)"
+#define MODEL        "bernardini-os-voice"
+
+// Headers HTTP
+// Authorization: Bearer brd-...
+// Content-Type: application/json
+
+// Body POST /v1/chat/completions
+// {"model":"bernardini-os-voice",
+//  "messages":[{"role":"user","content":"..."}],
+//  "stream":false}`}</pre>
+          </div>
+
+          {/* curl */}
+          <div className="bg-bg3 rounded-lg p-3">
+            <h4 className="text-xs font-semibold text-text mb-2">cURL (test rapido)</h4>
+            <div className="flex items-start gap-2">
+              <pre className="text-[10px] text-text2 font-mono bg-bg rounded-lg p-2 overflow-x-auto whitespace-pre flex-1">{`curl -X POST ${baseUrl}/v1/chat/completions \\
+  -H "Authorization: Bearer brd-IL_TUO_TOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d '{"model":"bernardini-os-voice",
+       "messages":[{"role":"user",
+                    "content":"Che ore sono?"}]}'`}</pre>
+              <button onClick={() => copyToClipboard(`curl -X POST ${baseUrl}/v1/chat/completions -H "Authorization: Bearer TOKEN" -H "Content-Type: application/json" -d '{"model":"bernardini-os-voice","messages":[{"role":"user","content":"Che ore sono?"}]}'`, 'curl')} className="p-1.5 rounded hover:bg-bg4 text-text3 shrink-0">
+                {copied === 'curl' ? <Check size={12} className="text-green" /> : <Copy size={12} />}
+              </button>
+            </div>
+          </div>
+
+          {/* Python */}
+          <div className="bg-bg3 rounded-lg p-3">
+            <h4 className="text-xs font-semibold text-text mb-2">Python (openai SDK)</h4>
+            <pre className="text-[10px] text-text2 font-mono bg-bg rounded-lg p-2 overflow-x-auto whitespace-pre">{`from openai import OpenAI
+
+client = OpenAI(
+    base_url="${baseUrl}/v1",
+    api_key="brd-IL_TUO_TOKEN"
+)
+
+response = client.chat.completions.create(
+    model="bernardini-os",
+    messages=[{"role": "user",
+               "content": "Quanti clienti abbiamo?"}]
+)
+print(response.choices[0].message.content)`}</pre>
+          </div>
+
+          {/* Features */}
+          <div className="bg-bg3 rounded-lg p-3">
+            <h4 className="text-xs font-semibold text-text mb-2">Funzionalita supportate</h4>
+            <div className="grid grid-cols-2 gap-2 text-[10px]">
+              <div className="flex items-center gap-1.5"><Check size={12} className="text-green" /><span className="text-text2">Chat completions (streaming + sync)</span></div>
+              <div className="flex items-center gap-1.5"><Check size={12} className="text-green" /><span className="text-text2">Formato voice (-voice) per audio devices</span></div>
+              <div className="flex items-center gap-1.5"><Check size={12} className="text-green" /><span className="text-text2">Selezione agente via model field</span></div>
+              <div className="flex items-center gap-1.5"><Check size={12} className="text-green" /><span className="text-text2">Sessioni persistenti (cross-channel)</span></div>
+              <div className="flex items-center gap-1.5"><Check size={12} className="text-green" /><span className="text-text2">Vision (immagini base64 in messages)</span></div>
+              <div className="flex items-center gap-1.5"><Check size={12} className="text-green" /><span className="text-text2">Permessi utente (dal gruppo del proprietario token)</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   )
 }
