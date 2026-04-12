@@ -38,10 +38,10 @@ function quickClassifyKeywords(text: string): AgentDomain | null {
   const t = text.toLowerCase().trim()
   // TTS keywords → route to TTS agent
   if (/\btts\b|sintesi vocale|lista voci|imposta voce|clona.*voce|voce predefinita/.test(t)) return 'tts'
-  // WhatsApp keywords → route to WhatsApp agent (MUST have send tools)
-  if (/\bwhatsapp\b|\bwhapp\b|\bwapp\b|manda.*(?:a|via)\s|invia.*(?:a|via)\s.*(?:messaggio|vocale|immagine|documento|video)|manda.*messaggio/i.test(t)) return 'whatsapp'
-  // Email keywords → route to Email agent
-  if (/\bemail\b|\be-?mail\b|\bposta\b|\binbox\b|\bcasella\b|invia.*email|leggi.*mail|manda.*mail|scrivi.*mail/i.test(t)) return 'email'
+  // Email keywords → route to Email agent (BEFORE WhatsApp to avoid catch-all overlap on "invia mail")
+  if (/\bemail\b|\be-?mail\b|\bmail\b|\bposta\b|\binbox\b|\bcasella\b|invia.*(?:email|mail)|leggi.*(?:email|mail)|manda.*(?:email|mail)|scrivi.*(?:email|mail)/i.test(t)) return 'email'
+  // WhatsApp keywords → route to WhatsApp agent (only when WhatsApp is explicitly mentioned)
+  if (/\bwhatsapp\b|\bwhapp\b|\bwapp\b|manda.*whatsapp|invia.*whatsapp|vocale.*whatsapp/i.test(t)) return 'whatsapp'
   // Document keywords → route to Documentale (has retrieve, list_documents, explore_document)
   // Catches ANY reference to documents, books, or content search — regardless of topic
   if (/\bbibbia\b|\bcodice civile\b|\bcontratto\b|\bnormativa\b|\bmanuale\b|\breport\b|\blibro\b/i.test(t)) return 'documentale'
@@ -99,14 +99,20 @@ const CLASSIFICATION_PROMPT =
   '- officina: riparazioni, manutenzione, mezzi, attrezzature, ordini lavoro, ricambi, interventi tecnici\n' +
   '- legal: assicurazioni, polizze, sinistri, contenzioso, cause, parco mezzi, revisioni, contratti, compliance\n' +
   '- qualita: qualita, sicurezza, ambiente, ISO, non conformita, DVR, formazione sicurezza, audit, certificazioni, rifiuti\n' +
-  '- email: casella di posta, invio email, lettura email, allegati email, inbox, posta elettronica\n' +
+  '- whatsapp: invio messaggi WhatsApp, vocali WhatsApp, documenti via WhatsApp. SOLO se l\'utente menziona esplicitamente "whatsapp" o "wapp".\n' +
+  '- email: casella di posta, invio email/mail, lettura email, allegati email, inbox, posta elettronica. SOLO se l\'utente menziona esplicitamente "email", "mail", "posta".\n' +
   '- documentale: ricerca contenuto documenti caricati, analisi, riassunto, confronto. Se menziona un documento specifico → documentale.\n' +
   '- it: costi API, utenti, ruoli, configurazione, agenti autonomi\n' +
   '- doctor: diagnostica sistema, salute dati, performance\n' +
   '- tts: sintesi vocale, leggi ad alta voce, genera audio/vocale, voce\n' +
   '- general: saluti, domande generiche, genera immagine, crea immagine, genera PDF\n\n' +
   'Le richieste su contenuto di documenti caricati vanno SEMPRE a "documentale".\n' +
-  'DISAMBIGUAZIONE: se il messaggio e\' ambiguo tra piu\' domini (es. "genera cavallo rosso" potrebbe essere immagine O audio), imposta confidence=0.3 e domain="general". L\'agente chiedera\' chiarimenti all\'utente.\n\n' +
+  'DISAMBIGUAZIONE: se il messaggio e\' ambiguo tra piu\' domini, imposta confidence=0.3 e domain="general". L\'agente chiedera\' chiarimenti all\'utente.\n' +
+  'Esempi di ambiguita\':\n' +
+  '- "genera cavallo rosso" → potrebbe essere immagine O audio → confidence=0.3, domain="general"\n' +
+  '- "manda un messaggio a X" / "scrivi a X" / "contatta X" SENZA specificare il canale → ambiguo tra email e whatsapp → confidence=0.3, domain="general" (l\'agente chiedera\' se via email o WhatsApp)\n' +
+  '- "invia mail/email a X" → email (canale esplicito)\n' +
+  '- "manda un whatsapp a X" → whatsapp (canale esplicito)\n\n' +
   'MULTI-AGENT: Se la richiesta tocca PIU domini, imposta needsMultiAgent=true e secondaryDomains con i domini aggiuntivi.\n' +
   'Esempi multi-agent:\n' +
   '- "fatturato dei clienti con progetti attivi" → domain="amministrazione", needsMultiAgent=true, secondaryDomains=["commerciale","produzione"]\n' +
