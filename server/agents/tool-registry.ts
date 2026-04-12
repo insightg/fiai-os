@@ -82,10 +82,10 @@ export const TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     metadata: { type: 'object', description: 'Campi da aggiornare (merge con esistenti)' },
   }, required: ['id', 'table'] } } },
 
-  delete_record: { type: 'function', function: { name: 'delete_record', description: 'Elimina un name o entity', parameters: { type: 'object', properties: {
-    id: { type: 'string' },
-    table: { type: 'string', enum: ['names', 'entity'] },
-  }, required: ['id', 'table'] } } },
+  delete_record: { type: 'function', function: { name: 'delete_record', description: 'Elimina un record (soft delete di default — archivia il record in modo recuperabile). Usa permanent=true per eliminazione definitiva irreversibile. Elimina anche i chunk e le relazioni collegati.', parameters: { type: 'object', properties: {
+    id: { type: 'string', description: 'ID del record da eliminare' },
+    permanent: { type: 'boolean', description: 'true = eliminazione definitiva irreversibile. false/omesso = soft delete (archiviazione recuperabile)' },
+  }, required: ['id'] } } },
 
   relate: { type: 'function', function: { name: 'relate', description: 'Crea una relazione tra due record (name↔name, name↔entity, entity↔entity)', parameters: { type: 'object', properties: {
     from_id: { type: 'string' },
