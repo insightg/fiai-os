@@ -460,6 +460,36 @@ export function initEmbeddings(): void {
       await embedEntity(entityId)
     }
 
+    // 4. Extract structured data from text for invoices/documents
+    if (entity.type === 'fattura_passiva' || entity.type === 'fattura') {
+      try {
+        const updates: string[] = []
+        const params: any[] = []
+        // Extract totale from text (patterns: $100.00, €100.00, TOTAL 100.00, Totale 100,00)
+        const totaleMatch = extractedText.match(/(?:TOTAL(?:\s+PAID)?|Totale|Amount|Importo)[:\s]*[$€]?\s*([\d.,]+)/i)
+        if (totaleMatch) {
+          const totale = parseFloat(totaleMatch[1].replace(/,/g, '.').replace(/\.(?=.*\.)/g, ''))
+          if (totale > 0) { updates.push('totale = ?'); params.push(totale) }
+        }
+        // Extract invoice number
+        const numMatch = extractedText.match(/(?:Invoice\s*(?:ID|#|No)?|Fattura\s*(?:n|nr|num)?)[.:\s]*([A-Za-z0-9_-]+)/i)
+        if (numMatch) { updates.push('numero = ?'); params.push(numMatch[1]) }
+        // Extract date
+        const dateMatch = extractedText.match(/(?:Date|Data)[:\s]*(\w+ \d{1,2},? \d{4}|\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4})/i)
+        if (dateMatch) {
+          try {
+            const d = new Date(dateMatch[1])
+            if (!isNaN(d.getTime())) { updates.push('data = ?'); params.push(d.toISOString().split('T')[0]) }
+          } catch {}
+        }
+        if (updates.length > 0) {
+          params.push(entityId)
+          db.prepare(`UPDATE entity SET ${updates.join(', ')} WHERE id = ?`).run(...params)
+          console.log(`[ProcessDoc] Extracted structured data: ${updates.map(u => u.split(' ')[0]).join(', ')}`)
+        }
+      } catch {}
+    }
+
     return { chunked: isChunked, chunks: chunks.length }
   })
 
