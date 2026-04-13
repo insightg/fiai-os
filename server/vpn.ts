@@ -244,4 +244,65 @@ router.post('/ping', async (req: AuthRequest, res: Response) => {
   }
 })
 
+// ── Auto-connect on startup ──────────────────────────────
+
+export async function autoConnectVPN(): Promise<void> {
+  if (!fs.existsSync(VPN_CONFIG)) {
+    console.log('[VPN] Config not found, skipping auto-connect')
+    return
+  }
+
+  // Check if already connected
+  if (fs.existsSync('/sys/class/net/tun0')) {
+    vpnStatus = 'connected'
+    vpnConnectedAt = new Date().toISOString()
+    console.log('[VPN] Already connected (tun0 active)')
+    return
+  }
+
+  console.log('[VPN] Auto-connecting...')
+  vpnStatus = 'connecting'
+
+  try {
+    fs.writeFileSync(VPN_LOG, '')
+    const askpassFile = path.join(VPN_DIR, 'key-pass.txt')
+
+    spawn('openvpn', [
+      '--config', VPN_CONFIG, '--cd', VPN_DIR,
+      '--log', VPN_LOG, '--writepid', VPN_PID_FILE,
+      '--askpass', askpassFile, '--daemon', 'bernardini-vpn',
+    ], { detached: true, stdio: 'ignore' }).unref()
+
+    // Wait up to 15s for connection
+    for (let i = 0; i < 15; i++) {
+      await new Promise(r => setTimeout(r, 1000))
+      if (fs.existsSync('/sys/class/net/tun0')) {
+        vpnStatus = 'connected'
+        vpnConnectedAt = new Date().toISOString()
+        console.log('[VPN] Auto-connected successfully')
+        return
+      }
+      try {
+        const log = fs.readFileSync(VPN_LOG, 'utf-8')
+        if (log.includes('Exiting due to fatal error')) {
+          vpnStatus = 'error'
+          console.error('[VPN] Auto-connect failed:', log.split('\n').filter(l => /error|fail/i.test(l)).pop())
+          return
+        }
+      } catch {}
+    }
+
+    vpnStatus = fs.existsSync('/sys/class/net/tun0') ? 'connected' : 'error'
+    if (vpnStatus === 'connected') {
+      vpnConnectedAt = new Date().toISOString()
+      console.log('[VPN] Auto-connected successfully')
+    } else {
+      console.warn('[VPN] Auto-connect timeout (15s)')
+    }
+  } catch (err) {
+    vpnStatus = 'error'
+    console.error('[VPN] Auto-connect error:', (err as Error).message)
+  }
+}
+
 export default router

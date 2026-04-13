@@ -17,7 +17,7 @@ import signalsRouter from './signals.js'
 import pdfRouter from './pdf.js'
 import { startWhatsApp, whatsappRouter } from './whatsapp.js'
 import { startEmail, emailRouter } from './email.js'
-import vpnRouter from './vpn.js'
+import vpnRouter, { autoConnectVPN } from './vpn.js'
 import chatRouter from './agents/index.js'
 import adminRouter from './admin.js'
 import openaiCompatRouter from './openai-compat.js'
@@ -175,6 +175,7 @@ app.listen(PORT, () => {
   console.log(`FIAI OS server running on http://localhost:${PORT}`)
   startWhatsApp().catch(err => console.error('WhatsApp startup error:', err))
   startEmail().catch(err => console.error('Email startup error:', err))
+  autoConnectVPN().catch(err => console.error('VPN auto-connect error:', err))
   initAutonomousAgents()
   initWorkflows()
   initEmbeddings()
