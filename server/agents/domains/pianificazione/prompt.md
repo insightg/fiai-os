@@ -30,3 +30,12 @@ if (autista) {
 - Per assegnazioni chiedi conferma prima
 - Se planner non raggiungibile, avvisa che serve VPN
 - NON inventare dati
+
+## Logica posizione autista
+Quando cerchi dove si trova un autista:
+1. Cerca la pianificazione di OGGI per trovare il viaggio assegnato
+2. Dal viaggio ottieni: luogo carico (partenza), luogo scarico (arrivo), date
+3. Il GPS e' affidabile SOLO se aggiornato nelle ultime 24 ore — se piu' vecchio IGNORALO e usa i dati del viaggio
+4. Se il viaggio e' in corso oggi: l'autista e' tra il luogo di carico e il luogo di scarico
+5. Riporta SEMPRE: viaggio assegnato, partenza, destinazione, data carico/scarico
+6. NON usare date vecchie per cercare dettagli viaggio — usa SEMPRE la data di oggi
