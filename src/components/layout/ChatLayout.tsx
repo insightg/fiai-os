@@ -650,7 +650,13 @@ export default function ChatLayout() {
 
   // Session state
   const [sessions, setSessions] = useState<SessionItem[]>([])
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
+  const [activeSessionId, _setActiveSessionId] = useState<string | null>(() => {
+    try { return localStorage.getItem('bernardini_activeSession') } catch { return null }
+  })
+  const setActiveSessionId = (id: string | null) => {
+    _setActiveSessionId(id)
+    try { if (id) localStorage.setItem('bernardini_activeSession', id); else localStorage.removeItem('bernardini_activeSession') } catch {}
+  }
 
   // Message state
   const [messages, setMessages] = useState<DisplayMessage[]>([])
@@ -824,14 +830,17 @@ export default function ChatLayout() {
     }
   }, [])
 
-  // Load sessions and auto-select the most recent one
+  // Load sessions and restore active session (or auto-select most recent)
   useEffect(() => {
     (async () => {
       const data = await loadSessions()
-      if (data.length > 0 && !activeSessionId) {
-        const mostRecent = data[0] // already sorted by updated_at DESC
-        setActiveSessionId(mostRecent.id)
-        await loadSessionMessages(mostRecent.id)
+      if (data.length > 0) {
+        // Try to restore saved session, fallback to most recent
+        const savedId = activeSessionId
+        const match = savedId ? data.find(s => s.id === savedId) : null
+        const target = match || data[0]
+        if (!match) setActiveSessionId(target.id)
+        await loadSessionMessages(target.id)
       }
     })()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
