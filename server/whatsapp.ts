@@ -194,44 +194,24 @@ async function handleIncomingMessage(msg: WAMessage) {
     return
   }
 
-  // Check WhatsApp auth expiry (1 hour)
-  const waMeta = typeof waUser.metadata === 'string' ? JSON.parse(waUser.metadata) : (waUser.metadata || {})
-  const authAt = waMeta.whatsapp_auth_at ? new Date(waMeta.whatsapp_auth_at).getTime() : 0
-  const AUTH_TTL = 3600000 // 1 hour
-  if (Date.now() - authAt > AUTH_TTL) {
-    // Auth expired or never authenticated via password
-    const lidId = sender.endsWith('@lid') ? sender.replace('@lid', '') : ''
-    if (lidId) {
-      // LID user needs re-auth
-      await sock.sendMessage(sender, { text: '🔒 *Sessione scaduta*\n\nPer continuare, invia la tua *email* di accesso:' })
-      // Clear LID mapping to force re-auth
-      lidPhoneMap.delete(lidId)
-      return
-    }
-    // Phone users: check if they've ever authenticated via password
-    if (!waMeta.whatsapp_auth_at) {
-      // First time: require auth
-      await sock.sendMessage(sender, { text: '🔒 Per usare il sistema via WhatsApp, invia la tua *email* di accesso:' })
-      return
-    }
-    // Phone user with expired auth — start login flow
-    pendingLogins.set(phone, { ...waUser, _awaitingEmail: true })
-    await sock.sendMessage(sender, { text: '🔒 *Sessione scaduta* (1 ora).\n\nInvia la tua *email* per riautenticarti:' })
-    return
-  }
-
-  // Check if phone user has pending re-auth
+  // Check if phone user has pending re-auth (BEFORE auth expiry check — otherwise expiry re-triggers every message)
   const phonePending = pendingLogins.get(phone)
   if (phonePending) {
     if (phonePending._awaitingEmail) {
       // Expecting email
       const emailMatch = text.trim().match(/^[^\s@]+@[^\s@]+\.[^\s@]+$/)
-      if (emailMatch && emailMatch[0].toLowerCase() === (phonePending.email || '').toLowerCase()) {
-        phonePending._awaitingEmail = false
-        pendingLogins.set(phone, phonePending)
-        await sock.sendMessage(sender, { text: `👤 *${phonePending.nome || phonePending.display_name}*\n\nInvia la tua *password*:` })
+      if (emailMatch) {
+        // Verify email matches the user's email
+        const userEmail = (phonePending.email || '').toLowerCase()
+        if (!userEmail || emailMatch[0].toLowerCase() === userEmail) {
+          phonePending._awaitingEmail = false
+          pendingLogins.set(phone, phonePending)
+          await sock.sendMessage(sender, { text: `👤 *${phonePending.nome || phonePending.display_name}*\n\nInvia la tua *password*:` })
+        } else {
+          await sock.sendMessage(sender, { text: '❌ Email non corrisponde al tuo profilo. Riprova.' })
+        }
       } else {
-        await sock.sendMessage(sender, { text: '❌ Email non corrisponde al tuo profilo. Riprova.' })
+        await sock.sendMessage(sender, { text: '📧 Invia la tua *email* di accesso per continuare:' })
       }
       return
     } else {
@@ -248,6 +228,18 @@ async function handleIncomingMessage(msg: WAMessage) {
       }
       return
     }
+  }
+
+  // Check WhatsApp auth expiry (1 hour)
+  const waMeta = typeof waUser.metadata === 'string' ? JSON.parse(waUser.metadata) : (waUser.metadata || {})
+  const authAt = waMeta.whatsapp_auth_at ? new Date(waMeta.whatsapp_auth_at).getTime() : 0
+  const AUTH_TTL = 3600000 // 1 hour
+  if (Date.now() - authAt > AUTH_TTL) {
+    // Auth expired or never authenticated — start login flow
+    pendingLogins.set(phone, { ...waUser, _awaitingEmail: true })
+    const { getSetting } = await import('./settings.js')
+    await sock.sendMessage(sender, { text: `🔒 *Sessione scaduta*\n\nPer continuare a usare ${getSetting('company_short_name') || 'il sistema'}, invia la tua *email* di accesso:` })
+    return
   }
 
   // Handle document uploads
