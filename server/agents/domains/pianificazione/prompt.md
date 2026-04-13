@@ -20,13 +20,10 @@ REGOLA CRITICA: fai TUTTO in UN SOLO execute_code per richiesta. Data di oggi: `
 
 ## Posizione autista
 1. Usa `planning_eta` → ritorna BG in corso, posizione, targa, destinazione, ETA, affidabilita'
-2. Se ha un BG, usa `planning_dettaglio` con codice_bg e DATA dall'ETA per ottenere luogo_carico (partenza)
-3. VALUTA L'AFFIDABILITA' della posizione:
-   - `posizione_gps` vuoto O `affidabilita` < 0.5 → la posizione_corrente NON e' attendibile, IGNORALA
-   - In quel caso dici: "In viaggio da [luogo_carico] a [luogo_scarico], posizione GPS non disponibile"
-   - Solo se `posizione_gps` ha un valore E `affidabilita` >= 0.5 → riporta la posizione
-4. Riporta SEMPRE: viaggio (BG), partenza (luogo_carico), destinazione (luogo_scarico), ETA
-5. Se planning_dettaglio non trova con una data, prova date vicine
+2. Se `posizione_gps` vuoto O `affidabilita` < 0.5 → posizione NON attendibile, dici "GPS non disponibile"
+3. Se vuoi il luogo di partenza, prova `planning_dettaglio` — ma se non trova il viaggio, USA I DATI GIA' DISPONIBILI dall'ETA e rispondi comunque
+4. NON insistere a cercare con date diverse se non trova — rispondi con cio' che hai
+5. Riporta: viaggio (BG), posizione GPS (se affidabile), destinazione, ETA, targa
 
 ## Ricerca autista per nome e posizione
 In execute_code hai accesso a `planning_tutti_autisti`, `planning_eta` e `planning_dettaglio`.
