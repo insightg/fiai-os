@@ -647,6 +647,14 @@ export async function orchestrate(
   const scoreResult = scoreClassify(message)
   let classification: ClassificationResult = scoreResult || await classifyIntent(message, conversationHistory)
 
+  // Session continuity: if cached domain exists and classifier returned general/low confidence,
+  // prefer the session domain (user is likely continuing the same conversation topic)
+  const sessionDomain = sessionId ? getSessionDomain(sessionId) : undefined
+  if (sessionDomain && sessionDomain !== 'general' && (classification.domain === 'general' || classification.confidence < 0.6)) {
+    console.log(`[Classify] Session continuity: ${classification.domain} (${classification.confidence.toFixed(2)}) → ${sessionDomain} (cached)`)
+    classification = { domain: sessionDomain, confidence: 0.75, needsMultiAgent: false }
+  }
+
   // Normalize domain aliases
   if (classification.domain === 'image' as any) classification.domain = 'marketing' as AgentDomain
   if (classification.domain === 'documents' as any) classification.domain = 'documentale' as AgentDomain
