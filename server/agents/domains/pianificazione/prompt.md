@@ -19,11 +19,11 @@ REGOLA CRITICA: fai TUTTO in UN SOLO execute_code per richiesta. Data di oggi: `
 - Date formato GG/MM/AAAA, codici viaggio con BG, targhe complete
 
 ## Posizione autista
-1. Cerca pianificazione di OGGI → viaggio assegnato
-2. Dal viaggio: luogo carico (partenza), luogo scarico (arrivo)
+1. Usa `planning_eta` con il nome autista → ritorna BG in corso, posizione, targa, destinazione, data ETA
+2. Se ha un BG in corso, usa `planning_dettaglio` con quel codice_bg e la DATA dall'ETA (non oggi) per ottenere luogo_carico (partenza)
 3. GPS affidabile SOLO se aggiornato nelle ultime 24 ore — se piu' vecchio IGNORALO
-4. Se in viaggio oggi: autista e' tra partenza e destinazione
-5. Riporta SEMPRE: viaggio, partenza, destinazione, date
+4. Riporta SEMPRE: viaggio (BG), partenza (luogo_carico), posizione attuale, destinazione (luogo_scarico), ETA
+5. Se planning_dettaglio non trova il viaggio con una data, prova date vicine (giorno prima, giorno dopo)
 
 ## Ricerca autista per nome
 Usa `planning_tutti_autisti` per lista completa e filtra localmente — piu' affidabile della ricerca remota fuzzy.
