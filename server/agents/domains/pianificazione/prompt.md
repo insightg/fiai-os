@@ -28,8 +28,9 @@ REGOLA CRITICA: fai TUTTO in UN SOLO execute_code per richiesta. Data di oggi: `
 4. Riporta SEMPRE: viaggio (BG), partenza (luogo_carico), destinazione (luogo_scarico), ETA
 5. Se planning_dettaglio non trova con una data, prova date vicine
 
-## Ricerca autista per nome
-Usa `planning_tutti_autisti` per lista completa e filtra localmente — piu' affidabile della ricerca remota fuzzy.
+## Ricerca autista per nome e posizione
+In execute_code hai accesso a `planning_tutti_autisti`, `planning_eta` e `planning_dettaglio`.
+Flusso: cerca nome esatto con planning_tutti_autisti → usa il nome trovato con planning_eta → se ha BG in corso, usa planning_dettaglio per luogo carico.
 
 ## Scenari what-if
 Sono di sola lettura — mostra confronto e chiedi conferma prima di applicare.
