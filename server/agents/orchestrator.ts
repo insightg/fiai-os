@@ -82,6 +82,16 @@ const DOMAIN_KEYWORDS: Record<string, { words: string[]; weight: number }[]> = {
     { words: ['mezzo', 'mezzi', 'attrezzatura', 'attrezzature', 'ricambio', 'ricambi'], weight: 3 },
     { words: ['ordine lavoro', 'odl', 'tecnico', 'guasto'], weight: 3 },
   ],
+  pianificazione: [
+    { words: ['viaggio', 'viaggi', 'pianificazione', 'pianifica', 'piano trasporti', 'planner'], weight: 4 },
+    { words: ['autista', 'autisti', 'conducente', 'conducenti'], weight: 3 },
+    { words: ['semirimorchio', 'semirimorchi', 'rimorchio', 'targa'], weight: 3 },
+    { words: ['carico', 'scarico', 'consegna', 'ritiro', 'trasporto'], weight: 2 },
+    { words: ['gps', 'posizione', 'tracking', 'traccia'], weight: 2 },
+    { words: ['silos', 'rotocella', 'centinato', 'portacontainer', 'ribaltabile'], weight: 3 },
+    { words: ['assegnazione', 'assegna', 'ottimizza', 'ottimizzazione'], weight: 3 },
+    { words: ['flotta', 'parco mezzi', 'eu 561', 'ore guida'], weight: 3 },
+  ],
   legal: [
     { words: ['polizza', 'polizze', 'assicurazione', 'assicurazioni', 'sinistro', 'sinistri'], weight: 3 },
     { words: ['contenzioso', 'causa', 'cause', 'avvocato', 'tribunale', 'udienza'], weight: 3 },
@@ -221,6 +231,7 @@ function getClassificationPrompt() {
   '- qualita: qualita, sicurezza, ambiente, ISO, non conformita, DVR, formazione sicurezza, audit, certificazioni, rifiuti\n' +
   '- whatsapp: invio messaggi WhatsApp, vocali WhatsApp, documenti via WhatsApp. SOLO se l\'utente menziona esplicitamente "whatsapp" o "wapp".\n' +
   '- email: casella di posta, invio email/mail, lettura email, allegati email, inbox, posta elettronica. SOLO se l\'utente menziona esplicitamente "email", "mail", "posta".\n' +
+  '- pianificazione: pianificazione trasporti, viaggi, autisti, semirimorchi, assegnazione mezzi, GPS tracking, flotta, carico/scarico, EU 561, ottimizzazione trasporti\n' +
   '- documentale: ricerca contenuto documenti caricati, analisi, riassunto, confronto. Se menziona un documento specifico → documentale.\n' +
   '- it: costi API, utenti, ruoli, configurazione, agenti autonomi\n' +
   '- doctor: diagnostica sistema, salute dati, performance\n' +

@@ -247,6 +247,26 @@ export const TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
   reply_email: { type: 'function', function: { name: 'reply_email', description: 'Rispondi a una email mantenendo il thread di conversazione', parameters: { type: 'object', properties: { uid: { type: 'number', description: 'UID email a cui rispondere' }, html: { type: 'string', description: 'Corpo risposta (HTML)' }, cc: { type: 'string', description: 'CC aggiuntivi' } }, required: ['uid', 'html'] } } },
   download_email_attachment: { type: 'function', function: { name: 'download_email_attachment', description: 'Scarica allegato da una email e salvalo nel sistema', parameters: { type: 'object', properties: { uid: { type: 'number', description: 'UID email' }, part_id: { type: 'string', description: 'ID parte allegato (indice numerico)' } }, required: ['uid', 'part_id'] } } },
 
+  // ── Planning (proxy to ai-planner via VPN) ──
+  planning_health: { type: 'function', function: { name: 'planning_health', description: 'Verifica connessione al planner trasporti (richiede VPN)', parameters: { type: 'object', properties: {} } } },
+  planning_viaggi: { type: 'function', function: { name: 'planning_viaggi', description: 'Lista viaggi/ordini da pianificare per una data', parameters: { type: 'object', properties: { data: { type: 'string', description: 'Data YYYY-MM-DD' }, solo_non_assegnati: { type: 'boolean', description: 'Solo non assegnati' } }, required: ['data'] } } },
+  planning_suggerisci: { type: 'function', function: { name: 'planning_suggerisci', description: 'Esegui ottimizzazione automatica: assegna autisti e semirimorchi ai viaggi con scoring composito', parameters: { type: 'object', properties: { data: { type: 'string', description: 'Data YYYY-MM-DD' }, template: { type: 'string', description: 'Template viaggi (opzionale)' } }, required: ['data'] } } },
+  planning_assegna: { type: 'function', function: { name: 'planning_assegna', description: 'Assegna manualmente un viaggio a un autista/semirimorchio', parameters: { type: 'object', properties: { bg: { type: 'string', description: 'Codice BG del viaggio' }, targa: { type: 'string', description: 'Targa semirimorchio' }, autista: { type: 'string', description: 'Nome autista' } }, required: ['bg'] } } },
+  planning_autisti: { type: 'function', function: { name: 'planning_autisti', description: 'Lista autisti disponibili per una data (esclude assenti/ferie)', parameters: { type: 'object', properties: { data: { type: 'string', description: 'Data YYYY-MM-DD' } }, required: ['data'] } } },
+  planning_semirimorchi: { type: 'function', function: { name: 'planning_semirimorchi', description: 'Lista semirimorchi disponibili, filtrabili per tipo (SILOS, ROTOCELLA, CENTINATO, etc.)', parameters: { type: 'object', properties: { data: { type: 'string', description: 'Data YYYY-MM-DD' }, tipo: { type: 'string', description: 'Tipo: SILOS, ROTOCELLA, RIBALTABILE_9M, PORTACTR_9M, PORTACTR_13_6M, CENTINATO' } }, required: ['data'] } } },
+  planning_gps: { type: 'function', function: { name: 'planning_gps', description: 'Posizione GPS in tempo reale di un semirimorchio', parameters: { type: 'object', properties: { targa: { type: 'string', description: 'Targa semirimorchio' } }, required: ['targa'] } } },
+  planning_distanza: { type: 'function', function: { name: 'planning_distanza', description: 'Calcola distanza stradale tra due localita', parameters: { type: 'object', properties: { origine: { type: 'string', description: 'Localita partenza' }, destinazione: { type: 'string', description: 'Localita arrivo' } }, required: ['origine', 'destinazione'] } } },
+  planning_statistiche: { type: 'function', function: { name: 'planning_statistiche', description: 'Statistiche viaggi per periodo (per cliente, destinazione, autista)', parameters: { type: 'object', properties: { data_inizio: { type: 'string' }, data_fine: { type: 'string' }, raggruppa_per: { type: 'string', description: 'cliente, destinazione, autista, vettore' } }, required: ['data_inizio', 'data_fine'] } } },
+  planning_confronta: { type: 'function', function: { name: 'planning_confronta', description: 'Confronta piano proposto vs assegnazioni effettive per una data', parameters: { type: 'object', properties: { data: { type: 'string' } }, required: ['data'] } } },
+  planning_scenario: { type: 'function', function: { name: 'planning_scenario', description: 'Simulazione what-if: ricalcola con vincoli diversi (escludi autisti, modifica distanze)', parameters: { type: 'object', properties: { data: { type: 'string' }, escludi_autisti: { type: 'array', items: { type: 'string' } }, vincoli: { type: 'object' } }, required: ['data'] } } },
+  planning_eta: { type: 'function', function: { name: 'planning_eta', description: 'Calcola tempo di arrivo stimato (ETA) di un autista a una destinazione', parameters: { type: 'object', properties: { autista: { type: 'string' }, destinazione: { type: 'string' } }, required: ['autista', 'destinazione'] } } },
+  planning_conflitti: { type: 'function', function: { name: 'planning_conflitti', description: 'Mostra conflitti di risorse (autisti/semirimorchi doppiamente assegnati)', parameters: { type: 'object', properties: { data: { type: 'string' } }, required: ['data'] } } },
+  planning_storico: { type: 'function', function: { name: 'planning_storico', description: 'Cerca precedenti storici simili (RAG) per un viaggio o situazione', parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } } },
+  planning_dettaglio: { type: 'function', function: { name: 'planning_dettaglio', description: 'Dettaglio completo di un viaggio (BG, cliente, localita, date, container, genere)', parameters: { type: 'object', properties: { bg: { type: 'string' } }, required: ['bg'] } } },
+  planning_analizza: { type: 'function', function: { name: 'planning_analizza', description: 'Diagnostica perche un viaggio non e stato assegnato', parameters: { type: 'object', properties: { bg: { type: 'string' } }, required: ['bg'] } } },
+  planning_pianificazione_corrente: { type: 'function', function: { name: 'planning_pianificazione_corrente', description: 'Assegnazioni correnti per una data', parameters: { type: 'object', properties: { data: { type: 'string' } }, required: ['data'] } } },
+  planning_cerca_autista: { type: 'function', function: { name: 'planning_cerca_autista', description: 'Cerca autista per nome — restituisce posizione, impegni, skill', parameters: { type: 'object', properties: { nome: { type: 'string' } }, required: ['nome'] } } },
+
   // ── Weather ──
   get_weather: { type: 'function', function: { name: 'get_weather', description: 'Meteo attuale e previsioni per una citta. Restituisce temperatura, condizioni, vento, umidita. Supporta previsioni fino a 16 giorni con dettaglio orario.', parameters: { type: 'object', properties: {
     city: { type: 'string', description: 'Nome citta (es. "Parma", "Roma", "New York", "Tokyo")' },
@@ -310,6 +330,13 @@ const TOOL_ACTIONS: Record<string, string> = {
   send_whatsapp_message: 'send', send_whatsapp_voice: 'send',
   send_whatsapp_image: 'send', send_whatsapp_document: 'send',
   send_whatsapp_video: 'send',
+  planning_health: 'read', planning_viaggi: 'read', planning_autisti: 'read',
+  planning_semirimorchi: 'read', planning_gps: 'read', planning_distanza: 'read',
+  planning_statistiche: 'read', planning_confronta: 'read', planning_storico: 'read',
+  planning_dettaglio: 'read', planning_analizza: 'read', planning_conflitti: 'read',
+  planning_pianificazione_corrente: 'read', planning_cerca_autista: 'read',
+  planning_eta: 'read', planning_scenario: 'read',
+  planning_suggerisci: 'create', planning_assegna: 'create',
   get_email_status: 'read', read_inbox: 'read', read_email: 'read',
   search_emails: 'read', download_email_attachment: 'read',
   send_email: 'send', reply_email: 'send',
@@ -1789,6 +1816,44 @@ async function _executeTool(name: string, aziendaId: string, args?: Record<strin
       } catch (err: any) {
         return { errore: err.message }
       }
+    }
+
+    // ── PLANNING (proxy to ai-planner) ──
+
+    case 'planning_health': {
+      const { planningHealth } = await import('../planning-proxy.js')
+      return await planningHealth()
+    }
+
+    case 'planning_viaggi':
+    case 'planning_suggerisci':
+    case 'planning_assegna':
+    case 'planning_autisti':
+    case 'planning_semirimorchi':
+    case 'planning_gps':
+    case 'planning_distanza':
+    case 'planning_statistiche':
+    case 'planning_confronta':
+    case 'planning_scenario':
+    case 'planning_eta':
+    case 'planning_conflitti':
+    case 'planning_storico':
+    case 'planning_dettaglio':
+    case 'planning_analizza':
+    case 'planning_pianificazione_corrente':
+    case 'planning_cerca_autista': {
+      const { planningCall } = await import('../planning-proxy.js')
+      // Map tool name to API endpoint
+      const endpointMap: Record<string, string> = {
+        planning_viaggi: 'viaggi', planning_suggerisci: 'suggerisci', planning_assegna: 'assegna',
+        planning_autisti: 'autisti', planning_semirimorchi: 'semirimorchi', planning_gps: 'gps',
+        planning_distanza: 'distanza', planning_statistiche: 'statistiche', planning_confronta: 'confronta',
+        planning_scenario: 'scenario', planning_eta: 'eta', planning_conflitti: 'conflitti',
+        planning_storico: 'storico', planning_dettaglio: 'dettaglio', planning_analizza: 'analizza',
+        planning_pianificazione_corrente: 'pianificazione_corrente', planning_cerca_autista: 'cerca_autista',
+      }
+      const endpoint = endpointMap[name] || name.replace('planning_', '')
+      return await planningCall(endpoint, input)
     }
 
     // ── CODE EXECUTION (programmatic tool calling) ──
