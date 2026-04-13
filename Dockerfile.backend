@@ -10,8 +10,8 @@ COPY . .
 ENV NODE_ENV=production
 ENV PORT=3001
 
-# Install ffmpeg + typst (optional, for PDF generation)
-RUN apt-get update && apt-get install -y --no-install-recommends curl ffmpeg xz-utils ca-certificates poppler-utils && \
+# Install ffmpeg + typst + openvpn + ping (optional tools)
+RUN apt-get update && apt-get install -y --no-install-recommends curl ffmpeg xz-utils ca-certificates poppler-utils openvpn iputils-ping sudo && \
     (curl -sSL --connect-timeout 10 https://github.com/typst/typst/releases/latest/download/typst-x86_64-unknown-linux-musl.tar.xz | tar xJ --strip-components=1 -C /usr/local/bin/ && typst --version || echo "Typst not installed — PDF generation disabled") && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 

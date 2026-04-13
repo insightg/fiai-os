@@ -32,10 +32,15 @@ services:
       - EMAIL_PASSWORD=${EMAIL_PASSWORD:-gg.Giobbe7}
       - EMAIL_IMAP_HOST=${EMAIL_IMAP_HOST:-imaps.aruba.it}
       - EMAIL_SMTP_HOST=${EMAIL_SMTP_HOST:-smtps.aruba.it}
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - bernardini-data:/app/data
+      - ./vpn:/app/vpn:ro
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:3001/api/health"]
       interval: 10s

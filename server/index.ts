@@ -17,6 +17,7 @@ import signalsRouter from './signals.js'
 import pdfRouter from './pdf.js'
 import { startWhatsApp, whatsappRouter } from './whatsapp.js'
 import { startEmail, emailRouter } from './email.js'
+import vpnRouter from './vpn.js'
 import chatRouter from './agents/index.js'
 import adminRouter from './admin.js'
 import openaiCompatRouter from './openai-compat.js'
@@ -154,6 +155,7 @@ app.use('/api/signals', signalsRouter)
 app.use('/api/pdf', pdfRouter)
 app.use('/api/whatsapp', whatsappRouter)
 app.use('/api/email', emailRouter)
+app.use('/api/vpn', vpnRouter)
 app.use('/api/chat', chatRouter)
 app.use('/api/admin', adminRouter)
 app.use('/v1', openaiCompatRouter)

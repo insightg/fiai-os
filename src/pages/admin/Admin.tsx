@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Users, Shield, Plus, Trash2, Check, X, ChevronDown, ChevronRight, Bot, Activity, Database, RefreshCw, Save, AlertTriangle, Settings, Eye, EyeOff, Key, Cpu, Copy, Clock } from 'lucide-react'
+import { Users, Shield, Plus, Trash2, Check, X, ChevronDown, ChevronRight, Bot, Activity, Database, RefreshCw, Save, AlertTriangle, Settings, Eye, EyeOff, Key, Cpu, Copy, Clock, Wifi, WifiOff, Power, Terminal } from 'lucide-react'
 import { getAuthToken } from '../../lib/supabase'
 import toast from 'react-hot-toast'
 
@@ -27,6 +27,15 @@ function api(path: string, method = 'GET', body?: any) {
   }).then(r => r.json())
 }
 
+function vpnApi(path: string, method = 'GET', body?: any) {
+  const token = getAuthToken()
+  return fetch(`/api/vpn${path}`, {
+    method,
+    headers: { 'Content-Type': 'application/json', ...(token ? { 'Authorization': `Bearer ${token}` } : {}) },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  }).then(r => r.json())
+}
+
 function authApi(path: string, method = 'GET', body?: any) {
   const token = getAuthToken()
   return fetch(`/api/auth${path}`, {
@@ -36,7 +45,7 @@ function authApi(path: string, method = 'GET', body?: any) {
   }).then(r => r.json())
 }
 
-type Tab = 'users' | 'groups' | 'agents' | 'api' | 'audit' | 'settings'
+type Tab = 'users' | 'groups' | 'agents' | 'api' | 'vpn' | 'audit' | 'settings'
 
 export default function AdminPage() {
   const [tab, setTab] = useState<Tab>('users')
@@ -84,6 +93,7 @@ export default function AdminPage() {
     { id: 'groups', label: 'Gruppi', icon: Shield, count: groups.length },
     { id: 'agents', label: 'Agenti', icon: Bot, count: agents.length },
     { id: 'api', label: 'API & Devices', icon: Key },
+    { id: 'vpn', label: 'VPN', icon: Wifi },
     { id: 'audit', label: 'Audit Log', icon: Activity },
     { id: 'settings', label: 'Impostazioni', icon: Settings },
   ]
@@ -123,6 +133,8 @@ export default function AdminPage() {
           <AgentsTab agents={agents} onReload={loadAgents} />
         ) : tab === 'api' ? (
           <ApiTab />
+        ) : tab === 'vpn' ? (
+          <VpnTab />
         ) : tab === 'audit' ? (
           <AuditTab logs={auditLogs} onReload={loadAudit} />
         ) : (
@@ -1305,6 +1317,212 @@ function ResponseProfilesSection() {
           </div>
         ))}
       </div>
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════
+// VPN TAB
+// ═══════════════════════════════════════════════════════
+
+interface VpnStatus { status: string; connectedAt: string | null; error: string; configFile: string; configExists: boolean; tunActive: boolean; log: string }
+
+function VpnTab() {
+  const [vpn, setVpn] = useState<VpnStatus | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [showLog, setShowLog] = useState(false)
+
+  const loadStatus = useCallback(async () => {
+    try { const s = await vpnApi('/status'); setVpn(s) } catch {}
+  }, [])
+
+  useEffect(() => { loadStatus() }, [loadStatus])
+
+  // Auto-refresh while connecting
+  useEffect(() => {
+    if (vpn?.status !== 'connecting') return
+    const interval = setInterval(loadStatus, 2000)
+    return () => clearInterval(interval)
+  }, [vpn?.status, loadStatus])
+
+  const connect = async () => {
+    setLoading(true)
+    try {
+      await vpnApi('/connect', 'POST')
+      toast.success('Connessione VPN avviata...')
+    } catch (e: any) { toast.error(e.message) }
+    finally { setLoading(false); loadStatus() }
+  }
+
+  const disconnect = async () => {
+    setLoading(true)
+    try {
+      await vpnApi('/disconnect', 'POST')
+      toast.success('VPN disconnessa')
+    } catch (e: any) { toast.error(e.message) }
+    finally { setLoading(false); loadStatus() }
+  }
+
+  const loadLog = async () => {
+    const r = await vpnApi('/log')
+    if (r.log && vpn) setVpn({ ...vpn, log: r.log })
+    setShowLog(!showLog)
+  }
+
+  if (!vpn) return <div className="text-text3 text-sm p-8 text-center">Caricamento...</div>
+
+  const statusConfig: Record<string, { color: string; icon: any; label: string }> = {
+    connected: { color: 'text-green', icon: Wifi, label: 'Connessa' },
+    connecting: { color: 'text-yellow', icon: RefreshCw, label: 'Connessione in corso...' },
+    disconnected: { color: 'text-text3', icon: WifiOff, label: 'Disconnessa' },
+    error: { color: 'text-red', icon: AlertTriangle, label: 'Errore' },
+  }
+  const sc = statusConfig[vpn.status] || statusConfig.disconnected
+
+  return (
+    <div className="space-y-4">
+      {/* Status card */}
+      <div className="bg-bg2 border border-border rounded-xl p-5">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <div className={`p-3 rounded-xl ${vpn.status === 'connected' ? 'bg-green/10' : vpn.status === 'error' ? 'bg-red/10' : 'bg-bg3'}`}>
+              <sc.icon size={24} className={`${sc.color} ${vpn.status === 'connecting' ? 'animate-spin' : ''}`} />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-text">VPN OpenVPN</h3>
+              <p className={`text-sm font-medium ${sc.color}`}>{sc.label}</p>
+              {vpn.connectedAt && (
+                <p className="text-[10px] text-text3 mt-0.5">Connessa dal: {new Date(vpn.connectedAt).toLocaleString('it-IT')}</p>
+              )}
+            </div>
+          </div>
+
+          <div className="flex gap-2">
+            <button onClick={loadStatus} className="p-2 rounded-lg bg-bg3 text-text3 hover:bg-bg4 transition-colors" title="Aggiorna">
+              <RefreshCw size={16} />
+            </button>
+            {vpn.status === 'connected' || vpn.status === 'connecting' ? (
+              <button onClick={disconnect} disabled={loading} className="flex items-center gap-2 px-4 py-2 text-sm bg-red/10 text-red border border-red/20 rounded-lg hover:bg-red/20 disabled:opacity-50">
+                <Power size={16} /> Disconnetti
+              </button>
+            ) : (
+              <button onClick={connect} disabled={loading || !vpn.configExists} className="flex items-center gap-2 px-4 py-2 text-sm bg-green/10 text-green border border-green/20 rounded-lg hover:bg-green/20 disabled:opacity-50">
+                <Power size={16} /> Connetti
+              </button>
+            )}
+          </div>
+        </div>
+
+        {vpn.error && (
+          <div className="mt-3 p-3 bg-red/5 border border-red/20 rounded-lg text-xs text-red">
+            {vpn.error}
+          </div>
+        )}
+      </div>
+
+      {/* Connection details */}
+      <div className="bg-bg2 border border-border rounded-xl p-4">
+        <h4 className="text-xs font-semibold text-text3 uppercase tracking-wider mb-3">Dettagli connessione</h4>
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+          <div className="bg-bg3 rounded-lg p-3">
+            <div className="text-[10px] text-text3 mb-1">Config</div>
+            <div className="text-xs text-text font-mono truncate">{vpn.configFile?.split('/').pop()}</div>
+          </div>
+          <div className="bg-bg3 rounded-lg p-3">
+            <div className="text-[10px] text-text3 mb-1">Server</div>
+            <div className="text-xs text-text font-mono">hjw0aqjff1h.sn.mynetname.net:1195</div>
+          </div>
+          <div className="bg-bg3 rounded-lg p-3">
+            <div className="text-[10px] text-text3 mb-1">Rete</div>
+            <div className="text-xs text-text font-mono">192.168.0.0/24</div>
+          </div>
+          <div className="bg-bg3 rounded-lg p-3">
+            <div className="text-[10px] text-text3 mb-1">Interfaccia tun0</div>
+            <div className={`text-xs font-medium ${vpn.tunActive ? 'text-green' : 'text-text3'}`}>{vpn.tunActive ? 'Attiva' : 'Non attiva'}</div>
+          </div>
+          <div className="bg-bg3 rounded-lg p-3">
+            <div className="text-[10px] text-text3 mb-1">Protocollo</div>
+            <div className="text-xs text-text">UDP / AES-256-GCM</div>
+          </div>
+          <div className="bg-bg3 rounded-lg p-3">
+            <div className="text-[10px] text-text3 mb-1">Config presente</div>
+            <div className={`text-xs font-medium ${vpn.configExists ? 'text-green' : 'text-red'}`}>{vpn.configExists ? 'Si' : 'No'}</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Ping test */}
+      <PingTest />
+
+      {/* Log viewer */}
+      <div className="bg-bg2 border border-border rounded-xl p-4">
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2">
+            <Terminal size={14} className="text-gold" />
+            <h4 className="text-xs font-semibold text-text3 uppercase tracking-wider">Log OpenVPN</h4>
+          </div>
+          <button onClick={loadLog} className="text-[10px] text-text3 hover:text-gold">
+            {showLog ? 'Nascondi' : 'Mostra log'}
+          </button>
+        </div>
+        {showLog && (
+          <pre className="text-[10px] text-text2 font-mono bg-bg3 rounded-lg p-3 overflow-x-auto max-h-64 overflow-y-auto whitespace-pre-wrap leading-relaxed">
+            {vpn.log || '(nessun log disponibile)'}
+          </pre>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function PingTest() {
+  const [target, setTarget] = useState('192.168.0.1')
+  const [result, setResult] = useState<{ success: boolean; latencyMs: number; packetLoss: number; output: string } | null>(null)
+  const [pinging, setPinging] = useState(false)
+
+  const runPing = async () => {
+    setPinging(true)
+    setResult(null)
+    try {
+      const r = await vpnApi('/ping', 'POST', { target })
+      setResult(r)
+    } catch { setResult({ success: false, latencyMs: 0, packetLoss: 100, output: 'Errore di rete' }) }
+    finally { setPinging(false) }
+  }
+
+  return (
+    <div className="bg-bg2 border border-border rounded-xl p-4">
+      <div className="flex items-center gap-2 mb-3">
+        <Wifi size={14} className="text-gold" />
+        <h4 className="text-xs font-semibold text-text3 uppercase tracking-wider">Test connettivita</h4>
+      </div>
+      <div className="flex gap-2 items-end mb-3">
+        <div className="flex-1">
+          <label className="text-[10px] text-text3 block mb-1">IP destinazione</label>
+          <input value={target} onChange={e => setTarget(e.target.value)} placeholder="192.168.0.1" className="w-full px-3 py-1.5 text-xs bg-bg3 border border-border rounded-lg text-text font-mono" />
+        </div>
+        <button onClick={runPing} disabled={pinging} className="flex items-center gap-1.5 px-4 py-1.5 text-xs bg-gold hover:bg-gold-l text-white rounded-lg disabled:opacity-50">
+          {pinging ? <RefreshCw size={12} className="animate-spin" /> : <Wifi size={12} />}
+          {pinging ? 'Ping...' : 'Ping'}
+        </button>
+      </div>
+      {result && (
+        <div className={`p-3 rounded-lg ${result.success ? 'bg-green/5 border border-green/20' : 'bg-red/5 border border-red/20'}`}>
+          <div className="flex items-center gap-4 mb-2">
+            <div className="flex items-center gap-1.5">
+              {result.success ? <Check size={14} className="text-green" /> : <X size={14} className="text-red" />}
+              <span className={`text-sm font-medium ${result.success ? 'text-green' : 'text-red'}`}>{result.success ? 'Raggiungibile' : 'Non raggiungibile'}</span>
+            </div>
+            {result.success && (
+              <>
+                <span className="text-xs text-text2">Latenza: <strong>{result.latencyMs.toFixed(1)}ms</strong></span>
+                <span className="text-xs text-text2">Perdita: <strong>{result.packetLoss}%</strong></span>
+              </>
+            )}
+          </div>
+          <pre className="text-[10px] text-text3 font-mono">{result.output}</pre>
+        </div>
+      )}
     </div>
   )
 }
