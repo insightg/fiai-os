@@ -27,8 +27,8 @@ router.use(authMiddleware(true), adminGuard as any)
 
 router.get('/users', (req: AuthRequest, res: Response) => {
   const users = db.prepare(`
-    SELECT e.id, e.display_name, e.email, e.tags, e.metadata, e.created_at
-    FROM entity e WHERE e.type = 'utente' AND e.azienda_id = ?
+    SELECT e.id, e.display_name, e.email, e.telefono, e.tags, e.metadata, e.created_at
+    FROM entity e WHERE e.type = 'utente' AND e.azienda_id = ? AND e.deleted_at IS NULL
     ORDER BY e.display_name
   `).all(req.aziendaId) as any[]
 
@@ -46,6 +46,7 @@ router.get('/users', (req: AuthRequest, res: Response) => {
       id: u.id,
       display_name: u.display_name,
       email: u.email,
+      telefono: u.telefono || '',
       ruolo: meta.ruolo || (tags.includes('admin') ? 'admin' : 'collaboratore'),
       cognome: meta.cognome || '',
       groups: groups.map(g => ({ id: g.id, name: g.display_name })),
@@ -57,7 +58,7 @@ router.get('/users', (req: AuthRequest, res: Response) => {
 })
 
 router.post('/users', async (req: AuthRequest, res: Response) => {
-  const { email, password, nome, cognome, ruolo } = req.body
+  const { email, password, nome, cognome, ruolo, telefono, group_id } = req.body
   if (!email || !password || !nome) {
     res.status(400).json({ error: 'email, password e nome obbligatori' })
     return
@@ -76,24 +77,30 @@ router.post('/users', async (req: AuthRequest, res: Response) => {
   const tags = ['utente']
   if (ruolo === 'admin') tags.push('admin')
 
-  db.prepare(`INSERT INTO entity (id, azienda_id, type, display_name, slug, email, tags, metadata, path)
-    VALUES (?, ?, 'utente', ?, ?, ?, ?, ?, ?)`).run(
-    userId, req.aziendaId, displayName, slug, email,
+  db.prepare(`INSERT INTO entity (id, azienda_id, type, display_name, slug, email, telefono, tags, metadata, path)
+    VALUES (?, ?, 'utente', ?, ?, ?, ?, ?, ?, ?)`).run(
+    userId, req.aziendaId, displayName, slug, email, telefono || null,
     JSON.stringify(tags),
     JSON.stringify({ password_hash: passwordHash, cognome: cognome || '', ruolo: ruolo || 'collaboratore', tts_voice: 'Vivian' }),
     `/entity/utente/${slug}`
   )
 
-  // Create membro_di relation
+  // Create membro_di relation (to org)
   db.prepare(`INSERT OR IGNORE INTO relations (id, azienda_id, from_id, to_id, tipo)
     VALUES (?, ?, ?, ?, 'membro_di')`).run(crypto.randomUUID(), req.aziendaId, userId, req.aziendaId)
+
+  // Assign to group if specified
+  if (group_id) {
+    db.prepare(`INSERT OR IGNORE INTO relations (id, azienda_id, from_id, to_id, tipo)
+      VALUES (?, ?, ?, ?, 'membro_di_gruppo')`).run(crypto.randomUUID(), req.aziendaId, userId, group_id)
+  }
 
   res.json({ id: userId, display_name: displayName, email, ruolo: ruolo || 'collaboratore' })
 })
 
-router.put('/users/:id', (req: AuthRequest, res: Response) => {
-  const { ruolo, nome, cognome } = req.body
-  const user = db.prepare("SELECT metadata, tags FROM entity WHERE id = ? AND type = 'utente'").get(req.params.id) as any
+router.put('/users/:id', async (req: AuthRequest, res: Response) => {
+  const { ruolo, nome, cognome, email, telefono, password, group_id } = req.body
+  const user = db.prepare("SELECT metadata, tags, email as current_email FROM entity WHERE id = ? AND type = 'utente'").get(req.params.id) as any
   if (!user) { res.status(404).json({ error: 'Utente non trovato' }); return }
 
   const meta = typeof user.metadata === 'string' ? JSON.parse(user.metadata) : (user.metadata || {})
@@ -105,6 +112,7 @@ router.put('/users/:id', (req: AuthRequest, res: Response) => {
     if (ruolo !== 'admin') tags = tags.filter((t: string) => t !== 'admin')
   }
   if (cognome !== undefined) meta.cognome = cognome
+  if (password) meta.password_hash = await bcrypt.hash(password, 10)
 
   const updates: string[] = ['metadata = ?', 'tags = ?']
   const params: any[] = [JSON.stringify(meta), JSON.stringify(tags)]
@@ -114,9 +122,22 @@ router.put('/users/:id', (req: AuthRequest, res: Response) => {
     updates.push('display_name = ?')
     params.push(displayName)
   }
+  if (email !== undefined) { updates.push('email = ?'); params.push(email) }
+  if (telefono !== undefined) { updates.push('telefono = ?'); params.push(telefono || null) }
 
   params.push(req.params.id)
   db.prepare(`UPDATE entity SET ${updates.join(', ')} WHERE id = ?`).run(...params)
+
+  // Update group membership if specified
+  if (group_id !== undefined) {
+    // Remove from all groups first
+    db.prepare("DELETE FROM relations WHERE from_id = ? AND tipo = 'membro_di_gruppo'").run(req.params.id)
+    // Add to new group (if not empty)
+    if (group_id) {
+      db.prepare(`INSERT OR IGNORE INTO relations (id, azienda_id, from_id, to_id, tipo)
+        VALUES (?, ?, ?, ?, 'membro_di_gruppo')`).run(crypto.randomUUID(), req.aziendaId, req.params.id, group_id)
+    }
+  }
 
   res.json({ successo: true })
 })

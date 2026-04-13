@@ -152,15 +152,38 @@ export default function AdminPage() {
 function UsersTab({ users, groups, onReload }: { users: User[]; groups: Group[]; onReload: () => void }) {
   const [showNew, setShowNew] = useState(false)
   const [search, setSearch] = useState('')
-  const [form, setForm] = useState({ nome: '', cognome: '', email: '', password: '', ruolo: 'collaboratore' })
+  const [editId, setEditId] = useState<string | null>(null)
+  const [form, setForm] = useState({ nome: '', cognome: '', email: '', password: '', telefono: '', group_id: '' })
+  const [editForm, setEditForm] = useState({ nome: '', cognome: '', email: '', telefono: '', password: '', group_id: '' })
 
   const createUser = async () => {
     if (!form.nome || !form.email || !form.password) { toast.error('Compila nome, email e password'); return }
-    const res = await api('/users', 'POST', form)
+    const res = await api('/users', 'POST', { ...form, group_id: form.group_id || undefined })
     if (res.error) { toast.error(res.error); return }
     toast.success(`Utente ${form.nome} creato`)
     setShowNew(false)
-    setForm({ nome: '', cognome: '', email: '', password: '', ruolo: 'collaboratore' })
+    setForm({ nome: '', cognome: '', email: '', password: '', telefono: '', group_id: '' })
+    onReload()
+  }
+
+  const startEdit = (u: User) => {
+    setEditId(u.id)
+    const nameParts = u.display_name.split(' ')
+    setEditForm({
+      nome: nameParts[0] || '', cognome: nameParts.slice(1).join(' ') || u.cognome || '',
+      email: u.email, telefono: (u as any).telefono || '', password: '',
+      group_id: u.groups[0]?.id || '',
+    })
+  }
+
+  const saveEdit = async () => {
+    if (!editId) return
+    const body: any = { nome: editForm.nome, cognome: editForm.cognome, email: editForm.email, telefono: editForm.telefono }
+    if (editForm.password) body.password = editForm.password
+    if (editForm.group_id !== undefined) body.group_id = editForm.group_id || null
+    await api(`/users/${editId}`, 'PUT', body)
+    toast.success('Utente aggiornato')
+    setEditId(null)
     onReload()
   }
 
@@ -175,6 +198,8 @@ function UsersTab({ users, groups, onReload }: { users: User[]; groups: Group[];
     ? users.filter(u => u.display_name.toLowerCase().includes(search.toLowerCase()) || u.email.toLowerCase().includes(search.toLowerCase()))
     : users
 
+  const inputCls = "px-3 py-1.5 text-xs bg-bg3 border border-border rounded-lg text-text w-full"
+
   return (
     <div className="space-y-3">
       <div className="flex gap-2 justify-between">
@@ -187,14 +212,15 @@ function UsersTab({ users, groups, onReload }: { users: User[]; groups: Group[];
       {showNew && (
         <div className="bg-bg2 border border-border rounded-xl p-4 space-y-3">
           <h3 className="text-sm font-semibold text-text">Nuovo utente</h3>
-          <div className="grid grid-cols-2 gap-3">
-            <input value={form.nome} onChange={e => setForm(f => ({ ...f, nome: e.target.value }))} placeholder="Nome *" className="px-3 py-2 text-xs bg-bg3 border border-border rounded-lg text-text" />
-            <input value={form.cognome} onChange={e => setForm(f => ({ ...f, cognome: e.target.value }))} placeholder="Cognome" className="px-3 py-2 text-xs bg-bg3 border border-border rounded-lg text-text" />
-            <input value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} placeholder="Email *" type="email" className="px-3 py-2 text-xs bg-bg3 border border-border rounded-lg text-text" />
-            <input value={form.password} onChange={e => setForm(f => ({ ...f, password: e.target.value }))} placeholder="Password *" type="password" className="px-3 py-2 text-xs bg-bg3 border border-border rounded-lg text-text" />
-            <select value={form.ruolo} onChange={e => setForm(f => ({ ...f, ruolo: e.target.value }))} className="px-3 py-2 text-xs bg-bg3 border border-border rounded-lg text-text">
-              {groups.map(g => <option key={g.id} value={g.name}>{g.name}</option>)}
-              {groups.length === 0 && <option value="Operatori">Operatori</option>}
+          <div className="grid grid-cols-3 gap-3">
+            <input value={form.nome} onChange={e => setForm(f => ({ ...f, nome: e.target.value }))} placeholder="Nome *" className={inputCls} />
+            <input value={form.cognome} onChange={e => setForm(f => ({ ...f, cognome: e.target.value }))} placeholder="Cognome" className={inputCls} />
+            <input value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} placeholder="Email *" type="email" className={inputCls} />
+            <input value={form.password} onChange={e => setForm(f => ({ ...f, password: e.target.value }))} placeholder="Password *" type="password" className={inputCls} />
+            <input value={form.telefono} onChange={e => setForm(f => ({ ...f, telefono: e.target.value }))} placeholder="Telefono (es. 393471234567)" className={inputCls} />
+            <select value={form.group_id} onChange={e => setForm(f => ({ ...f, group_id: e.target.value }))} className={inputCls}>
+              <option value="">-- Gruppo --</option>
+              {groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
             </select>
           </div>
           <div className="flex gap-2 justify-end">
@@ -204,33 +230,70 @@ function UsersTab({ users, groups, onReload }: { users: User[]; groups: Group[];
         </div>
       )}
 
-      <div className="bg-bg2 border border-border rounded-xl overflow-hidden">
-        <table className="w-full text-xs">
-          <thead><tr className="bg-bg3">
-            <th className="px-4 py-2.5 text-left text-text3 font-medium">Nome</th>
-            <th className="px-4 py-2.5 text-left text-text3 font-medium">Email</th>
-            <th className="px-4 py-2.5 text-left text-text3 font-medium">Gruppi</th>
-            <th className="px-4 py-2.5 w-16" />
-          </tr></thead>
-          <tbody>
-            {filtered.map(u => (
-              <tr key={u.id} className="border-t border-border hover:bg-bg3/50">
-                <td className="px-4 py-2.5 text-text font-medium">{u.display_name}</td>
-                <td className="px-4 py-2.5 text-text2">{u.email}</td>
-                <td className="px-4 py-2.5">
-                  <div className="flex gap-1 flex-wrap">
-                    {u.groups.length === 0 ? <span className="text-text3 italic">Nessuno</span> : u.groups.map(g => (
-                      <span key={g.id} className="px-1.5 py-0.5 rounded bg-bg3 text-text2 text-[10px]">{g.name}</span>
-                    ))}
+      <div className="space-y-1.5">
+        {filtered.map(u => (
+          <div key={u.id} className="bg-bg2 border border-border rounded-xl overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-2.5">
+              <div className="flex items-center gap-3 flex-1 min-w-0">
+                <div className="min-w-0">
+                  <span className="text-xs font-medium text-text">{u.display_name}</span>
+                  <span className="text-[10px] text-text3 ml-2">{u.email}</span>
+                </div>
+                <div className="flex gap-1 flex-wrap">
+                  {u.groups.map(g => (
+                    <span key={g.id} className="px-1.5 py-0.5 rounded bg-gold/10 text-gold text-[10px]">{g.name}</span>
+                  ))}
+                  {u.groups.length === 0 && <span className="text-[10px] text-text3 italic">Nessun gruppo</span>}
+                </div>
+              </div>
+              <div className="flex items-center gap-1">
+                <button onClick={() => editId === u.id ? setEditId(null) : startEdit(u)} className="p-1 rounded hover:bg-bg3 text-text3 hover:text-gold">
+                  {editId === u.id ? <ChevronDown size={14} /> : <Settings size={14} />}
+                </button>
+                <button onClick={() => deleteUser(u.id, u.display_name)} className="p-1 rounded hover:bg-red/10 text-text3 hover:text-red"><Trash2 size={14} /></button>
+              </div>
+            </div>
+
+            {editId === u.id && (
+              <div className="px-4 pb-3 pt-1 border-t border-border space-y-2">
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <label className="text-[10px] text-text3 block mb-0.5">Nome</label>
+                    <input value={editForm.nome} onChange={e => setEditForm(f => ({ ...f, nome: e.target.value }))} className={inputCls} />
                   </div>
-                </td>
-                <td className="px-4 py-2.5">
-                  <button onClick={() => deleteUser(u.id, u.display_name)} className="p-1 rounded hover:bg-red/10 text-text3 hover:text-red"><Trash2 size={14} /></button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                  <div>
+                    <label className="text-[10px] text-text3 block mb-0.5">Cognome</label>
+                    <input value={editForm.cognome} onChange={e => setEditForm(f => ({ ...f, cognome: e.target.value }))} className={inputCls} />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-text3 block mb-0.5">Email</label>
+                    <input value={editForm.email} onChange={e => setEditForm(f => ({ ...f, email: e.target.value }))} type="email" className={inputCls} />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-text3 block mb-0.5">Telefono</label>
+                    <input value={editForm.telefono} onChange={e => setEditForm(f => ({ ...f, telefono: e.target.value }))} placeholder="393471234567" className={inputCls} />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-text3 block mb-0.5">Nuova password (vuoto = invariata)</label>
+                    <input value={editForm.password} onChange={e => setEditForm(f => ({ ...f, password: e.target.value }))} type="password" placeholder="Lascia vuoto per non cambiare" className={inputCls} />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-text3 block mb-0.5">Gruppo</label>
+                    <select value={editForm.group_id} onChange={e => setEditForm(f => ({ ...f, group_id: e.target.value }))} className={inputCls}>
+                      <option value="">-- Nessun gruppo --</option>
+                      {groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <div className="flex justify-end">
+                  <button onClick={saveEdit} className="flex items-center gap-1 px-3 py-1.5 text-xs bg-gold text-white rounded-lg">
+                    <Save size={12} /> Salva
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
       </div>
     </div>
   )
