@@ -266,7 +266,7 @@ export const TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
   planning_analizza: { type: 'function', function: { name: 'planning_analizza', description: 'Diagnostica perche un viaggio non e stato assegnato', parameters: { type: 'object', properties: { codice_bg: { type: 'string', description: 'Codice BG' }, data: { type: 'string', description: 'Data YYYY-MM-DD' } }, required: ['codice_bg', 'data'] } } },
   planning_pianificazione_corrente: { type: 'function', function: { name: 'planning_pianificazione_corrente', description: 'Assegnazioni correnti per una data. Ritorna lista con {bg, autista, targa_semi, tipo_semi, luogo_carico, luogo_scarico, data_carico, data_scarico, cliente}', parameters: { type: 'object', properties: { data: { type: 'string' } }, required: ['data'] } } },
   planning_cerca_autista: { type: 'function', function: { name: 'planning_cerca_autista', description: 'Cerca autista per nome — restituisce posizione, impegni, skill. NOTA: la ricerca fuzzy puo dare match errati, verifica sempre il nome nel risultato.', parameters: { type: 'object', properties: { nome: { type: 'string' } }, required: ['nome'] } } },
-  planning_tutti_autisti: { type: 'function', function: { name: 'planning_tutti_autisti', description: 'Lista COMPLETA autisti. Ritorna {autisti_interni: [{id, nome, tipo}], trazionisti: [{id, nome, tipo}]}. Per cercare: [...result.autisti_interni, ...result.trazionisti].find(a => a.nome.toLowerCase().includes("nome"))', parameters: { type: 'object', properties: {} } } },
+  planning_tutti_autisti: { type: 'function', function: { name: 'planning_tutti_autisti', description: 'Lista COMPLETA autisti. Ritorna {autisti_interni: [{id, nome, tipo}], trazionisti: [{id, nome, tipo}]}. Per cercare: [...(r.autisti_interni||[]), ...(r.trazionisti||[])].filter(a => a.nome.toLowerCase().includes(query.toLowerCase())). Se trovi piu match, filtra con il nome PIU specifico (es. "DRAGOS 5" non "DRAGOS 1"). Se l utente cerca "dragos5" cerca "dragos 5" (con spazio).', parameters: { type: 'object', properties: {} } } },
 
   // ── Weather ──
   get_weather: { type: 'function', function: { name: 'get_weather', description: 'Meteo attuale e previsioni per una citta. Restituisce temperatura, condizioni, vento, umidita. Supporta previsioni fino a 16 giorni con dettaglio orario.', parameters: { type: 'object', properties: {
@@ -1849,6 +1849,11 @@ async function _executeTool(name: string, aziendaId: string, args?: Record<strin
     case 'planning_pianificazione_corrente':
     case 'planning_cerca_autista': {
       const { planningCall } = await import('../planning-proxy.js')
+      // Safety: if LLM passed a string instead of object, wrap it
+      if (typeof input === 'string') {
+        const key = name === 'planning_eta' ? 'nome_autista' : name === 'planning_gps' ? 'targa' : name === 'planning_cerca_autista' ? 'nome' : 'data'
+        return await planningCall(name.replace('planning_', ''), { [key]: input })
+      }
       // Map tool name to API endpoint
       const endpointMap: Record<string, string> = {
         planning_viaggi: 'viaggi', planning_suggerisci: 'suggerisci', planning_assegna: 'assegna',
