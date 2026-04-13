@@ -26,6 +26,33 @@ import { initEmbeddings } from './embeddings.js'
 import { initAutonomousAgents } from './agents/autonomous.js'
 import { initWorkflows } from './agents/workflows.js'
 
+// Pre-migration: fix legacy foreign key constraints on chat tables
+// The old schema referenced aziende(id) and user_profiles(id) which don't exist in VFS model
+try {
+  const sessSchema = (db.prepare("SELECT sql FROM sqlite_master WHERE name = 'chat_sessions'").get() as any)?.sql || ''
+  if (sessSchema.includes('REFERENCES aziende') || sessSchema.includes('REFERENCES user_profiles')) {
+    console.log('[Migration] Recreating chat_sessions without legacy foreign keys...')
+    db.exec(`
+      CREATE TABLE chat_sessions_new (id TEXT PRIMARY KEY, azienda_id TEXT, user_id TEXT, titolo TEXT NOT NULL DEFAULT 'Nuova conversazione', channel TEXT DEFAULT 'web', agent_domain TEXT, deleted_at TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')));
+      INSERT INTO chat_sessions_new SELECT id, azienda_id, user_id, titolo, channel, agent_domain, deleted_at, created_at, updated_at FROM chat_sessions;
+      DROP TABLE chat_sessions;
+      ALTER TABLE chat_sessions_new RENAME TO chat_sessions;
+    `)
+    console.log('[Migration] chat_sessions recreated without FK constraints')
+  }
+  const msgSchema = (db.prepare("SELECT sql FROM sqlite_master WHERE name = 'chat_messages'").get() as any)?.sql || ''
+  if (msgSchema.includes('REFERENCES chat_sessions') || msgSchema.includes('CHECK')) {
+    console.log('[Migration] Recreating chat_messages without legacy constraints...')
+    db.exec(`
+      CREATE TABLE chat_messages_new (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, user_id TEXT, ruolo TEXT NOT NULL, contenuto TEXT NOT NULL, tool_calls TEXT, agent_domain TEXT, agent_name TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')));
+      INSERT INTO chat_messages_new SELECT id, session_id, user_id, ruolo, contenuto, tool_calls, agent_domain, agent_name, created_at FROM chat_messages;
+      DROP TABLE chat_messages;
+      ALTER TABLE chat_messages_new RENAME TO chat_messages;
+    `)
+    console.log('[Migration] chat_messages recreated without FK/CHECK constraints')
+  }
+} catch (err) { console.warn('[Migration] Chat table fix error:', (err as Error).message) }
+
 // Pre-migration: add columns to existing tables (idempotent, must run BEFORE schema SQL)
 try { db.exec("ALTER TABLE user_profiles ADD COLUMN tts_voice TEXT DEFAULT 'Vivian'") } catch {}
 try { db.exec("ALTER TABLE chat_sessions ADD COLUMN channel TEXT DEFAULT 'web'") } catch {}

@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS user_profiles (
 );
 
 -- ── Chat sessions & messages (unified across all channels) ──
+-- NOTE: no foreign keys to aziende/user_profiles — system uses entity table (VFS)
 CREATE TABLE IF NOT EXISTS chat_sessions (
   id          TEXT PRIMARY KEY,
   azienda_id  TEXT,
