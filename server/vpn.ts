@@ -68,13 +68,12 @@ router.get('/status', (_req: AuthRequest, res: Response) => {
     }
   }
 
-  // Check tun interface
+  // Check tun interface (use /sys/class/net since `ip` may not be installed in slim containers)
   let tunActive = false
   try {
-    const ifaces = execSync('ip addr show tun0 2>/dev/null || true', { encoding: 'utf-8' })
-    tunActive = ifaces.includes('tun0')
-    if (tunActive && vpnStatus !== 'connected') vpnStatus = 'connected'
-    if (!tunActive && vpnStatus === 'connected') vpnStatus = 'disconnected'
+    tunActive = fs.existsSync('/sys/class/net/tun0')
+    if (tunActive && vpnStatus !== 'connected') { vpnStatus = 'connected'; if (!vpnConnectedAt) vpnConnectedAt = new Date().toISOString() }
+    if (!tunActive && vpnStatus === 'connected') { vpnStatus = 'disconnected'; vpnConnectedAt = null }
   } catch {}
 
   // Get recent log lines
@@ -114,12 +113,15 @@ router.post('/connect', (_req: AuthRequest, res: Response) => {
     // Clear old log
     fs.writeFileSync(VPN_LOG, '')
 
-    vpnProcess = spawn('sudo', [
-      'openvpn',
+    // Askpass file for encrypted private key (separate from auth password)
+    const askpassFile = path.join(VPN_DIR, 'key-pass.txt')
+
+    vpnProcess = spawn('openvpn', [
       '--config', VPN_CONFIG,
       '--cd', VPN_DIR,
       '--log', VPN_LOG,
       '--writepid', VPN_PID_FILE,
+      '--askpass', askpassFile,
       '--daemon', 'bernardini-vpn',
     ], {
       detached: true,
@@ -171,12 +173,12 @@ router.post('/disconnect', (_req: AuthRequest, res: Response) => {
     // Kill by PID file
     if (fs.existsSync(VPN_PID_FILE)) {
       const pid = fs.readFileSync(VPN_PID_FILE, 'utf-8').trim()
-      try { execSync(`sudo kill ${pid} 2>/dev/null`) } catch {}
+      try { execSync(`kill ${pid} 2>/dev/null`) } catch {}
       fs.unlinkSync(VPN_PID_FILE)
     }
 
     // Kill by process name
-    try { execSync('sudo killall openvpn 2>/dev/null') } catch {}
+    try { execSync('killall openvpn 2>/dev/null') } catch {}
 
     // Kill tracked process
     if (vpnProcess) {
