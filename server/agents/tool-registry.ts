@@ -265,7 +265,8 @@ export const TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
   planning_dettaglio: { type: 'function', function: { name: 'planning_dettaglio', description: 'Dettaglio completo di un viaggio (BG, cliente, localita, date, container, genere)', parameters: { type: 'object', properties: { bg: { type: 'string' } }, required: ['bg'] } } },
   planning_analizza: { type: 'function', function: { name: 'planning_analizza', description: 'Diagnostica perche un viaggio non e stato assegnato', parameters: { type: 'object', properties: { bg: { type: 'string' } }, required: ['bg'] } } },
   planning_pianificazione_corrente: { type: 'function', function: { name: 'planning_pianificazione_corrente', description: 'Assegnazioni correnti per una data', parameters: { type: 'object', properties: { data: { type: 'string' } }, required: ['data'] } } },
-  planning_cerca_autista: { type: 'function', function: { name: 'planning_cerca_autista', description: 'Cerca autista per nome — restituisce posizione, impegni, skill', parameters: { type: 'object', properties: { nome: { type: 'string' } }, required: ['nome'] } } },
+  planning_cerca_autista: { type: 'function', function: { name: 'planning_cerca_autista', description: 'Cerca autista per nome — restituisce posizione, impegni, skill. NOTA: la ricerca fuzzy puo dare match errati, verifica sempre il nome nel risultato.', parameters: { type: 'object', properties: { nome: { type: 'string' } }, required: ['nome'] } } },
+  planning_tutti_autisti: { type: 'function', function: { name: 'planning_tutti_autisti', description: 'Lista COMPLETA di tutti gli autisti (interni + trazionisti/esterni) con ID, nome, tipo. Utile per cercare un autista quando planning_cerca_autista non lo trova.', parameters: { type: 'object', properties: {} } } },
 
   // ── Weather ──
   get_weather: { type: 'function', function: { name: 'get_weather', description: 'Meteo attuale e previsioni per una citta. Restituisce temperatura, condizioni, vento, umidita. Supporta previsioni fino a 16 giorni con dettaglio orario.', parameters: { type: 'object', properties: {
@@ -334,7 +335,7 @@ const TOOL_ACTIONS: Record<string, string> = {
   planning_semirimorchi: 'read', planning_gps: 'read', planning_distanza: 'read',
   planning_statistiche: 'read', planning_confronta: 'read', planning_storico: 'read',
   planning_dettaglio: 'read', planning_analizza: 'read', planning_conflitti: 'read',
-  planning_pianificazione_corrente: 'read', planning_cerca_autista: 'read',
+  planning_pianificazione_corrente: 'read', planning_cerca_autista: 'read', planning_tutti_autisti: 'read',
   planning_eta: 'read', planning_scenario: 'read',
   planning_suggerisci: 'create', planning_assegna: 'create',
   get_email_status: 'read', read_inbox: 'read', read_email: 'read',
@@ -1823,6 +1824,11 @@ async function _executeTool(name: string, aziendaId: string, args?: Record<strin
     case 'planning_health': {
       const { planningHealth } = await import('../planning-proxy.js')
       return await planningHealth()
+    }
+
+    case 'planning_tutti_autisti': {
+      const { planningCall } = await import('../planning-proxy.js')
+      return await planningCall('execute', { tool: 'get_tutti_autisti', args: {} })
     }
 
     case 'planning_viaggi':

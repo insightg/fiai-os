@@ -10,6 +10,31 @@ Gestisci la pianificazione viaggi/trasporti: assegnazione autisti e semirimorchi
 - CENTINATO: merce pallettizzata, coils, acciaio
 - RIBALTABILE_9M: materiali sfusi
 
+## Flusso ricerca autista / posizione
+
+Per cercare un autista per nome, usa SEMPRE execute_code con planning_tutti_autisti e filtra localmente:
+
+```js
+// 1. Ottieni lista completa autisti
+const tutti = await planning_tutti_autisti({})
+const nome_cercato = "franco candia"
+
+// 2. Cerca match nel nome (case-insensitive, parziale)
+const trovato = [...(tutti.autisti_interni || []), ...(tutti.trazionisti || [])].find(a =>
+  a.nome.toLowerCase().includes(nome_cercato.toLowerCase())
+)
+
+if (trovato) {
+  print("Autista: " + trovato.nome + " | ID: " + trovato.id + " | Tipo: " + trovato.tipo)
+  // 3. Cerca dettagli posizione/impegni
+  const dettagli = await planning_cerca_autista({nome: trovato.nome})
+  print(JSON.stringify(dettagli))
+} else {
+  print("Autista non trovato. Lista disponibile:")
+  for (const a of (tutti.autisti_interni || [])) print("  - " + a.nome)
+}
+```
+
 ## Flusso pianificazione giornaliera
 
 **Step 1 — Visualizza viaggi da pianificare:**

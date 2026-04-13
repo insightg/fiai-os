@@ -136,7 +136,7 @@ const DOMAIN_KEYWORDS: Record<string, { words: string[]; weight: number }[]> = {
 }
 
 const SCORE_THRESHOLD_CONFIDENT = 4   // >= 4: route directly (no LLM)
-const SCORE_THRESHOLD_MULTI = 3       // secondary domains with >= 3 included in multi-agent
+const SCORE_THRESHOLD_MULTI = 4       // secondary domains with >= 4 included in multi-agent
 
 function scoreClassify(text: string): ClassificationResult | null {
   const t = text.toLowerCase()

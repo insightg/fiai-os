@@ -110,6 +110,7 @@ export async function executeCode(code: string, aziendaId: string): Promise<Code
     planning_analizza: toolProxy('planning_analizza'),
     planning_pianificazione_corrente: toolProxy('planning_pianificazione_corrente'),
     planning_cerca_autista: toolProxy('planning_cerca_autista'),
+    planning_tutti_autisti: toolProxy('planning_tutti_autisti'),
     // Media
     generate_image: toolProxy('generate_image'),
     generate_tts: toolProxy('generate_tts'),

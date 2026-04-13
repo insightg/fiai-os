@@ -17,7 +17,7 @@ const config: AgentConfig = {
     'planning_distanza', 'planning_statistiche', 'planning_confronta',
     'planning_scenario', 'planning_eta', 'planning_conflitti',
     'planning_storico', 'planning_dettaglio', 'planning_analizza',
-    'planning_pianificazione_corrente', 'planning_cerca_autista',
+    'planning_pianificazione_corrente', 'planning_tutti_autisti',
     'planning_health',
     'send_whatsapp_message', 'send_whatsapp_document',
     'send_email', 'reply_email'],
