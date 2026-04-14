@@ -8,13 +8,14 @@ import { executeAgent, directLLMResponse } from './base-agent.js'
 // import { createPlan, executePlan, formatPlanResults } from './planner.js'
 import { checkInput, checkOutput } from './safety.js'
 import db from '../db.js'
+import { getSetting } from '../settings.js'
 
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions'
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || ''
 const CLASSIFIER_MODEL = 'anthropic/claude-haiku-4.5'
 const GEMINI_MODEL = 'google/gemini-3.1-flash-image-preview'
 
-const VALID_DOMAINS: AgentDomain[] = ['pulse', 'commerciale', 'produzione', 'marketing', 'amministrazione', 'hr', 'legal', 'documents', 'it', 'doctor', 'general', 'image', 'tts']
+const VALID_DOMAINS: AgentDomain[] = ['pulse', 'commerciale', 'produzione', 'marketing', 'amministrazione', 'hr', 'legal', 'documentale', 'whatsapp', 'email', 'pianificazione', 'it', 'doctor', 'tts', 'general']
 
 interface ConversationMessage {
   role: string
@@ -24,31 +25,149 @@ interface ConversationMessage {
 type ResponseMode = 'minimal' | 'iteration' | 'full'
 
 // ── Caches ─────────────────────────────────────────────
-const sessionDomainCache = new Map<string, AgentDomain>()
+const sessionDomainCache = new Map<string, { domain: AgentDomain; ts: number }>()
+const SESSION_DOMAIN_TTL = 600000 // 10 minutes
+
+function getSessionDomain(sessionId: string): AgentDomain | undefined {
+  const entry = sessionDomainCache.get(sessionId)
+  if (!entry) return undefined
+  if (Date.now() - entry.ts > SESSION_DOMAIN_TTL) { sessionDomainCache.delete(sessionId); return undefined }
+  return entry.domain
+}
+
+function setSessionDomain(sessionId: string, domain: AgentDomain) {
+  sessionDomainCache.set(sessionId, { domain, ts: Date.now() })
+}
 const contextCache = new Map<string, { content: string; ts: number }>()
 
 // ── Image History (for analysis/rework) ────────────────
 const imageHistory = new Map<string, string[]>()
 
-// ── Quick Classify Keywords (instant, no LLM call) ─────
+// ── Scoring-based classifier (fast, handles multi-domain) ──
 
-// Minimal fast-path — only for cases where the planner would waste time
-// All business domain routing is handled by the planner LLM
-function quickClassifyKeywords(text: string): AgentDomain | null {
-  const t = text.toLowerCase().trim()
-  // TTS keywords → route to TTS agent
-  if (/\btts\b|sintesi vocale|lista voci|imposta voce|clona.*voce|voce predefinita/.test(t)) return 'tts'
-  // WhatsApp keywords → route to WhatsApp agent (MUST have send tools)
-  if (/\bwhatsapp\b|\bwhapp\b|\bwapp\b|manda.*(?:a|via)\s|invia.*(?:a|via)\s.*(?:messaggio|vocale|immagine|documento|video)|manda.*messaggio/i.test(t)) return 'whatsapp'
-  // Document keywords → route to Documentale (has retrieve, list_documents, explore_document)
-  // Catches ANY reference to documents, books, or content search — regardless of topic
-  if (/\bbibbia\b|\bcodice civile\b|\bcontratto\b|\bnormativa\b|\bmanuale\b|\breport\b|\blibro\b/i.test(t)) return 'documentale'
-  if (/analizza.*document|cerca.*document|cerca.*dentro|contenuto.*document|riassumi.*document/i.test(t)) return 'documentale'
-  if (/\barticol[oi]\b|\bclausol[ae]\b|\bcapitolo\b|\bversett[oi]\b|\bvangel[oi]\b|\bsezione\b/i.test(t)) return 'documentale'
-  if (/cosa dice|cosa racconta|parlami di.*nel|racconta.*dal|cerca nel|nel documento|nei documenti|dall[ae].*document/i.test(t)) return 'documentale'
-  if (/document[oi]|archivio|caricato|upload/i.test(t) && /cerca|analizza|riassumi|leggi|mostra|confronta|spiega/i.test(t)) return 'documentale'
-  // Everything else → let the classifier decide
-  return null
+const DOMAIN_KEYWORDS: Record<string, { words: string[]; weight: number }[]> = {
+  pulse: [
+    { words: ['overview', 'kpi', 'briefing', 'riepilogo', 'stato azienda', 'andamento', 'cruscotto', 'dashboard', 'daily brief'], weight: 3 },
+    { words: ['come va', 'stato generale', 'fatturato complessivo', 'margini'], weight: 2 },
+  ],
+  commerciale: [
+    { words: ['cliente', 'clienti', 'lead', 'prospect', 'pipeline', 'opportunità'], weight: 3 },
+    { words: ['preventivo', 'preventivi', 'offerta', 'offerte', 'trattativa', 'vendita', 'vendite'], weight: 3 },
+    { words: ['ordine', 'ordini', 'commessa', 'brief pre-call', 'nuovo cliente'], weight: 2 },
+  ],
+  produzione: [
+    { words: ['progetto', 'progetti', 'milestone', 'avanzamento', 'delivery', 'deadline'], weight: 3 },
+    { words: ['stato progetto', 'rischi progetto', 'sprint', 'task'], weight: 3 },
+  ],
+  marketing: [
+    { words: ['contenuti', 'campagna', 'campagne', 'brand', 'social', 'newsletter', 'post'], weight: 3 },
+    { words: ['genera immagine', 'crea immagine', 'disegna', 'illustra', 'crea logo', 'grafiche'], weight: 4 },
+    { words: ['lead scoring', 'seo', 'sem'], weight: 2 },
+  ],
+  amministrazione: [
+    { words: ['fattura', 'fatture', 'conti', 'liquidità', 'scadenze fiscali', 'rimborsi'], weight: 3 },
+    { words: ['budget', 'fornitori', 'cash flow', 'pagamenti', 'fatturato', 'f24'], weight: 3 },
+    { words: ['bilancio', 'iva', 'contabilità'], weight: 2 },
+  ],
+  hr: [
+    { words: ['candidato', 'candidati', 'recruiting', 'onboarding', 'curriculum', 'selezione'], weight: 3 },
+    { words: ['annuncio lavoro', 'annunci lavoro', 'costo aziendale', 'personale'], weight: 3 },
+    { words: ['dipendente', 'dipendenti', 'stipendio', 'stipendi', 'ferie', 'permessi'], weight: 2 },
+  ],
+  legal: [
+    { words: ['compliance', 'gdpr', 'privacy', 'normativa', 'giuridica'], weight: 3 },
+    { words: ['contratto', 'contratti', 'clausola', 'legale'], weight: 2 },
+  ],
+  documentale: [
+    { words: ['documento', 'documenti', 'archivio', 'documentale'], weight: 2 },
+    { words: ['articolo', 'articoli', 'codice civile', 'normativa', 'legge', 'regolamento'], weight: 3 },
+    { words: ['bibbia', 'vangelo', 'capitolo', 'versetto', 'sezione'], weight: 3 },
+    { words: ['cerca nel', 'nel documento', 'nei documenti', 'contenuto', 'riassumi'], weight: 2 },
+    { words: ['manuale', 'procedura', 'specifica'], weight: 2 },
+  ],
+  email: [
+    { words: ['email', 'e-mail', 'mail', 'posta', 'inbox', 'casella'], weight: 3 },
+    { words: ['invia email', 'invia mail', 'manda mail', 'scrivi mail', 'leggi mail', 'leggi email'], weight: 4 },
+  ],
+  pianificazione: [
+    { words: ['viaggio', 'viaggi', 'pianificazione', 'pianifica', 'piano trasporti', 'planner'], weight: 4 },
+    { words: ['autista', 'autisti', 'conducente', 'conducenti', 'camionista', 'camionisti'], weight: 4 },
+    { words: ['semirimorchio', 'semirimorchi', 'rimorchio', 'targa', 'mezzo', 'camion'], weight: 3 },
+    { words: ['carico', 'scarico', 'consegna', 'ritiro', 'trasporto', 'spedizione'], weight: 2 },
+    { words: ['gps', 'posizione', 'tracking', 'traccia', 'dove si trova', 'localizzazione'], weight: 3 },
+    { words: ['silos', 'rotocella', 'centinato', 'portacontainer', 'ribaltabile'], weight: 3 },
+    { words: ['assegnazione', 'assegna', 'ottimizza', 'ottimizzazione'], weight: 3 },
+    { words: ['flotta', 'parco mezzi', 'eu 561', 'ore guida'], weight: 3 },
+  ],
+  whatsapp: [
+    { words: ['whatsapp', 'wapp', 'whapp'], weight: 4 },
+    { words: ['invia whatsapp', 'manda whatsapp', 'vocale whatsapp'], weight: 5 },
+  ],
+  tts: [
+    { words: ['tts', 'sintesi vocale', 'voce', 'leggi ad alta voce', 'pronuncia'], weight: 3 },
+    { words: ['lista voci', 'imposta voce', 'clona voce'], weight: 4 },
+  ],
+  general: [
+    { words: ['che ore', 'che ora', 'che giorno', 'che data', 'ora esatta', 'data oggi', 'ore sono', 'giorno è'], weight: 4 },
+    { words: ['meteo', 'tempo fa', 'previsioni', 'temperatura', 'piove', 'che tempo'], weight: 4 },
+    { words: ['genera pdf'], weight: 3 },
+    { words: ['ciao', 'buongiorno', 'buonasera', 'grazie', 'salve'], weight: 1 },
+  ],
+  it: [
+    { words: ['costi api', 'openrouter', 'token', 'agente autonomo', 'workflow'], weight: 3 },
+    { words: ['utenti sistema', 'configurazione', 'debug', 'diagnostica'], weight: 2 },
+  ],
+  doctor: [
+    { words: ['diagnostica', 'salute dati', 'check-up', 'performance sistema'], weight: 3 },
+    { words: ['job falliti', 'stato servizi', 'errori sistema'], weight: 3 },
+  ],
+}
+
+const SCORE_THRESHOLD_CONFIDENT = 4   // >= 4: route directly (no LLM)
+const SCORE_THRESHOLD_MULTI = 4       // secondary domains with >= 4 included in multi-agent
+
+function scoreClassify(text: string): ClassificationResult | null {
+  const t = text.toLowerCase()
+  const scores: Record<string, number> = {}
+
+  for (const [domain, groups] of Object.entries(DOMAIN_KEYWORDS)) {
+    let score = 0
+    for (const group of groups) {
+      for (const keyword of group.words) {
+        if (t.includes(keyword)) {
+          score += group.weight
+        }
+      }
+    }
+    if (score > 0) scores[domain] = score
+  }
+
+  const sorted = Object.entries(scores).sort((a, b) => b[1] - a[1])
+  if (sorted.length === 0) return null
+
+  const [topDomain, topScore] = sorted[0]
+
+  // Not confident enough → let LLM decide
+  if (topScore < SCORE_THRESHOLD_CONFIDENT) return null
+
+  // Check for multi-domain
+  const secondaryDomains = sorted.slice(1)
+    .filter(([, score]) => score >= SCORE_THRESHOLD_MULTI)
+    .map(([domain]) => domain as AgentDomain)
+
+  const needsMultiAgent = secondaryDomains.length > 0 && topScore < 6
+
+  // Confidence: normalize score (4=0.7, 6=0.85, 8+=0.95)
+  const confidence = Math.min(0.95, 0.5 + topScore * 0.075)
+
+  console.log(`[ScoreClassify] Scores: ${sorted.map(([d, s]) => `${d}=${s}`).join(', ')} → ${topDomain} (${confidence.toFixed(2)})${needsMultiAgent ? ' MULTI: ' + secondaryDomains.join(',') : ''}`)
+
+  return {
+    domain: topDomain as AgentDomain,
+    confidence,
+    needsMultiAgent,
+    secondaryDomains: needsMultiAgent ? secondaryDomains : [],
+  }
 }
 
 // ── Response Mode Detection ────────────────────────────
@@ -85,8 +204,9 @@ function detectResponseMode(message: string, historyLength: number): ResponseMod
 
 // ── Classify Intent (LLM-based) ────────────────────────
 
-const CLASSIFICATION_PROMPT =
-  'Sei un classificatore di intenti per FIAI, un gestionale aziendale italiano. ' +
+function getClassificationPrompt() {
+  const cn = getSetting('company_name')
+  return 'Sei un classificatore di intenti per il gestionale ' + cn + '. ' +
   "Analizza il messaggio dell'utente e classifica il dominio principale. " +
   'I domini disponibili sono:\n' +
   "- pulse: overview aziendale, briefing, riepilogo generale, daily brief, come va l'azienda, stato generale\n" +
@@ -96,14 +216,17 @@ const CLASSIFICATION_PROMPT =
   '- amministrazione: fatture, conti, liquidita, scadenze fiscali, rimborsi, budget, fornitori, cash flow, pagamenti, fatturato\n' +
   '- hr: candidati, annunci lavoro, recruiting, onboarding, costo aziendale, curriculum, selezione\n' +
   '- legal: analisi giuridica, compliance, interpretazione normativa, GDPR, privacy\n' +
-  '- documentale: QUALSIASI richiesta su documenti caricati nel sistema — cerca dentro documenti, riassumi, confronta, analizza contenuto, articoli, clausole, capitoli, versetti. Vale per QUALSIASI tipo di documento: legale, religioso, letterario, tecnico, scientifico. Se l\'utente menziona un documento specifico (bibbia, codice civile, contratto, report, manuale, libro) → documentale. Se chiede "cosa dice", "cerca dentro", "racconta", "analizza", "riassumi" riferito a un documento → documentale.\n' +
+  '- documentale: QUALSIASI richiesta su documenti caricati nel sistema — cerca dentro documenti, riassumi, confronta, analizza contenuto, articoli, clausole, capitoli, versetti. Se l\'utente menziona un documento specifico → documentale.\n' +
+  '- email: casella di posta, invio email/mail, lettura email, allegati email, inbox, posta elettronica. SOLO se l\'utente menziona esplicitamente "email", "mail", "posta".\n' +
+  '- pianificazione: pianificazione trasporti, viaggi, autisti, semirimorchi, assegnazione mezzi, GPS tracking, flotta, carico/scarico, EU 561, ottimizzazione trasporti\n' +
   '- it: costi API, utenti, ruoli, configurazione, agenti autonomi, workflow, AgentOps\n' +
   '- doctor: diagnostica sistema, salute dati, problemi, errori, check-up, performance, job falliti, stato servizi\n' +
   '- tts: sintesi vocale, text-to-speech, leggi ad alta voce, pronuncia, voce, audio, parla, clona voce\n' +
   '- general: saluti, domande generiche, conversazione\n\n' +
   'IMPORTANTE: Le richieste di generazione immagini vanno SEMPRE a "marketing".\n' +
   'Le richieste di leggere, pronunciare o generare audio vanno SEMPRE a "tts".\n' +
-  'Le richieste su contenuto di documenti caricati (di QUALSIASI tipo — religioso, letterario, tecnico, legale) vanno SEMPRE a "documentale".\n\n' +
+  'Le richieste su contenuto di documenti caricati (di QUALSIASI tipo) vanno SEMPRE a "documentale".\n\n' +
+  'DISAMBIGUAZIONE: se il messaggio e\' ambiguo tra piu\' domini, imposta confidence=0.3 e domain="general". L\'agente chiedera\' chiarimenti all\'utente.\n\n' +
   'MULTI-AGENT: Se la richiesta tocca PIU domini, imposta needsMultiAgent=true e secondaryDomains con i domini aggiuntivi.\n' +
   'Esempi multi-agent:\n' +
   '- "fatturato dei clienti con progetti attivi" → domain="amministrazione", needsMultiAgent=true, secondaryDomains=["commerciale","produzione"]\n' +
@@ -112,6 +235,7 @@ const CLASSIFICATION_PROMPT =
   '- "overview con pipeline e scadenze" → domain="pulse", needsMultiAgent=true, secondaryDomains=["commerciale","amministrazione"]\n\n' +
   'CONTESTO: Se nella conversazione recente l\'utente stava interagendo con un agente specifico (es. documentale per analisi documenti, commerciale per clienti), e il nuovo messaggio sembra un follow-up o approfondimento sullo stesso tema, usa LO STESSO dominio. Non cambiare dominio a meno che il tema sia chiaramente diverso.\n\n' +
   'Rispondi SOLO con un JSON valido: {"domain": "...", "confidence": 0.0-1.0, "needsMultiAgent": false, "secondaryDomains": []}'
+}
 
 async function classifyIntent(message: string, conversationHistory?: ConversationMessage[]): Promise<ClassificationResult> {
   try {
@@ -130,7 +254,7 @@ async function classifyIntent(message: string, conversationHistory?: Conversatio
       body: JSON.stringify({
         model: CLASSIFIER_MODEL,
         messages: [
-          { role: 'system', content: CLASSIFICATION_PROMPT },
+          { role: 'system', content: getClassificationPrompt() },
           { role: 'user', content: contextText },
         ],
         max_tokens: 150,
@@ -307,7 +431,7 @@ async function synthesizeResults(
   agentResults: { agentName: string; text: string }[]
 ): Promise<string> {
   const systemPrompt =
-    "Sei l'assistente AI di FIAI. Hai ricevuto risposte da diversi agenti specializzati. " +
+    "Sei l'assistente di " + getSetting('company_name') + ". Hai ricevuto risposte da diversi agenti specializzati. " +
     'Sintetizza le risposte in un unico messaggio coerente e completo in italiano. ' +
     'Mantieni tutte le informazioni importanti e presenta i dati in modo chiaro.'
 
@@ -349,7 +473,7 @@ export async function orchestrate(
   userId: string,
   aziendaId: string,
   options?: {
-    format?: 'web' | 'whatsapp'
+    format?: string
     sessionId?: string
     history?: ConversationMessage[]
     attachedImageBase64?: string
@@ -368,6 +492,7 @@ export async function orchestrate(
   const onProgress = options?.onProgress || (() => {})
 
   const historyLength = (conversationHistory?.length ?? 0) + 1
+  console.log(`[Orchestrate] sessionId=${sessionId}, historyLength=${historyLength}, message="${message.substring(0, 50)}"`)
 
   // ── Safety Gate: Input Check ──
   const inputCheck = checkInput(message)
@@ -426,7 +551,7 @@ export async function orchestrate(
 
     // Cache domain for ITERATION mode
     if (sessionId && result.agentDomain !== 'general') {
-      sessionDomainCache.set(sessionId, result.agentDomain as AgentDomain)
+      setSessionDomain(sessionId, result.agentDomain as AgentDomain)
     }
 
     return { ...result, suggestions }
@@ -440,6 +565,8 @@ export async function orchestrate(
 
   // ── Response Mode Routing ──
   const responseMode = detectResponseMode(message, historyLength)
+  const cachedDomain = sessionId ? getSessionDomain(sessionId) : undefined
+  console.log(`[Orchestrate] responseMode=${responseMode}, cachedDomain=${cachedDomain || 'none'}`)
 
   if (responseMode === 'minimal') {
     // Check for explicit numeric rating (1-10)
@@ -451,7 +578,7 @@ export async function orchestrate(
           sessionId,
           type: 'explicit_rating',
           rating,
-          domain: sessionDomainCache.get(sessionId) || 'general',
+          domain: getSessionDomain(sessionId) || 'general',
         })
         const response = rating >= 7
           ? 'Grazie per il feedback positivo!'
@@ -459,7 +586,7 @@ export async function orchestrate(
             ? 'Grazie, terro conto del tuo feedback per migliorare.'
             : 'Mi dispiace. Cerchero di fare meglio la prossima volta.'
         return {
-          text: response, toolCalls: [], agentName: 'Assistente FIAI',
+          text: response, toolCalls: [], agentName: 'Assistente',
           agentDomain: 'general', agentColor: AGENT_COLORS.general,
           suggestions: getSuggestions('general', []),
         }
@@ -468,9 +595,9 @@ export async function orchestrate(
 
     // Quick minimal response, no classification, no tools
     const context = buildContext('pulse', aziendaId, userId, sessionId)
-    const minimalText = await directLLMResponse(message, context, conversationHistory)
+    const minimalText = await directLLMResponse(message, context, conversationHistory, onProgress)
     return {
-      text: minimalText, toolCalls: [], agentName: 'Assistente FIAI',
+      text: minimalText, toolCalls: [], agentName: 'Assistente',
       agentDomain: 'general', agentColor: AGENT_COLORS.general,
       suggestions: getSuggestions('general', []),
     }
@@ -479,13 +606,17 @@ export async function orchestrate(
   // ── ITERATION mode: reuse last domain ──
   if (responseMode === 'iteration' && sessionId) {
     // Check keywords first — they override session domain if they match
-    const keywordOverride = quickClassifyKeywords(message)
-    const lastDomain = keywordOverride || sessionDomainCache.get(sessionId)
-    if (lastDomain && lastDomain !== 'general' && lastDomain !== 'image' && lastDomain !== 'tts') {
+    const scoreOverride = scoreClassify(message)
+    const lastDomain = scoreOverride?.domain || getSessionDomain(sessionId)
+    if (lastDomain && lastDomain !== 'general' && lastDomain !== 'image' as any && lastDomain !== 'tts') {
       const agent = AGENTS[lastDomain]
       if (agent) {
+        // Check agent permission
+        if (permissions && !permissions.canAgent('chat', lastDomain)) {
+          return { text: `Non hai accesso all'agente **${agent.name}**. Contatta l'amministratore per richiedere i permessi.`, toolCalls: [], agentName: 'Sistema', agentDomain: 'general', agentColor: AGENT_COLORS.general }
+        }
         const context = buildContext(lastDomain, aziendaId, userId, sessionId)
-        const result = await executeAgent(message, agent, aziendaId, userId, context, format, conversationHistory, onProgress, permissions)
+        const result = await executeAgent(message, agent, aziendaId, userId, context, format, conversationHistory, onProgress, permissions, sessionId)
         return finalizeResult(result)
       }
     }
@@ -494,19 +625,37 @@ export async function orchestrate(
 
   // ── FULL: Classify → Agent-Native Tool Calling ──
   onProgress({ type: 'status', content: 'Classificazione dominio...' })
-  const quickDomain = quickClassifyKeywords(message)
 
-  let classification: ClassificationResult = quickDomain
-    ? { domain: quickDomain as AgentDomain, confidence: 0.95, needsMultiAgent: false }
-    : await classifyIntent(message, conversationHistory)
+  // Try fast score-based classification first; fallback to LLM if unsure
+  const scoreResult = scoreClassify(message)
+  let classification: ClassificationResult = scoreResult || await classifyIntent(message, conversationHistory)
+
+  // Session continuity: if cached domain exists and classifier returned general/low confidence,
+  // prefer the session domain (user is likely continuing the same conversation topic)
+  const sessionDomain = sessionId ? getSessionDomain(sessionId) : undefined
+  if (sessionDomain && sessionDomain !== 'general' && (classification.domain === 'general' || classification.confidence < 0.6)) {
+    console.log(`[Classify] Session continuity: ${classification.domain} (${classification.confidence.toFixed(2)}) → ${sessionDomain} (cached)`)
+    classification = { domain: sessionDomain, confidence: 0.75, needsMultiAgent: false }
+  }
 
   // Normalize domain aliases
   if (classification.domain === 'image' as any) classification.domain = 'marketing' as AgentDomain
   if (classification.domain === 'documents' as any) classification.domain = 'documentale' as AgentDomain
 
+  // Very low confidence + no session context → route to general with disambiguation hint
+  if (classification.confidence <= 0.4) {
+    const lastDomain = sessionId ? getSessionDomain(sessionId) : undefined
+    if (!lastDomain || lastDomain === 'general') {
+      console.log(`[Classify] Very low confidence (${classification.confidence}), routing to general for disambiguation`)
+      classification = { domain: 'general', confidence: 0.5, needsMultiAgent: false }
+      // Prepend disambiguation context to the message so the agent knows to ask
+      message = `[SISTEMA: La richiesta dell'utente e' ambigua — non e' chiaro quale azione o agente serva. Chiedi chiarimenti all'utente presentando le opzioni possibili. NON procedere con un'azione specifica senza conferma.]\n\n${message}`
+    }
+  }
+
   // Low confidence + session has previous domain → prefer session domain (contextual continuity)
   if (classification.confidence < 0.7 && sessionId) {
-    const lastDomain = sessionDomainCache.get(sessionId)
+    const lastDomain = getSessionDomain(sessionId)
     if (lastDomain && lastDomain !== 'general') {
       console.log(`[Classify] Low confidence (${classification.confidence}), using session domain: ${lastDomain}`)
       classification = { domain: lastDomain, confidence: 0.8, needsMultiAgent: false }
@@ -547,14 +696,14 @@ export async function orchestrate(
   // ── Multi-agent execution ──
   if (classification.needsMultiAgent && classification.secondaryDomains && classification.secondaryDomains.length > 0) {
     const allDomains: AgentDomain[] = [classification.domain, ...classification.secondaryDomains]
-    const uniqueDomains = [...new Set(allDomains)].filter(d => d !== 'general')
+    const uniqueDomains = [...new Set(allDomains)].filter(d => d !== 'general' && (!permissions || permissions.canAgent('chat', d)))
 
     const agentPromises = uniqueDomains
       .map(async (domain) => {
         const agent = AGENTS[domain]
         if (!agent) return null
         const context = buildContext(domain, aziendaId, userId, sessionId)
-        return executeAgent(message, agent, aziendaId, userId, context, format, conversationHistory, undefined, permissions)
+        return executeAgent(message, agent, aziendaId, userId, context, format, conversationHistory, undefined, permissions, sessionId)
       })
       .filter(p => p !== null)
 
@@ -563,8 +712,8 @@ export async function orchestrate(
 
     if (validResults.length === 0) {
       const context = buildContext('pulse', aziendaId, userId, sessionId)
-      const text = await directLLMResponse(message, context, conversationHistory)
-      return finalizeResult({ text, toolCalls: [], agentName: 'Assistente FIAI', agentDomain: 'general', agentColor: AGENT_COLORS.general }, classification)
+      const text = await directLLMResponse(message, context, conversationHistory, onProgress)
+      return finalizeResult({ text, toolCalls: [], agentName: 'Assistente', agentDomain: 'general', agentColor: AGENT_COLORS.general }, classification)
     }
 
     const allToolCalls = validResults.flatMap(r => r.toolCalls)
@@ -581,14 +730,23 @@ export async function orchestrate(
   }
 
   // ── Single agent — direct execution with native tool calling ──
-  const agent = AGENTS[classification.domain] || AGENTS.pulse
+  const agent = AGENTS[classification.domain] || AGENTS.pulse || AGENTS.general
+
+  // Check agent permission
+  if (permissions && !permissions.canAgent('chat', classification.domain)) {
+    return {
+      text: `Non hai accesso all'agente **${agent.name}** (${classification.domain}). Contatta l'amministratore per richiedere i permessi.`,
+      toolCalls: [], agentName: 'Sistema', agentDomain: 'general', agentColor: AGENT_COLORS.general,
+    }
+  }
+
   onProgress({ type: 'agent', content: `${agent.name} sta elaborando...`, domain: classification.domain, agentName: agent.name, agentColor: agent.color })
 
-  // Context with 60s cache + system summary
+  // Context with 5min cache + system summary
   const cacheKey = `${classification.domain}:${aziendaId}:${sessionId}`
   const cached = contextCache.get(cacheKey)
   let context: string
-  if (cached && Date.now() - cached.ts < 60000) {
+  if (cached && Date.now() - cached.ts < 300000) {
     context = cached.content
   } else {
     const systemSummary = generatePlannerContext(aziendaId)
@@ -597,7 +755,7 @@ export async function orchestrate(
   }
 
   // Agent calls tools natively — no pre-execution, no planner
-  const result = await executeAgent(message, agent, aziendaId, userId, context, format, conversationHistory, onProgress, permissions)
+  const result = await executeAgent(message, agent, aziendaId, userId, context, format, conversationHistory, onProgress, permissions, sessionId)
 
   // Reasoning comes directly from agent's native tool loop
   if (result.reasoning) {

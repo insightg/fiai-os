@@ -264,6 +264,43 @@ export const TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     user_id: { type: 'string', description: 'ID utente' },
     role: { type: 'string', enum: ['admin', 'collaboratore', 'viewer'], description: 'Nuovo ruolo' },
   }, required: ['user_id', 'role'] } } },
+
+  // ── Email tools ──
+  get_email_status: { type: 'function', function: { name: 'get_email_status', description: 'Stato connessione email (IMAP/SMTP)', parameters: { type: 'object', properties: {} } } },
+  send_email: { type: 'function', function: { name: 'send_email', description: 'Invia una email con supporto HTML e allegati', parameters: { type: 'object', properties: { to: { type: 'string', description: 'Destinatario email' }, subject: { type: 'string', description: 'Oggetto' }, html: { type: 'string', description: 'Corpo email (HTML supportato)' }, cc: { type: 'string', description: 'CC (virgola-separati)' }, bcc: { type: 'string', description: 'BCC (virgola-separati)' }, attachments: { type: 'array', items: { type: 'object', properties: { filename: { type: 'string' }, path: { type: 'string', description: 'file_url dal VFS (es. /api/uploads/...)' } } }, description: 'Allegati da VFS' } }, required: ['to', 'subject', 'html'] } } },
+  read_inbox: { type: 'function', function: { name: 'read_inbox', description: 'Lista email recenti dalla casella di posta', parameters: { type: 'object', properties: { limit: { type: 'number', description: 'Numero email da mostrare (default 15)' }, folder: { type: 'string', description: 'Cartella IMAP (default INBOX)' } } } } },
+  read_email: { type: 'function', function: { name: 'read_email', description: 'Leggi email completa per UID — restituisce corpo, allegati, header threading', parameters: { type: 'object', properties: { uid: { type: 'number', description: 'UID del messaggio' } }, required: ['uid'] } } },
+  search_emails: { type: 'function', function: { name: 'search_emails', description: 'Cerca email per oggetto, mittente, data o testo nel corpo', parameters: { type: 'object', properties: { subject: { type: 'string', description: 'Filtra per oggetto' }, from: { type: 'string', description: 'Filtra per mittente' }, since: { type: 'string', description: 'Data da (YYYY-MM-DD)' }, before: { type: 'string', description: 'Data fino a (YYYY-MM-DD)' }, text: { type: 'string', description: 'Cerca nel corpo' }, limit: { type: 'number', description: 'Max risultati (default 10)' } } } } },
+  reply_email: { type: 'function', function: { name: 'reply_email', description: 'Rispondi a una email mantenendo il thread di conversazione', parameters: { type: 'object', properties: { uid: { type: 'number', description: 'UID email a cui rispondere' }, html: { type: 'string', description: 'Corpo risposta (HTML)' }, cc: { type: 'string', description: 'CC aggiuntivi' } }, required: ['uid', 'html'] } } },
+  download_email_attachment: { type: 'function', function: { name: 'download_email_attachment', description: 'Scarica allegato da una email e salvalo nel sistema', parameters: { type: 'object', properties: { uid: { type: 'number', description: 'UID email' }, part_id: { type: 'string', description: 'ID parte allegato (indice numerico)' } }, required: ['uid', 'part_id'] } } },
+
+  // ── Planning (proxy to ai-planner via VPN) ──
+  planning_health: { type: 'function', function: { name: 'planning_health', description: 'Verifica connessione al planner trasporti (richiede VPN)', parameters: { type: 'object', properties: {} } } },
+  planning_viaggi: { type: 'function', function: { name: 'planning_viaggi', description: 'Lista viaggi per una data. Ritorna {viaggi: [{bg, cliente, luogo_carico, luogo_scarico, data_carico, data_scarico, genere, targa, vettore, e_assegnato}], totale, assegnati, non_assegnati}', parameters: { type: 'object', properties: { data: { type: 'string', description: 'Data YYYY-MM-DD' }, solo_non_assegnati: { type: 'boolean', description: 'Solo non assegnati' } }, required: ['data'] } } },
+  planning_suggerisci: { type: 'function', function: { name: 'planning_suggerisci', description: 'Esegui ottimizzazione automatica: assegna autisti e semirimorchi ai viaggi con scoring composito', parameters: { type: 'object', properties: { data: { type: 'string', description: 'Data YYYY-MM-DD' }, template: { type: 'string', description: 'Template viaggi (opzionale)' } }, required: ['data'] } } },
+  planning_assegna: { type: 'function', function: { name: 'planning_assegna', description: 'Assegna manualmente un viaggio a un autista/semirimorchio', parameters: { type: 'object', properties: { data: { type: 'string', description: 'Data YYYY-MM-DD' }, codice_viaggio: { type: 'string', description: 'Codice BG del viaggio' }, targa_semirimorchio: { type: 'string', description: 'Targa semirimorchio' }, nome_autista: { type: 'string', description: 'Nome autista' }, note: { type: 'string' } }, required: ['data', 'targa_semirimorchio', 'codice_viaggio'] } } },
+  planning_autisti: { type: 'function', function: { name: 'planning_autisti', description: 'Lista autisti disponibili per una data (esclude assenti/ferie)', parameters: { type: 'object', properties: { data: { type: 'string', description: 'Data YYYY-MM-DD' } }, required: ['data'] } } },
+  planning_semirimorchi: { type: 'function', function: { name: 'planning_semirimorchi', description: 'Lista semirimorchi disponibili, filtrabili per tipo (SILOS, ROTOCELLA, CENTINATO, etc.)', parameters: { type: 'object', properties: { data: { type: 'string', description: 'Data YYYY-MM-DD' }, tipo: { type: 'string', description: 'Tipo: SILOS, ROTOCELLA, RIBALTABILE_9M, PORTACTR_9M, PORTACTR_13_6M, CENTINATO' } }, required: ['data'] } } },
+  planning_gps: { type: 'function', function: { name: 'planning_gps', description: 'Posizione GPS in tempo reale di un semirimorchio', parameters: { type: 'object', properties: { targa: { type: 'string', description: 'Targa semirimorchio' } }, required: ['targa'] } } },
+  planning_distanza: { type: 'function', function: { name: 'planning_distanza', description: 'Calcola distanza stradale tra due localita', parameters: { type: 'object', properties: { origine: { type: 'string', description: 'Localita partenza' }, destinazione: { type: 'string', description: 'Localita arrivo' } }, required: ['origine', 'destinazione'] } } },
+  planning_statistiche: { type: 'function', function: { name: 'planning_statistiche', description: 'Statistiche viaggi per periodo (per cliente, destinazione, autista)', parameters: { type: 'object', properties: { data_inizio: { type: 'string' }, data_fine: { type: 'string' }, gruppo_per: { type: 'string', description: 'cliente, destinazione, autista, vettore' } }, required: ['data_inizio', 'data_fine'] } } },
+  planning_confronta: { type: 'function', function: { name: 'planning_confronta', description: 'Confronta piano proposto vs assegnazioni effettive per una data', parameters: { type: 'object', properties: { data: { type: 'string' } }, required: ['data'] } } },
+  planning_scenario: { type: 'function', function: { name: 'planning_scenario', description: 'Simulazione what-if: ricalcola con vincoli diversi', parameters: { type: 'object', properties: { data: { type: 'string' }, escludi_autisti: { type: 'array', items: { type: 'string' }, description: 'Nomi autisti da escludere' }, escludi_targhe: { type: 'array', items: { type: 'string' } }, max_distanza_km: { type: 'number' }, bg_fissi: { type: 'array', items: { type: 'string' }, description: 'BG da mantenere assegnati' } }, required: ['data'] } } },
+  planning_eta: { type: 'function', function: { name: 'planning_eta', description: 'Calcola ETA di un autista in viaggio — cerca per nome, trova BG e targa automaticamente', parameters: { type: 'object', properties: { nome_autista: { type: 'string', description: 'Nome autista (anche parziale)' }, data: { type: 'string', description: 'Data YYYY-MM-DD (default oggi)' } }, required: ['nome_autista'] } } },
+  planning_conflitti: { type: 'function', function: { name: 'planning_conflitti', description: 'Mostra conflitti di risorse (autisti/semirimorchi doppiamente assegnati)', parameters: { type: 'object', properties: { data: { type: 'string' } }, required: ['data'] } } },
+  planning_storico: { type: 'function', function: { name: 'planning_storico', description: 'Cerca precedenti storici simili (RAG) per cliente/destinazione', parameters: { type: 'object', properties: { cliente: { type: 'string', description: 'Nome cliente' }, destinazione: { type: 'string', description: 'Localita destinazione' }, genere: { type: 'string', description: 'Genere merce' } }, required: ['cliente'] } } },
+  planning_dettaglio: { type: 'function', function: { name: 'planning_dettaglio', description: 'Dettaglio completo di un viaggio', parameters: { type: 'object', properties: { codice_bg: { type: 'string', description: 'Codice BG del viaggio' }, data: { type: 'string', description: 'Data YYYY-MM-DD' } }, required: ['codice_bg', 'data'] } } },
+  planning_analizza: { type: 'function', function: { name: 'planning_analizza', description: 'Diagnostica perche un viaggio non e stato assegnato', parameters: { type: 'object', properties: { codice_bg: { type: 'string', description: 'Codice BG' }, data: { type: 'string', description: 'Data YYYY-MM-DD' } }, required: ['codice_bg', 'data'] } } },
+  planning_pianificazione_corrente: { type: 'function', function: { name: 'planning_pianificazione_corrente', description: 'Assegnazioni correnti per una data', parameters: { type: 'object', properties: { data: { type: 'string' } }, required: ['data'] } } },
+  planning_cerca_autista: { type: 'function', function: { name: 'planning_cerca_autista', description: 'Cerca autista per nome — restituisce posizione, impegni, skill', parameters: { type: 'object', properties: { nome: { type: 'string' } }, required: ['nome'] } } },
+  planning_tutti_autisti: { type: 'function', function: { name: 'planning_tutti_autisti', description: 'Lista COMPLETA autisti interni e trazionisti', parameters: { type: 'object', properties: {} } } },
+
+  // ── Fetch & Index document from URL ──
+  fetch_document: { type: 'function', function: { name: 'fetch_document', description: 'Scarica un documento da un URL web (PDF, DOC, TXT, immagine) e lo indicizza nel sistema con chunking, embedding e classificazione AI. Perfetto per datasheet, manuali, specifiche tecniche trovati online.', parameters: { type: 'object', properties: {
+    url: { type: 'string', description: 'URL completo del documento da scaricare (es. https://example.com/datasheet.pdf)' },
+    display_name: { type: 'string', description: 'Nome del documento (opzionale, se non specificato viene derivato dal file)' },
+    categoria: { type: 'string', description: 'Categoria (es. datasheet, manuale, contratto). Opzionale — AI la determina automaticamente.' },
+  }, required: ['url'] } } },
 }
 
 // ══════════════════════════════════════════════════════════
@@ -275,12 +312,23 @@ const TOOL_ACTIONS: Record<string, string> = {
   find: 'read', search: 'read', get_tree: 'read', retrieve: 'read',
   list_documents: 'read', explore_document: 'read', get_datetime: 'read',
   date_diff: 'read', get_api_costs: 'read', get_whatsapp_status: 'read',
+  get_email_status: 'read', read_inbox: 'read', read_email: 'read',
+  search_emails: 'read', download_email_attachment: 'read',
   get_jobs: 'read', list_autonomous_agents: 'read', list_workflows: 'read',
   list_skills: 'read', get_agent_logs: 'read',
   create: 'create', relate: 'create', create_job: 'create',
   create_autonomous_agent: 'create', create_workflow: 'create',
   update: 'update', update_skill: 'update',
   delete_record: 'delete', delete_autonomous_agent: 'delete',
+  planning_health: 'read', planning_viaggi: 'read', planning_autisti: 'read',
+  planning_semirimorchi: 'read', planning_gps: 'read', planning_distanza: 'read',
+  planning_statistiche: 'read', planning_confronta: 'read', planning_storico: 'read',
+  planning_dettaglio: 'read', planning_analizza: 'read', planning_conflitti: 'read',
+  planning_pianificazione_corrente: 'read', planning_cerca_autista: 'read', planning_tutti_autisti: 'read',
+  planning_eta: 'read', planning_scenario: 'read',
+  planning_suggerisci: 'create', planning_assegna: 'create',
+  fetch_document: 'create',
+  send_email: 'send', reply_email: 'send',
   send_whatsapp_message: 'send', send_whatsapp_voice: 'send',
   send_whatsapp_image: 'send', send_whatsapp_document: 'send',
   send_whatsapp_video: 'send',
@@ -1429,6 +1477,246 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
       } catch (err: any) {
         return { successo: false, messaggio: err.message }
       }
+    }
+
+    // ── PLANNING tools (proxy to ai-planner via VPN) ──
+    case 'planning_health': {
+      const { planningHealth } = await import('../planning-proxy.js')
+      return await planningHealth()
+    }
+    case 'planning_tutti_autisti': {
+      const { planningCall } = await import('../planning-proxy.js')
+      return await planningCall('execute', { tool: 'get_tutti_autisti', args: {} })
+    }
+    case 'planning_viaggi':
+    case 'planning_suggerisci':
+    case 'planning_assegna':
+    case 'planning_autisti':
+    case 'planning_semirimorchi':
+    case 'planning_gps':
+    case 'planning_distanza':
+    case 'planning_statistiche':
+    case 'planning_confronta':
+    case 'planning_scenario':
+    case 'planning_eta':
+    case 'planning_conflitti':
+    case 'planning_storico':
+    case 'planning_dettaglio':
+    case 'planning_analizza':
+    case 'planning_pianificazione_corrente':
+    case 'planning_cerca_autista': {
+      const { planningCall } = await import('../planning-proxy.js')
+      if (typeof input === 'string') {
+        const key = name === 'planning_eta' ? 'nome_autista' : name === 'planning_gps' ? 'targa' : name === 'planning_cerca_autista' ? 'nome' : 'data'
+        return await planningCall(name.replace('planning_', ''), { [key]: input })
+      }
+      const endpointMap: Record<string, string> = {
+        planning_viaggi: 'viaggi', planning_suggerisci: 'suggerisci', planning_assegna: 'assegna',
+        planning_autisti: 'autisti', planning_semirimorchi: 'semirimorchi', planning_gps: 'gps',
+        planning_distanza: 'distanza', planning_statistiche: 'statistiche', planning_confronta: 'confronta',
+        planning_scenario: 'scenario', planning_eta: 'eta', planning_conflitti: 'conflitti',
+        planning_storico: 'storico', planning_dettaglio: 'dettaglio', planning_analizza: 'analizza',
+        planning_pianificazione_corrente: 'pianificazione_corrente', planning_cerca_autista: 'cerca_autista',
+      }
+      const endpoint = endpointMap[name] || name.replace('planning_', '')
+      return await planningCall(endpoint, input)
+    }
+
+    // ── FETCH & INDEX DOCUMENT FROM URL ──
+    case 'fetch_document': {
+      const url = input.url as string
+      if (!url) return { errore: 'url obbligatorio' }
+      try {
+        const fs = await import('fs')
+        const pathMod = await import('path')
+        const cryptoMod = await import('crypto')
+
+        // 1. Download the file
+        const res = await fetch(url, {
+          headers: { 'User-Agent': 'FIAI-OS/1.0 DocumentFetcher' },
+          redirect: 'follow',
+        })
+        if (!res.ok) return { errore: `Download fallito: HTTP ${res.status}` }
+
+        const contentType = res.headers.get('content-type') || ''
+        const buffer = Buffer.from(await res.arrayBuffer())
+
+        // Determine extension from URL or content-type
+        const urlPath = new URL(url).pathname
+        let ext = pathMod.default.extname(urlPath).toLowerCase() || ''
+        if (!ext) {
+          if (contentType.includes('pdf')) ext = '.pdf'
+          else if (contentType.includes('html')) ext = '.html'
+          else if (contentType.includes('plain')) ext = '.txt'
+          else if (contentType.includes('word') || contentType.includes('docx')) ext = '.docx'
+          else if (contentType.includes('png')) ext = '.png'
+          else if (contentType.includes('jpeg') || contentType.includes('jpg')) ext = '.jpg'
+          else ext = '.pdf' // default
+        }
+
+        // Derive filename
+        const urlFilename = pathMod.default.basename(urlPath).replace(/\?.*$/, '') || 'document'
+        const displayName = (input.display_name as string) || urlFilename.replace(/\.[^.]+$/, '')
+        const fileId = cryptoMod.default.randomUUID()
+        const destFilename = `${fileId}${ext}`
+
+        // 2. Save file to uploads
+        const UPLOADS_DIR = process.env.UPLOADS_DIR || '/app/data/uploads'
+        const destDir = pathMod.default.join(UPLOADS_DIR, aziendaId, 'fetched')
+        fs.default.mkdirSync(destDir, { recursive: true })
+        const destPath = pathMod.default.join(destDir, destFilename)
+        fs.default.writeFileSync(destPath, buffer)
+        const fileUrl = `/api/uploads/${aziendaId}/fetched/${destFilename}`
+        const fileSize = buffer.length
+
+        // 3. Extract text
+        let extractedText = ''
+        let pageCount = 0
+        if (ext === '.pdf') {
+          try {
+            const pdfParse = (await import('pdf-parse')).default
+            const parsed = await pdfParse(buffer)
+            extractedText = parsed.text || ''
+            pageCount = parsed.numpages || 0
+
+            // Check if OCR is needed
+            if (extractedText.trim().length < 100 && fileSize > 50000) {
+              try {
+                const { ocrPdf } = await import('../ocr.js')
+                const ocr = await ocrPdf(destPath, { maxPages: 20 })
+                if (ocr.text.length > extractedText.length) {
+                  extractedText = ocr.text
+                  pageCount = ocr.pages
+                }
+              } catch {}
+            }
+          } catch {}
+        } else if (ext === '.txt' || ext === '.csv' || ext === '.html') {
+          extractedText = buffer.toString('utf-8')
+        } else if (ext === '.docx') {
+          try {
+            const mammoth = await import('mammoth')
+            const result = await mammoth.default.extractRawText({ buffer })
+            extractedText = result.value || ''
+          } catch {}
+        }
+
+        // 4. AI analysis
+        const { analyzeUpload } = await import('../ai.js')
+        const analysis = await analyzeUpload(extractedText, urlFilename, false, contentType)
+
+        // 5. Create entity
+        const entityId = cryptoMod.default.randomUUID()
+        const slug = displayName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').substring(0, 80)
+        const finalCategoria = (input.categoria as string) || analysis.categoria || 'documento'
+        const ed = analysis.extracted_data || {}
+
+        db.prepare(`INSERT INTO entity (id, azienda_id, type, display_name, slug, stato, user_id, file_url, body, categoria, metadata, path)
+          VALUES (?, ?, 'documento', ?, ?, 'processing', ?, ?, ?, ?, ?, ?)`).run(
+          entityId, aziendaId, displayName, slug,
+          'system', fileUrl,
+          extractedText || null,
+          finalCategoria,
+          JSON.stringify({
+            tipo_file: contentType,
+            source_url: url,
+            tags: analysis.tags || [],
+            descrizione: analysis.descrizione || '',
+            file_size: fileSize,
+            page_count: pageCount,
+            original_name: urlFilename,
+            extracted_data: ed,
+          }),
+          `/entity/documento/${slug}`
+        )
+
+        // 6. Create background job for chunking + embedding
+        const jobId = cryptoMod.default.randomUUID()
+        db.prepare(`INSERT INTO entity (id, azienda_id, type, display_name, slug, stato, data, metadata, path)
+          VALUES (?, ?, 'job', ?, ?, 'queued', datetime('now'), ?, ?)`).run(
+          jobId, aziendaId,
+          `Processa: ${displayName}`, `process-doc-${entityId.substring(0, 8)}`,
+          JSON.stringify({
+            action: 'process_document',
+            params: { entityId, fileName: urlFilename },
+          }),
+          `/entity/job/process-doc-${entityId.substring(0, 8)}`
+        )
+
+        console.log(`[FetchDoc] Downloaded "${displayName}" from ${url} → entity ${entityId}, job ${jobId} (${(fileSize / 1024).toFixed(0)} KB, ${pageCount} pages)`)
+
+        return {
+          successo: true,
+          messaggio: `Documento "${displayName}" scaricato e in fase di indicizzazione`,
+          entity_id: entityId,
+          job_id: jobId,
+          file_size: fileSize,
+          page_count: pageCount,
+          categoria: finalCategoria,
+        }
+      } catch (err: any) {
+        return { errore: `Errore download documento: ${err.message}` }
+      }
+    }
+
+    // ── EMAIL tools ──
+    case 'get_email_status': {
+      try {
+        const { listEmails } = await import('../email.js')
+        return { status: 'connected', messaggio: 'Email IMAP/SMTP connesso' }
+      } catch { return { status: 'disconnected', errore: 'Email non configurata' } }
+    }
+    case 'send_email': {
+      try {
+        const { sendEmail } = await import('../email.js')
+        const result = await sendEmail({
+          to: input.to as string, subject: input.subject as string,
+          html: input.html as string, cc: input.cc as string,
+          bcc: input.bcc as string, attachments: input.attachments as any,
+        })
+        return { successo: true, messaggio: `Email inviata a ${input.to}`, messageId: result.messageId }
+      } catch (err: any) { return { successo: false, errore: err.message } }
+    }
+    case 'read_inbox': {
+      try {
+        const { listEmails } = await import('../email.js')
+        return await listEmails({ limit: (input.limit as number) || 15, folder: input.folder as string })
+      } catch (err: any) { return { errore: err.message } }
+    }
+    case 'read_email': {
+      try {
+        const { readEmail } = await import('../email.js')
+        return await readEmail(input.uid as number)
+      } catch (err: any) { return { errore: err.message } }
+    }
+    case 'search_emails': {
+      try {
+        const { searchEmails } = await import('../email.js')
+        return await searchEmails({
+          subject: input.subject as string, from: input.from as string,
+          since: input.since as string, before: input.before as string,
+          text: input.text as string, limit: (input.limit as number) || 10,
+        })
+      } catch (err: any) { return { errore: err.message } }
+    }
+    case 'reply_email': {
+      try {
+        const { readEmail, sendEmail } = await import('../email.js')
+        const original = await readEmail(input.uid as number)
+        if (!original || !original.fromAddress) return { errore: 'Email originale non trovata' }
+        const result = await sendEmail({
+          to: original.fromAddress, subject: `Re: ${original.subject}`,
+          html: input.html as string, cc: input.cc as string,
+          inReplyTo: original.messageId, references: original.references ? `${original.references} ${original.messageId}` : original.messageId,
+        })
+        return { successo: true, messaggio: `Risposta inviata a ${original.fromAddress}`, messageId: result.messageId }
+      } catch (err: any) { return { successo: false, errore: err.message } }
+    }
+    case 'download_email_attachment': {
+      try {
+        const { downloadAttachment } = await import('../email.js')
+        return await downloadAttachment(input.uid as number, input.part_id as string)
+      } catch (err: any) { return { errore: err.message } }
     }
 
     // ── CODE EXECUTION (programmatic tool calling) ──

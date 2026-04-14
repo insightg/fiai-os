@@ -1,53 +1,55 @@
 // ── Permissions ─────────────────────────────────────────
 
 export type PermAction = 'read' | 'create' | 'update' | 'delete' | 'send'
+export type AgentPermAction = 'chat' | 'configure'
 
 export class UserPermissions {
-  private role: string
   private perms: Map<string, Set<PermAction>>  // entityType → actions
+  private agentPerms: Map<string, Set<AgentPermAction>>  // agentDomain → actions
+  private groupNames: string[]
 
-  constructor(role: string, groupPermissions: Record<string, PermAction[]>[] = []) {
-    this.role = role
+  constructor(groupPermissions: { name: string; permissions: Record<string, PermAction[]>; agentPermissions?: Record<string, AgentPermAction[]> }[]) {
     this.perms = new Map()
+    this.agentPerms = new Map()
+    this.groupNames = groupPermissions.map(g => g.name)
 
-    // Base role permissions
-    if (role === 'admin') {
-      // Admin can do everything — checked via role flag
-    } else if (role === 'viewer') {
-      this.perms.set('*', new Set(['read']))
-    } else {
-      // collaboratore (default)
-      this.perms.set('*', new Set(['read', 'create', 'update']))
-    }
-
-    // Merge group permissions (additive)
-    for (const gp of groupPermissions) {
-      for (const [entityType, actions] of Object.entries(gp)) {
+    // Merge all group permissions (union)
+    for (const group of groupPermissions) {
+      for (const [entityType, actions] of Object.entries(group.permissions)) {
         const existing = this.perms.get(entityType) || new Set()
         for (const a of actions) existing.add(a)
         this.perms.set(entityType, existing)
       }
+
+      // Merge agent permissions
+      if (group.agentPermissions) {
+        for (const [domain, actions] of Object.entries(group.agentPermissions)) {
+          const existing = this.agentPerms.get(domain) || new Set()
+          for (const a of actions) existing.add(a)
+          this.agentPerms.set(domain, existing)
+        }
+      }
+    }
+
+    // No groups → default read only + chat all agents
+    if (groupPermissions.length === 0) {
+      this.perms.set('*', new Set(['read']))
+      this.agentPerms.set('*', new Set(['chat']))
     }
   }
 
-  // Type aliases: 'commerciale' covers organizzazione + persona
-  private static TYPE_GROUPS: Record<string, string[]> = {
-    'commerciale': ['organizzazione', 'persona'],
-  }
-  // Reverse: organizzazione → commerciale
+  // Type aliases: organizzazione → commerciale
   private static TYPE_PARENTS: Record<string, string> = {
     'organizzazione': 'commerciale',
     'persona': 'commerciale',
   }
 
   can(action: PermAction, entityType?: string): boolean {
-    if (this.role === 'admin') return true
-
     // Check type-specific permissions first
     if (entityType) {
       const typePerms = this.perms.get(entityType)
       if (typePerms) return typePerms.has(action)
-      // Check parent group (organizzazione → commerciale)
+      // Check parent alias (organizzazione → commerciale)
       const parent = UserPermissions.TYPE_PARENTS[entityType]
       if (parent) {
         const parentPerms = this.perms.get(parent)
@@ -55,18 +57,35 @@ export class UserPermissions {
       }
     }
 
-    // Fallback to wildcard
+    // Fallback to wildcard '*'
     const wildcard = this.perms.get('*')
     return wildcard ? wildcard.has(action) : false
   }
 
-  get isAdmin(): boolean { return this.role === 'admin' }
-  get userRole(): string { return this.role }
+  canAgent(action: AgentPermAction, domain: string): boolean {
+    // Check domain-specific agent permissions
+    const domainPerms = this.agentPerms.get(domain)
+    if (domainPerms) return domainPerms.has(action)
+    // Fallback to wildcard
+    const wildcard = this.agentPerms.get('*')
+    if (wildcard) return wildcard.has(action)
+    // No agent permissions set → default allow chat
+    if (this.agentPerms.size === 0) return action === 'chat'
+    return false
+  }
+
+  get isAdmin(): boolean {
+    // Admin = has wildcard with all actions including delete
+    const wildcard = this.perms.get('*')
+    return wildcard ? wildcard.has('delete') && wildcard.has('send') : false
+  }
+
+  get groups(): string[] { return this.groupNames }
 }
 
 // ── Agent Types ─────────────────────────────────────────
 
-export type AgentDomain = 'pulse' | 'commerciale' | 'produzione' | 'marketing' | 'amministrazione' | 'hr' | 'legal' | 'documentale' | 'documents' | 'it' | 'doctor' | 'whatsapp' | 'image' | 'tts' | 'general'
+export type AgentDomain = 'pulse' | 'commerciale' | 'produzione' | 'marketing' | 'amministrazione' | 'hr' | 'legal' | 'documentale' | 'documents' | 'it' | 'doctor' | 'whatsapp' | 'email' | 'pianificazione' | 'image' | 'tts' | 'general'
 
 export interface AgentView {
   id: string

@@ -1,4 +1,4 @@
-import { supabase, getAuthToken } from './supabase'
+import { getAuthToken } from './supabase'
 import type { ChatMessage } from '../types'
 
 // ── Message Types ───────────────────────────────────────────
@@ -16,118 +16,164 @@ export interface ToolUseEvent {
 export async function sendMessage(
   messages: ConversationMessage[],
   sessionId: string,
-  _onToolUse?: (event: ToolUseEvent) => void,
-  _onTextChunk?: (chunk: string) => void,
+  onToolUse?: (event: ToolUseEvent) => void,
+  onTextChunk?: (chunk: string) => void,
   attachedImageBase64?: string,
   attachedAudioBase64?: string
-): Promise<{ text: string; toolCalls: Record<string, unknown>[]; agentName?: string; agentDomain?: string; agentColor?: string; suggestions?: string[]; reasoning?: any }> {
+): Promise<{ text: string; toolCalls: Record<string, unknown>[]; agentName?: string; agentDomain?: string; agentColor?: string; suggestions?: string[]; reasoning?: any; sessionId?: string }> {
   const token = getAuthToken()
   const lastMsg = messages[messages.length - 1]
   const message = typeof lastMsg.content === 'string' ? lastMsg.content : JSON.stringify(lastMsg.content)
 
-  const res = await fetch('/api/chat/message', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify({
-      message,
-      sessionId,
-      history: messages.slice(0, -1).map(m => ({
-        role: m.role,
-        content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
-      })),
-      attachedImageBase64,
-      attachedAudioBase64,
-    }),
+  const body = JSON.stringify({
+    message,
+    sessionId,
+    history: messages.slice(0, -1).map(m => ({
+      role: m.role,
+      content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+    })),
+    attachedImageBase64,
+    attachedAudioBase64,
   })
 
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
-    throw new Error(err.error || `Errore ${res.status}`)
-  }
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (token) headers['Authorization'] = `Bearer ${token}`
 
-  const result = await res.json()
-
-  // Save messages to DB
+  // Use SSE streaming endpoint for real-time token delivery
+  let res: Response
   try {
-    const userContent = typeof lastMsg.content === 'string' ? lastMsg.content : JSON.stringify(lastMsg.content)
-    await supabase.from('chat_messages').insert({
-      session_id: sessionId,
-      ruolo: 'user',
-      contenuto: userContent,
-      tool_calls: null,
-    })
-
-    await supabase.from('chat_messages').insert({
-      session_id: sessionId,
-      ruolo: 'assistant',
-      contenuto: result.text,
-      tool_calls: result.toolCalls?.length > 0 ? result.toolCalls : null,
-    })
+    res = await fetch('/api/chat/message/stream', { method: 'POST', headers, body })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
   } catch {
-    console.warn('Errore nel salvataggio messaggi chat')
+    // Fallback to non-streaming on network/HTTP2 error
+    const fallback = await fetch('/api/chat/message', { method: 'POST', headers, body })
+    if (!fallback.ok) { const err = await fallback.json().catch(() => ({})); throw new Error((err as any).error || `HTTP ${fallback.status}`) }
+    return await fallback.json()
   }
 
+  // Parse SSE stream
+  const reader = res.body!.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let fullText = ''
+  const result: any = { text: '', toolCalls: [], agentName: '', agentDomain: '', agentColor: '', suggestions: [] }
+  let _streamError = false
+
+  try {
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() || ''
+
+    for (const line of lines) {
+      const trimmed = line.trim()
+      if (!trimmed || !trimmed.startsWith('data: ')) continue
+      try {
+        const event = JSON.parse(trimmed.slice(6))
+
+        switch (event.type) {
+          case 'token':
+            fullText += event.content
+            onTextChunk?.(event.content)
+            break
+          case 'tool_start':
+            onToolUse?.({ type: 'tool_start', tool: event.tool } as any)
+            break
+          case 'tool_done':
+            onToolUse?.({ type: 'tool_done', tool: event.tool, summary: event.summary } as any)
+            break
+          case 'status':
+          case 'agent':
+            // Agent selection events — can update UI header
+            if (event.agentName) result.agentName = event.agentName
+            if (event.agentDomain) result.agentDomain = event.agentDomain
+            if (event.agentColor) result.agentColor = event.agentColor
+            break
+          case 'done':
+            // Final result with metadata
+            result.agentName = event.agentName || result.agentName
+            result.agentDomain = event.agentDomain || result.agentDomain
+            result.agentColor = event.agentColor || result.agentColor
+            result.toolCalls = event.toolCalls || []
+            result.suggestions = event.suggestions || []
+            result.sessionId = event.sessionId
+            result.totalTokens = event.totalTokens
+            break
+          case 'error':
+            throw new Error(event.message)
+        }
+      } catch (e) {
+        if (e instanceof Error && e.message !== 'Unexpected end of JSON input') throw e
+      }
+    }
+  }
+  } catch (streamErr) {
+    _streamError = true
+    console.warn('[Stream] Connection interrupted, using partial result')
+  }
+
+  // If stream produced no text (interrupted before tokens arrived), fallback to non-streaming
+  if (!fullText) {
+    try {
+      console.warn('[Stream] No text received, falling back to non-streaming')
+      const fallback = await fetch('/api/chat/message', { method: 'POST', headers, body })
+      if (fallback.ok) return await fallback.json()
+    } catch {}
+  }
+
+  result.text = fullText || result.text
   return result
 }
 
-// ── Session Management (stays frontend-side) ────────────────
+// ── Session Management (via backend API) ────────────────────
+
+function authHeaders(): Record<string, string> {
+  const token = getAuthToken()
+  return { 'Content-Type': 'application/json', ...(token ? { 'Authorization': `Bearer ${token}` } : {}) }
+}
+
 export async function createChatSession(title: string): Promise<string | null> {
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return null
-
-  const { data: profile } = await supabase
-    .from('user_profiles')
-    .select('azienda_id')
-    .eq('id', user.id)
-    .single()
-
-  if (!profile) return null
-
-  const { data, error } = await supabase
-    .from('chat_sessions')
-    .insert({
-      azienda_id: (profile as { azienda_id: string }).azienda_id,
-      user_id: user.id,
-      titolo: title,
-    })
-    .select('id')
-    .single()
-
-  if (error) return null
-  return (data as { id: string }).id
+  try {
+    const res = await fetch('/api/auth/sessions', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ titolo: title }) })
+    const data = await res.json()
+    return data.id || null
+  } catch { return null }
 }
 
 export async function fetchChatSessions(): Promise<
-  { id: string; titolo: string; created_at: string; updated_at: string }[]
+  { id: string; titolo: string; created_at: string; updated_at: string; channel?: string; message_count?: number }[]
 > {
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return []
-
-  const { data } = await supabase
-    .from('chat_sessions')
-    .select('id, titolo, created_at, updated_at')
-    .eq('user_id', user.id)
-    .order('updated_at', { ascending: false })
-
-  return (data ?? []) as { id: string; titolo: string; created_at: string; updated_at: string }[]
+  try {
+    const res = await fetch('/api/auth/sessions', { headers: authHeaders() })
+    const data = await res.json()
+    return Array.isArray(data) ? data : []
+  } catch { return [] }
 }
 
 export async function fetchSessionMessages(sessionId: string): Promise<ChatMessage[]> {
-  const { data } = await supabase
-    .from('chat_messages')
-    .select('*')
-    .eq('session_id', sessionId)
-    .order('created_at', { ascending: true })
-
-  return (data ?? []) as ChatMessage[]
+  try {
+    const res = await fetch(`/api/auth/sessions/${sessionId}/messages`, { headers: authHeaders() })
+    const data = await res.json()
+    return (Array.isArray(data) ? data : []).map((m: any) => ({
+      id: m.id,
+      session_id: sessionId,
+      ruolo: m.ruolo,
+      contenuto: m.contenuto,
+      tool_calls: m.tool_calls,
+      created_at: m.created_at,
+      agent_domain: m.agent_domain,
+      agent_name: m.agent_name,
+    }))
+  } catch { return [] }
 }
 
 export async function updateSessionTitle(sessionId: string, title: string): Promise<void> {
-  await supabase
-    .from('chat_sessions')
-    .update({ titolo: title, updated_at: new Date().toISOString() })
-    .eq('id', sessionId)
+  await fetch(`/api/auth/sessions/${sessionId}`, { method: 'PUT', headers: authHeaders(), body: JSON.stringify({ titolo: title }) })
+}
+
+export async function deleteChatSession(sessionId: string): Promise<void> {
+  await fetch(`/api/auth/sessions/${sessionId}`, { method: 'DELETE', headers: authHeaders() })
 }

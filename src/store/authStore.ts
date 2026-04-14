@@ -37,7 +37,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   login: async (account: string, password: string) => {
     set({ loading: true, error: null })
-    const email = account.includes('@') ? account : `${account}@fiai.cc`
+    const email = account.includes('@') ? account : account
     const { data, error } = await supabase.auth.signInWithPassword({ email, password })
     if (error) {
       set({ loading: false, error: error.message })
@@ -58,16 +58,31 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   fetchProfile: async () => {
     const user = get().user
     if (!user) return
+    // Load profile from entity table (unified VFS)
     const { data, error } = await supabase
-      .from('user_profiles')
+      .from('entity')
       .select('*')
       .eq('id', user.id)
       .single()
-    if (error) {
-      set({ error: error.message })
+    if (error || !data) {
+      set({ error: error?.message || 'Profilo non trovato' })
       return
     }
-    set({ profile: data as UserProfile })
+    // Map entity fields to UserProfile format
+    const meta = typeof data.metadata === 'string' ? JSON.parse(data.metadata) : (data.metadata || {})
+    set({ profile: {
+      id: data.id,
+      azienda_id: data.azienda_id,
+      email: data.email || '',
+      nome: data.display_name?.split(' ')[0] || data.display_name || '',
+      cognome: meta.cognome || data.display_name?.split(' ').slice(1).join(' ') || '',
+      ruolo: meta.ruolo || 'collaboratore',
+      avatar_url: meta.avatar_url || null,
+      whatsapp_phone: meta.whatsapp_phone || data.telefono || null,
+      whatsapp_active: !!meta.whatsapp_active,
+      tts_voice: meta.tts_voice || 'Vivian',
+      created_at: data.created_at,
+    } as UserProfile })
   },
 
   setSession: (session: Session | null) => {

@@ -28,10 +28,16 @@ services:
       - UPLOADS_DIR=/app/data/uploads
       - CONTEXT_DIR=/app/data/context
       - TTS_API_URL=${TTS_API_URL:-http://host.docker.internal:7777/v1/audio/speech}
+      - NODE_OPTIONS=--max-old-space-size=8192
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - fiai-data:/app/data
+      - ./vpn:/app/vpn:ro
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:3001/api/health"]
       interval: 10s

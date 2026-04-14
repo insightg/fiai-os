@@ -1,4 +1,5 @@
 import express from 'express'
+import crypto from 'crypto'
 import cors from 'cors'
 import cookieParser from 'cookie-parser'
 import fs from 'fs'
@@ -15,12 +16,53 @@ import ttsRouter from './tts.js'
 import signalsRouter from './signals.js'
 import pdfRouter from './pdf.js'
 import { startWhatsApp, whatsappRouter } from './whatsapp.js'
+import { startEmail, emailRouter } from './email.js'
+import vpnRouter, { autoConnectVPN } from './vpn.js'
 import chatRouter from './agents/index.js'
 import adminRouter from './admin.js'
+import openaiCompatRouter from './openai-compat.js'
 import { startJobWorker } from './jobs.js'
 import { initEmbeddings } from './embeddings.js'
 import { initAutonomousAgents } from './agents/autonomous.js'
 import { initWorkflows } from './agents/workflows.js'
+
+// Pre-migration: fix legacy foreign key constraints on chat tables
+// The old schema referenced aziende(id) and user_profiles(id) which don't exist in VFS model
+try {
+  const sessSchema = (db.prepare("SELECT sql FROM sqlite_master WHERE name = 'chat_sessions'").get() as any)?.sql || ''
+  if (sessSchema.includes('REFERENCES aziende') || sessSchema.includes('REFERENCES user_profiles')) {
+    console.log('[Migration] Recreating chat_sessions without legacy foreign keys...')
+    db.exec(`
+      CREATE TABLE chat_sessions_new (id TEXT PRIMARY KEY, azienda_id TEXT, user_id TEXT, titolo TEXT NOT NULL DEFAULT 'Nuova conversazione', channel TEXT DEFAULT 'web', agent_domain TEXT, deleted_at TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')));
+      INSERT INTO chat_sessions_new SELECT id, azienda_id, user_id, titolo, channel, agent_domain, deleted_at, created_at, updated_at FROM chat_sessions;
+      DROP TABLE chat_sessions;
+      ALTER TABLE chat_sessions_new RENAME TO chat_sessions;
+    `)
+    console.log('[Migration] chat_sessions recreated without FK constraints')
+  }
+  const msgSchema = (db.prepare("SELECT sql FROM sqlite_master WHERE name = 'chat_messages'").get() as any)?.sql || ''
+  if (msgSchema.includes('REFERENCES chat_sessions') || msgSchema.includes('CHECK')) {
+    console.log('[Migration] Recreating chat_messages without legacy constraints...')
+    db.exec(`
+      CREATE TABLE chat_messages_new (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, user_id TEXT, ruolo TEXT NOT NULL, contenuto TEXT NOT NULL, tool_calls TEXT, agent_domain TEXT, agent_name TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')));
+      INSERT INTO chat_messages_new SELECT id, session_id, user_id, ruolo, contenuto, tool_calls, agent_domain, agent_name, created_at FROM chat_messages;
+      DROP TABLE chat_messages;
+      ALTER TABLE chat_messages_new RENAME TO chat_messages;
+    `)
+    console.log('[Migration] chat_messages recreated without FK/CHECK constraints')
+  }
+} catch (err) { console.warn('[Migration] Chat table fix error:', (err as Error).message) }
+
+// Pre-migration: add columns to existing tables (idempotent, must run BEFORE schema SQL)
+try { db.exec("ALTER TABLE user_profiles ADD COLUMN tts_voice TEXT DEFAULT 'Vivian'") } catch {}
+try { db.exec("ALTER TABLE chat_sessions ADD COLUMN channel TEXT DEFAULT 'web'") } catch {}
+try { db.exec("ALTER TABLE chat_sessions ADD COLUMN agent_domain TEXT") } catch {}
+try { db.exec("ALTER TABLE chat_sessions ADD COLUMN deleted_at TEXT") } catch {}
+try { db.exec("ALTER TABLE chat_messages ADD COLUMN user_id TEXT") } catch {}
+try { db.exec("ALTER TABLE chat_messages ADD COLUMN agent_domain TEXT") } catch {}
+try { db.exec("ALTER TABLE chat_messages ADD COLUMN agent_name TEXT") } catch {}
+try { db.exec("ALTER TABLE entity ADD COLUMN deleted_at TEXT") } catch {}
+try { db.exec("CREATE TABLE IF NOT EXISTS api_tokens (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, azienda_id TEXT NOT NULL, token_hash TEXT NOT NULL, token_preview TEXT NOT NULL, name TEXT DEFAULT 'API Key', expires_at TEXT, revoked_at TEXT, last_used_at TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')))") } catch {}
 
 // Run migrations on startup
 const migrationPath = path.join(import.meta.dirname || '.', 'migrations', 'init-sqlite.sql')
@@ -29,10 +71,6 @@ if (fs.existsSync(migrationPath)) {
   db.exec(sql)
   console.log('SQLite migrations applied.')
 }
-
-// Add tts_voice column if missing
-try { db.exec("ALTER TABLE user_profiles ADD COLUMN tts_voice TEXT DEFAULT 'Vivian'") } catch {}
-
 // FTS triggers: only INSERT triggers (standalone FTS5 can't do delete/update safely)
 try {
   db.exec("DROP TRIGGER IF EXISTS chunk_fts_au")
@@ -72,6 +110,50 @@ try {
   console.warn('VFS migration skipped or failed:', (err as Error).message)
 }
 
+// ── Create default permission groups (idempotent) ────────
+try {
+  const defaultGroups = [
+    { name: 'Amministratori', slug: 'amministratori', permissions: { '*': ['read', 'create', 'update', 'delete', 'send'] } },
+    { name: 'Operatori', slug: 'operatori', permissions: { '*': ['read', 'create', 'update'] } },
+    { name: 'Lettori', slug: 'lettori', permissions: { '*': ['read'] } },
+  ]
+  const aziendaId = (db.prepare("SELECT id FROM entity WHERE type = 'organizzazione' LIMIT 1").get() as any)?.id
+    || (db.prepare("SELECT DISTINCT azienda_id FROM entity LIMIT 1").get() as any)?.azienda_id
+  if (aziendaId) {
+    for (const g of defaultGroups) {
+      const exists = db.prepare("SELECT id FROM entity WHERE type = 'gruppo' AND slug = ? AND azienda_id = ?").get(g.slug, aziendaId)
+      if (!exists) {
+        const id = crypto.randomUUID()
+        db.prepare("INSERT INTO entity (id, azienda_id, type, display_name, slug, metadata, path) VALUES (?,?,'gruppo',?,?,?,?)").run(
+          id, aziendaId, g.name, g.slug, JSON.stringify({ permissions: g.permissions }), `/entity/gruppo/${g.slug}`
+        )
+        console.log(`[Groups] Created default group: ${g.name}`)
+      }
+    }
+
+    // Migrate existing users: assign to groups based on metadata.ruolo
+    const users = db.prepare("SELECT id, metadata FROM entity WHERE type = 'utente' AND azienda_id = ?").all(aziendaId) as any[]
+    for (const u of users) {
+      // Skip if user already has groups
+      const hasGroups = db.prepare("SELECT 1 FROM relations WHERE from_id = ? AND tipo = 'membro_di_gruppo' LIMIT 1").get(u.id)
+      if (hasGroups) continue
+
+      const meta = typeof u.metadata === 'string' ? JSON.parse(u.metadata) : (u.metadata || {})
+      const ruolo = meta.ruolo || 'collaboratore'
+      const groupSlug = ruolo === 'admin' ? 'amministratori' : ruolo === 'viewer' ? 'lettori' : 'operatori'
+      const group = db.prepare("SELECT id FROM entity WHERE type = 'gruppo' AND slug = ? AND azienda_id = ?").get(groupSlug, aziendaId) as any
+      if (group) {
+        db.prepare("INSERT OR IGNORE INTO relations (id, azienda_id, from_id, to_id, tipo) VALUES (?,?,?,?,'membro_di_gruppo')").run(
+          crypto.randomUUID(), aziendaId, u.id, group.id
+        )
+        console.log(`[Groups] Migrated ${u.id} → ${groupSlug}`)
+      }
+    }
+  }
+} catch (err) {
+  console.warn('[Groups] Setup error:', (err as Error).message)
+}
+
 const app = express()
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001
 
@@ -99,8 +181,11 @@ app.use('/api/tts', ttsRouter)
 app.use('/api/signals', signalsRouter)
 app.use('/api/pdf', pdfRouter)
 app.use('/api/whatsapp', whatsappRouter)
+app.use('/api/email', emailRouter)
+app.use('/api/vpn', vpnRouter)
 app.use('/api/chat', chatRouter)
 app.use('/api/admin', adminRouter)
+app.use('/v1', openaiCompatRouter)
 
 // Health check
 app.get('/api/health', (_req, res) => {
@@ -116,6 +201,8 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
 app.listen(PORT, () => {
   console.log(`FIAI OS server running on http://localhost:${PORT}`)
   startWhatsApp().catch(err => console.error('WhatsApp startup error:', err))
+  startEmail().catch(err => console.error('Email startup error:', err))
+  autoConnectVPN().catch(err => console.error('VPN auto-connect error:', err))
   initAutonomousAgents()
   initWorkflows()
   initEmbeddings()

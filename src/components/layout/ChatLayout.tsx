@@ -49,25 +49,36 @@ import toast from 'react-hot-toast'
 import VoiceChat from '../VoiceChat'
 import ContextPanel from './ContextPanel'
 import ArtifactOverlay from './ArtifactOverlay'
+import AdminPage from '../../pages/admin/Admin'
 import JobMonitor from '../JobMonitor'
 import AudioRecorder from '../AudioRecorder'
 import Badge from '../ui/Badge'
 import { renderToolResult, toolNameMapExtended } from '../ChatToolRenderers'
-import InlineCrudForm, { type FormField } from '../InlineCrudForm'
+// InlineCrudForm removed — inline edits go through chat
 import {
   sendMessage,
   createChatSession,
   fetchChatSessions,
   fetchSessionMessages,
   updateSessionTitle,
+  deleteChatSession,
   type ConversationMessage,
   type ToolUseEvent,
 } from '../../lib/anthropic'
 import { supabase } from '../../lib/supabase'
 import type { ChatMessage } from '../../types'
-import { useAuthStore, useClientiStore, useLeadsStore, useProgettiStore, useCandidatiStore, useRimborsiStore, useDocumentiStore, useFattureStore } from '../../store'
-import { uploadGeneric } from '../../lib/upload'
+import { useAuthStore } from '../../store'
+// (() => Promise.resolve({})) removed — uploads go through smart upload
 import { getAuthToken } from '../../lib/supabase'
+
+// Inline form field type (formerly from InlineCrudForm)
+interface FormField {
+  name: string
+  label: string
+  type: string
+  required?: boolean
+  options?: { value: string; label: string }[]
+}
 
 // Rate message via backend API
 async function rateMessageFn(messageId: string, sessionId: string, domain: string, rating: 'up' | 'down') {
@@ -80,9 +91,9 @@ async function rateMessageFn(messageId: string, sessionId: string, domain: strin
     })
   } catch { /* fire-and-forget */ }
 }
-import UserFilesModal from '../UserFilesModal'
+// UserFilesModal removed
 // PanelRouter removed — sidebar is now dynamic
-import DocumentArchiveModal from '../DocumentArchiveModal'
+// DocumentArchiveModal removed
 
 // ── Types ───────────────────────────────────────────────
 interface SessionItem {
@@ -110,13 +121,13 @@ interface DisplayMessage {
   }
 }
 
-// ── Quick Commands ──────────────────────────────────────
+// ── Quick Commands — FIAI OS ──────────────────────────────
 const quickCommands = [
-  { label: 'Riepilogo finanziario', message: "Dammi un riepilogo finanziario dell'azienda", icon: BarChart3 },
-  { label: 'Fatture scadute', message: 'Quali fatture sono scadute?', icon: AlertCircle },
+  { label: 'Riepilogo finanziario', message: "Riepilogo finanziario: fatturato, liquidità, scadenze", icon: BarChart3 },
+  { label: 'Fatture scadute', message: "Mostra le fatture scadute e da incassare", icon: AlertCircle },
   { label: 'Stato pipeline', message: "Qual è lo stato della pipeline commerciale?", icon: Sparkles },
-  { label: 'Stato progetti', message: 'Qual è lo stato dei progetti in corso?', icon: FolderKanban },
-  { label: 'Crea lead', message: 'Crea un nuovo lead per ', icon: UserPlus },
+  { label: 'Stato progetti', message: "Stato dei progetti in corso e milestone", icon: FolderKanban },
+  { label: 'Crea lead', message: "Crea un nuovo lead", icon: Wrench },
   { label: 'Overview dashboard', message: "Dammi una overview completa dell'azienda", icon: LayoutGrid },
 ]
 
@@ -218,6 +229,15 @@ function renderMarkdown(text: string): JSX.Element[] {
     }
 
     if (line.trim() === '') { elements.push(<div key={`br-${i}`} className="h-2" />); continue }
+
+    // Markdown image: ![alt](url)
+    const imgMatch = line.trim().match(/^!\[([^\]]*)\]\(([^)]+)\)$/)
+    if (imgMatch) {
+      elements.push(
+        <img key={`img-${i}`} src={imgMatch[2]} alt={imgMatch[1]} className="max-w-full max-h-80 rounded-lg border border-border bg-white p-1 my-2" />
+      )
+      continue
+    }
 
     if (line.startsWith('### ')) {
       elements.push(<h4 key={`h3-${i}`} className="text-sm font-bold text-text mt-3 mb-1">{formatInline(line.slice(4))}</h4>)
@@ -388,7 +408,7 @@ function MessageBubble({ message, activeSessionId, onAction }: { message: Displa
           )}
 
           {/* Rich tool result renderers FIRST (data before commentary) */}
-          {!isUser && message.toolCalls && message.toolCalls.length > 0 && (
+          {!isUser && Array.isArray(message.toolCalls) && message.toolCalls.length > 0 && (
             <div className="space-y-2 mb-3">
               {message.toolCalls.map((tc, idx) => {
                 const toolName = (tc as { tool: string }).tool
@@ -492,17 +512,59 @@ function GestionaleLink({ to, icon: Icon, label }: { to: string; icon: React.Com
   )
 }
 
-// ── Empty State ─────────────────────────────────────────
+// ── Empty State with location + time ────────────────────
 function EmptyState({ onQuickCommand }: { onQuickCommand: (msg: string) => void }) {
+  const [locationInfo, setLocationInfo] = useState<{ city?: string; time?: string; date?: string } | null>(null)
+  const profile = useAuthStore((s) => s.profile)
+
+  useEffect(() => {
+    // Get current time
+    const now = new Date()
+    const time = now.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })
+    const date = now.toLocaleDateString('it-IT', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
+    setLocationInfo({ time, date })
+
+    // Try to get location
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        async (pos) => {
+          try {
+            const res = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${pos.coords.latitude}&lon=${pos.coords.longitude}&format=json&zoom=10`, { headers: { 'User-Agent': 'FIAI-OS/1.0' } })
+            const data = await res.json()
+            const city = data.address?.city || data.address?.town || data.address?.village || data.address?.county || ''
+            setLocationInfo(prev => ({ ...prev, city }))
+          } catch {}
+        },
+        () => {},
+        { timeout: 5000 }
+      )
+    }
+  }, [])
+
+  const greeting = (() => {
+    const h = new Date().getHours()
+    if (h < 12) return 'Buongiorno'
+    if (h < 18) return 'Buon pomeriggio'
+    return 'Buonasera'
+  })()
+
+  const userName = profile?.nome || 'Benvenuto'
+
   return (
     <div className="flex flex-col items-center justify-center h-full text-center px-6">
       <div className="w-16 h-16 rounded-2xl bg-gold/10 border border-gold/20 flex items-center justify-center mb-6">
         <Sparkles className="w-8 h-8 text-gold" />
       </div>
-      <h2 className="font-display text-2xl font-bold text-text mb-2">Ciao! Come posso aiutarti?</h2>
+      <h2 className="font-display text-2xl font-bold text-text mb-2">{greeting}, {userName}</h2>
+      {locationInfo && (
+        <div className="flex items-center gap-2 text-text3 text-xs mb-3">
+          {locationInfo.time && <span>{locationInfo.time}</span>}
+          {locationInfo.date && <><span>·</span><span>{locationInfo.date}</span></>}
+          {locationInfo.city && <><span>·</span><span>📍 {locationInfo.city}</span></>}
+        </div>
+      )}
       <p className="text-text3 text-sm mb-8 max-w-md">
-        Sono l&apos;assistente AI di FIAI. Posso aiutarti a consultare dati aziendali, creare
-        lead e clienti, e molto altro.
+        FIAI OS — 13 agenti specializzati per il tuo gestionale aziendale AI-native.
       </p>
       <div className="grid grid-cols-2 gap-3 max-w-lg w-full">
         {quickCommands.map((cmd) => (
@@ -536,14 +598,14 @@ export default function ChatLayout() {
   // Agent panel buttons config
   // Quick actions for sidebar
   const quickActions = [
-    { label: 'Overview aziendale', command: 'overview aziendale' },
-    { label: 'Lista clienti', command: 'lista clienti' },
-    { label: 'Pipeline leads', command: 'pipeline leads' },
-    { label: 'Fatture scadute', command: 'fatture scadute' },
-    { label: 'Stato progetti', command: 'stato progetti' },
+    { label: 'Overview aziendale', command: 'overview completa azienda' },
+    { label: 'Pipeline commerciale', command: 'stato pipeline e offerte aperte' },
+    { label: 'Stato progetti', command: 'stato progetti in corso' },
+    { label: 'Fatture e scadenze', command: 'fatture scadute e prossime scadenze' },
+    { label: 'Candidati HR', command: 'candidati attivi e annunci lavoro' },
+    { label: 'Scadenze', command: 'scadenze della settimana' },
     { label: 'Documenti', command: 'lista documenti' },
-    { label: 'Utenti sistema', command: 'lista utenti' },
-    { label: 'Agenti autonomi', command: 'lista agenti autonomi' },
+    { label: 'Marketing', command: 'campagne attive e contenuti' },
   ]
 
   // Context panel state — tracks current agent for right panel
@@ -552,6 +614,7 @@ export default function ChatLayout() {
   const [currentAgentColor, setCurrentAgentColor] = useState<string | null>(null)
   const [lastToolCalls, setLastToolCalls] = useState<Record<string, unknown>[]>([])
   const [artifactView, setArtifactView] = useState<any>(null)
+  const [showAdmin, setShowAdmin] = useState(false)
 
   // Load autonomous agents for sidebar
   const [sidebarAgents, setSidebarAgents] = useState<any[]>([])
@@ -578,12 +641,17 @@ export default function ChatLayout() {
         }
       } catch {}
 
-      // Load doc/chunk counts
+      // Load doc/chunk counts via admin system endpoint
       try {
-        const { supabase } = await import('../../lib/supabase')
-        const { data: docs } = await supabase.from('entity').select('id', { count: 'exact', head: true }).eq('type', 'documento')
-        const { data: chunks } = await supabase.from('entity').select('id', { count: 'exact', head: true }).eq('type', 'chunk')
-        setSidebarStats({ docs: (docs as any)?.length || 0, chunks: (chunks as any)?.length || 0 })
+        const { getAuthToken } = await import('../../lib/supabase')
+        const token = getAuthToken()
+        if (token) {
+          const res = await fetch('/api/admin/system', { headers: { 'Authorization': `Bearer ${token}` } })
+          if (res.ok) {
+            const stats = await res.json()
+            setSidebarStats({ docs: stats.documents || 0, chunks: stats.chunks || 0 })
+          }
+        }
       } catch {}
     }
     loadSidebar()
@@ -591,7 +659,13 @@ export default function ChatLayout() {
 
   // Session state
   const [sessions, setSessions] = useState<SessionItem[]>([])
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
+  const [activeSessionId, _setActiveSessionId] = useState<string | null>(() => {
+    try { return localStorage.getItem('fiai_activeSession') } catch { return null }
+  })
+  const setActiveSessionId = (id: string | null) => {
+    _setActiveSessionId(id)
+    try { if (id) localStorage.setItem('fiai_activeSession', id); else localStorage.removeItem('fiai_activeSession') } catch {}
+  }
 
   // Message state
   const [messages, setMessages] = useState<DisplayMessage[]>([])
@@ -639,6 +713,8 @@ export default function ChatLayout() {
     editAutore?: string
     editCategoria?: string
     editChunkStrategy?: string
+    useOcr?: boolean
+    needsOcr?: boolean
     newCategoria?: string
     newCategoriaDesc?: string
     suggestingDesc?: boolean
@@ -709,54 +785,17 @@ export default function ChatLayout() {
     ],
   }), [])
 
-  const executeDirectAction = useCallback(async (toolName: string, action: string, data: any) => {
-    switch (toolName) {
-      case 'get_clients': {
-        const store = useClientiStore.getState()
-        if (action === 'delete') await store.remove(data.id)
-        if (action === 'edit') { const { id, ...rest } = data; await store.update(id, rest) }
-        if (action === 'create') await store.create(data)
-        break
-      }
-      case 'get_pipeline': {
-        const store = useLeadsStore.getState()
-        if (action === 'delete') await store.remove(data.id)
-        if (action === 'edit') { const { id, ...rest } = data; await store.update(id, rest) }
-        if (action === 'create') await store.create(data)
-        break
-      }
-      case 'get_projects': {
-        const store = useProgettiStore.getState()
-        if (action === 'edit') { const { id, ...rest } = data; await store.update(id, rest) }
-        break
-      }
-      case 'get_candidates': {
-        const store = useCandidatiStore.getState()
-        if (action === 'delete') await store.remove(data.id)
-        if (action === 'edit') { const { id, ...rest } = data; await store.update(id, rest) }
-        if (action === 'create') await store.create(data)
-        break
-      }
-      case 'get_expenses': {
-        const store = useRimborsiStore.getState()
-        const userId = useAuthStore.getState().user?.id || ''
-        if (action === 'approve') await store.approve(data.id, userId)
-        if (action === 'reject') await store.reject(data.id, userId, '')
-        break
-      }
-      case 'get_documents':
-      case 'search_documents': {
-        const store = useDocumentiStore.getState()
-        if (action === 'delete') await store.remove(data.id)
-        break
-      }
-      case 'get_overdue_invoices': {
-        if (action === 'mark_paid') {
-          const store = useFattureStore.getState()
-          await store.update(data.id, { stato: 'pagata', pagata_il: new Date().toISOString().split('T')[0] })
-        }
-        break
-      }
+  const executeDirectAction = useCallback(async (_toolName: string, action: string, data: any) => {
+    // All actions go through the chat API (agent tools) — no legacy stores
+    if (!data?.id) return
+    const token = (await import('../../lib/supabase')).getAuthToken()
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    if (token) headers['Authorization'] = `Bearer ${token}`
+    if (action === 'delete') {
+      await fetch('/api/chat/message', { method: 'POST', headers, body: JSON.stringify({ message: `elimina record ${data.id}`, sessionId: 'action' }) })
+    } else if (action === 'edit') {
+      const { id, ...rest } = data
+      await fetch('/api/chat/message', { method: 'POST', headers, body: JSON.stringify({ message: `aggiorna record ${id}: ${JSON.stringify(rest)}`, sessionId: 'action' }) })
     }
   }, [])
 
@@ -800,14 +839,17 @@ export default function ChatLayout() {
     }
   }, [])
 
-  // Load sessions and auto-select the most recent one
+  // Load sessions and restore active session (or auto-select most recent)
   useEffect(() => {
     (async () => {
       const data = await loadSessions()
-      if (data.length > 0 && !activeSessionId) {
-        const mostRecent = data[0] // already sorted by updated_at DESC
-        setActiveSessionId(mostRecent.id)
-        await loadSessionMessages(mostRecent.id)
+      if (data.length > 0) {
+        // Try to restore saved session, fallback to most recent
+        const savedId = activeSessionId
+        const match = savedId ? data.find(s => s.id === savedId) : null
+        const target = match || data[0]
+        if (!match) setActiveSessionId(target.id)
+        await loadSessionMessages(target.id)
       }
     })()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -883,7 +925,7 @@ export default function ChatLayout() {
         id: m.id,
         role: m.ruolo,
         content: m.contenuto,
-        toolCalls: m.tool_calls ?? undefined,
+        toolCalls: m.tool_calls ? (typeof m.tool_calls === 'string' ? JSON.parse(m.tool_calls) : m.tool_calls) : undefined,
         timestamp: m.created_at,
       }))
       setMessages(displayMsgs)
@@ -915,8 +957,7 @@ export default function ChatLayout() {
   const deleteSession = useCallback(async (sessionId: string, e: React.MouseEvent) => {
     e.stopPropagation()
     try {
-      await supabase.from('chat_messages').delete().eq('session_id', sessionId)
-      await supabase.from('chat_sessions').delete().eq('id', sessionId)
+      await deleteChatSession(sessionId)
       setSessions((prev) => prev.filter((s) => s.id !== sessionId))
       if (activeSessionId === sessionId) {
         setActiveSessionId(null)
@@ -980,7 +1021,7 @@ export default function ChatLayout() {
       const { uploadSmart } = await import('../../lib/upload')
       const result = await uploadSmart(file, analysisMode)
       clearTimeout(phaseTimer); clearTimeout(phaseTimer2); clearTimeout(phaseTimer3)
-      setSmartUpload({ status: 'done', fileName: file.name, fileSize: file.size, file, result })
+      setSmartUpload({ status: 'done', fileName: file.name, fileSize: file.size, file, result, needsOcr: result.needs_ocr, useOcr: result.needs_ocr || false })
 
       // For images: also set as attached preview for chat
       if (file.type.startsWith('image/')) {
@@ -1134,9 +1175,7 @@ export default function ChatLayout() {
 
       // Save to prompt history (persistent)
       setPromptHistory((prev) => [...prev, content])
-      if (user) {
-        supabase.from('prompt_history').insert({ user_id: user.id, prompt: content })
-      }
+      // Prompt history managed in-memory (via setPromptHistory above)
 
       // Reset textarea height
       if (inputRef.current) {
@@ -1199,15 +1238,16 @@ export default function ChatLayout() {
           audioBase64ForCloning
         )
 
-        // Finalize: add or replace with complete result
+        // Finalize: enrich streaming message with metadata (keep streamed content, don't overwrite)
         if (streamingMsgAdded) {
           setMessages((prev) =>
             prev.map((m) =>
               m.id === assistantMsgId
                 ? {
                     ...m,
-                    content: result.text,
-                    toolCalls: result.toolCalls.length > 0 ? result.toolCalls : undefined,
+                    // Keep the streamed content — only overwrite if result has more (tool results added after stream)
+                    content: m.content || result.text,
+                    toolCalls: result.toolCalls?.length > 0 ? result.toolCalls : undefined,
                     agentName: result.agentName,
                     agentDomain: result.agentDomain,
                     agentColor: result.agentColor,
@@ -1371,7 +1411,7 @@ export default function ChatLayout() {
           >
             {sidebarOpen ? <PanelLeftClose size={20} /> : <PanelLeft size={20} />}
           </button>
-          <span className="font-display text-gold font-bold text-lg tracking-wide">FIAI</span>
+          <span className="font-display text-gold font-bold text-lg tracking-wide">FIAI OS</span>
           <span className="text-text3 text-xs hidden sm:inline">Fabbrica Italiana Agenti Intelligenti</span>
         </div>
 
@@ -1395,6 +1435,13 @@ export default function ChatLayout() {
               initials
             )}
           </div>
+          <button
+            onClick={() => setShowAdmin(true)}
+            className="p-1.5 rounded-lg text-text3 hover:text-gold hover:bg-gold/10 transition-colors"
+            title="Amministrazione"
+          >
+            <Settings size={18} />
+          </button>
           <button
             onClick={() => logout()}
             className="p-1.5 rounded-lg text-text3 hover:text-red hover:bg-red/10 transition-colors"
@@ -1535,32 +1582,7 @@ export default function ChatLayout() {
                   {messages.map((msg) => (
                     <div key={msg.id}>
                       <MessageBubble message={msg} activeSessionId={activeSessionId} onAction={handleInlineAction} />
-                      {inlineForm && inlineForm.messageId === msg.id && TOOL_FORM_FIELDS[inlineForm.toolName] && (
-                        <div className="max-w-3xl mx-auto ml-12 mt-2">
-                          <InlineCrudForm
-                            fields={TOOL_FORM_FIELDS[inlineForm.toolName]}
-                            data={inlineForm.data}
-                            onSubmit={async (formData) => {
-                              try {
-                                const aziendaId = useAuthStore.getState().profile?.azienda_id
-                                const fullData = { ...formData, azienda_id: aziendaId }
-                                if (inlineForm.mode === 'edit') {
-                                  await executeDirectAction(inlineForm.toolName, 'edit', { ...fullData, id: inlineForm.data.id })
-                                  toast.success('Aggiornato')
-                                } else {
-                                  await executeDirectAction(inlineForm.toolName, 'create', fullData)
-                                  toast.success('Creato')
-                                }
-                                setInlineForm(null)
-                              } catch {
-                                toast.error('Errore durante il salvataggio')
-                              }
-                            }}
-                            onCancel={() => setInlineForm(null)}
-                            submitLabel={inlineForm.mode === 'edit' ? 'Aggiorna' : 'Crea'}
-                          />
-                        </div>
-                      )}
+                      {/* Inline forms removed — edits go through chat */}
                     </div>
                   ))}
 
@@ -1753,7 +1775,7 @@ export default function ChatLayout() {
                 </div>
               </form>
               <p className="text-center text-[10px] text-text3 mt-2">
-                FIAI AI &middot; Le risposte possono contenere errori
+                FIAI OS · Powered by FIAI &middot; Le risposte possono contenere errori
               </p>
             </div>
           </div>
@@ -1761,7 +1783,7 @@ export default function ChatLayout() {
 
         {/* Right Panel — disabled for now, will be re-enabled when stable */}
       </div>
-      <UserFilesModal open={filesModalOpen} onClose={() => setFilesModalOpen(false)} />
+      {/* UserFilesModal removed */}
 
       {/* Artifact Overlay — disabled for now */}
 
@@ -1875,6 +1897,24 @@ export default function ChatLayout() {
                           <option value="by_heading">Per heading (documentazione tecnica)</option>
                           <option value="none">Non dividere</option>
                         </select>
+                      </div>
+                    )}
+
+                    {/* OCR toggle — shown when PDF is scanned/image-based */}
+                    {smartUpload.needsOcr && (
+                      <div className="flex items-center gap-2 bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2">
+                        <label className="flex items-center gap-2 cursor-pointer flex-1">
+                          <input
+                            type="checkbox"
+                            checked={smartUpload.useOcr || false}
+                            onChange={(e) => setSmartUpload(prev => prev ? { ...prev, useOcr: e.target.checked } : null)}
+                            className="rounded border-border accent-gold"
+                          />
+                          <div>
+                            <span className="text-xs font-medium text-amber-600">Riconoscitore OCR</span>
+                            <p className="text-[10px] text-text3">PDF scannerizzato — usa AI per estrarre il testo dalle immagini (pagina per pagina)</p>
+                          </div>
+                        </label>
                       </div>
                     )}
 
@@ -1998,7 +2038,7 @@ export default function ChatLayout() {
                         const finalNome = smartUpload.editNome || r.display_name
                         const finalAutore = smartUpload.editAutore || (r.extracted_data as any)?.autore || undefined
                         const finalChunkStrategy = smartUpload.editChunkStrategy || r.chunk_strategy || undefined
-                        await confirmUpload(r.upload_id, finalCat, finalNome, finalAutore, finalChunkStrategy)
+                        await confirmUpload(r.upload_id, finalCat, finalNome, finalAutore, finalChunkStrategy, smartUpload.useOcr)
                         toast.success(`"${r.display_name}" — catalogazione in corso`)
                       } catch (err: any) {
                         toast.error(err.message || 'Errore nella conferma')
@@ -2031,40 +2071,27 @@ export default function ChatLayout() {
         </div>
       )}
 
-      {archiveModal && (
-        <DocumentArchiveModal
-          open={archiveModal.open}
-          onClose={() => setArchiveModal(null)}
-          fileUrl={archiveModal.fileUrl}
-          fileName={archiveModal.fileName}
-          fileSize={archiveModal.fileSize}
-          suggestedCategoria={archiveModal.suggestedCategoria}
-          suggestedTags={archiveModal.suggestedTags}
-          suggestedDescrizione={archiveModal.suggestedDescrizione}
-          extractedText={archiveModal.extractedText}
-          onConfirm={async (data) => {
-            const aziendaId = profile?.azienda_id
-            const userId = user?.id
-            if (!aziendaId || !userId) return
-            const ext = archiveModal.fileName.split('.').pop()?.toLowerCase() || ''
-            await useDocumentiStore.getState().create({
-              azienda_id: aziendaId,
-              nome: data.nome,
-              tipo_file: ext,
-              categoria: data.categoria as any,
-              descrizione: data.descrizione || null,
-              file_url: archiveModal.fileUrl,
-              file_size: archiveModal.fileSize,
-              tags: data.tags.length > 0 ? data.tags : null,
-              contenuto_testo: data.contenuto_testo || null,
-              uploaded_by: userId,
-            })
-          }}
-        />
-      )}
+      {/* Archive modal removed — documents uploaded via smart upload */}
 
       {/* Job Monitor — floating badge */}
       <JobMonitor />
+
+      {/* Admin overlay — fullscreen modal */}
+      {showAdmin && (
+        <div className="fixed inset-0 z-50 bg-bg overflow-y-auto">
+          <div className="sticky top-0 z-10 bg-bg border-b border-border px-4 py-2 flex items-center justify-between">
+            <h2 className="text-sm font-bold text-text">Amministrazione</h2>
+            <button
+              onClick={() => setShowAdmin(false)}
+              className="p-1.5 rounded-lg text-text3 hover:text-text hover:bg-bg3 transition-colors"
+              title="Chiudi"
+            >
+              <X size={18} />
+            </button>
+          </div>
+          <AdminPage />
+        </div>
+      )}
     </div>
   )
 }

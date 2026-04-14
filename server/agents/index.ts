@@ -1,9 +1,43 @@
 import { Router, Response } from 'express'
+import crypto from 'crypto'
 import { AuthRequest, authMiddleware } from '../middleware.js'
 import type { ChatResponse } from './types.js'
 import { orchestrate } from './orchestrator.js'
 import { AGENTS } from './config.js'
 import db from '../db.js'
+
+// ── Session & Message Persistence ──────────────────────
+
+function ensureSession(sessionId: string, userId: string, aziendaId: string, channel: string = 'web'): string {
+  if (!sessionId) sessionId = crypto.randomUUID()
+  const existing = db.prepare("SELECT id FROM chat_sessions WHERE id = ?").get(sessionId)
+  if (!existing) {
+    db.prepare("INSERT INTO chat_sessions (id, azienda_id, user_id, titolo, channel) VALUES (?,?,?,?,?)").run(
+      sessionId, aziendaId, userId, 'Nuova conversazione', channel
+    )
+  }
+  return sessionId
+}
+
+function saveMessage(sessionId: string, userId: string, role: string, content: string, agentDomain?: string, agentName?: string, toolCalls?: any) {
+  try {
+    db.prepare("INSERT INTO chat_messages (id, session_id, user_id, ruolo, contenuto, tool_calls, agent_domain, agent_name) VALUES (?,?,?,?,?,?,?,?)").run(
+      crypto.randomUUID(), sessionId, userId, role, content,
+      toolCalls ? JSON.stringify(toolCalls) : null,
+      agentDomain || null, agentName || null
+    )
+    db.prepare("UPDATE chat_sessions SET updated_at = datetime('now'), agent_domain = ? WHERE id = ?").run(agentDomain || null, sessionId)
+  } catch {}
+}
+
+function loadHistory(sessionId: string, limit: number = 20): { role: string; content: string }[] {
+  try {
+    const rows = db.prepare(
+      "SELECT ruolo as role, contenuto as content FROM chat_messages WHERE session_id = ? ORDER BY created_at DESC LIMIT ?"
+    ).all(sessionId, limit) as any[]
+    return rows.reverse()
+  } catch { return [] }
+}
 
 // ── Public API ─────────────────────────────────────────
 
@@ -12,24 +46,52 @@ export async function handleChatMessage(
   userId: string,
   aziendaId: string,
   options?: {
-    format?: 'web' | 'whatsapp'
+    format?: string
     sessionId?: string
+    channel?: string
     history?: { role: string; content: string }[]
     attachedImageBase64?: string
     attachedAudioBase64?: string
     conversationHistory?: { role: string; content: string }[]
     permissions?: import('./types.js').UserPermissions
+    onProgress?: (event: { type: string; [key: string]: unknown }) => void
   }
 ): Promise<ChatResponse> {
-  const history = options?.history || options?.conversationHistory
-  return orchestrate(message, userId, aziendaId, {
+  const channel = options?.channel || (options?.format === 'whatsapp' ? 'whatsapp' : 'web')
+  const sessionId = ensureSession(options?.sessionId || '', userId, aziendaId, channel)
+
+  // Load history from DB if not provided by caller
+  let history = options?.history || options?.conversationHistory
+  if (!history || history.length === 0) {
+    history = loadHistory(sessionId, 20)
+  }
+
+  // Save user message
+  saveMessage(sessionId, userId, 'user', message)
+
+  const result = await orchestrate(message, userId, aziendaId, {
     format: options?.format,
-    sessionId: options?.sessionId,
+    sessionId,
     history,
     attachedImageBase64: options?.attachedImageBase64,
     attachedAudioBase64: options?.attachedAudioBase64,
     permissions: options?.permissions,
+    onProgress: options?.onProgress,
   })
+
+  // Save assistant response
+  saveMessage(sessionId, userId, 'assistant', result.text, result.agentDomain, result.agentName, result.toolCalls)
+
+  // Auto-title session from first message
+  try {
+    const session = db.prepare("SELECT titolo FROM chat_sessions WHERE id = ?").get(sessionId) as any
+    if (session?.titolo === 'Nuova conversazione' && message.length > 3) {
+      const title = message.substring(0, 60) + (message.length > 60 ? '...' : '')
+      db.prepare("UPDATE chat_sessions SET titolo = ? WHERE id = ?").run(title, sessionId)
+    }
+  } catch {}
+
+  return { ...result, sessionId } as any
 }
 
 // ── Express Router ─────────────────────────────────────
@@ -60,6 +122,75 @@ router.post('/message', authMiddleware(true), async (req: AuthRequest, res: Resp
     console.error('Chat API error:', err)
     res.status(500).json({ error: (err as Error).message })
   }
+})
+
+// ── SSE Streaming endpoint ───────────────────────────────
+
+router.post('/message/stream', authMiddleware(true), async (req: AuthRequest, res: Response) => {
+  const { message, format, sessionId, conversationHistory, history, attachedImageBase64, attachedAudioBase64 } = req.body
+  if (!message) { res.status(400).json({ error: 'message richiesto' }); return }
+
+  // Set SSE headers
+  res.setHeader('Content-Type', 'text/event-stream')
+  res.setHeader('Cache-Control', 'no-cache')
+  res.setHeader('Connection', 'keep-alive')
+  res.setHeader('X-Accel-Buffering', 'no')
+  res.flushHeaders()
+
+  const channel = (format === 'whatsapp') ? 'whatsapp' : 'web'
+  const resolvedSessionId = ensureSession(sessionId || '', req.userId || '', req.aziendaId || '', channel)
+
+  // Load history from DB if not provided
+  let chatHistory = history || conversationHistory
+  if (!chatHistory || chatHistory.length === 0) {
+    chatHistory = loadHistory(resolvedSessionId, 20)
+  }
+
+  // Save user message
+  saveMessage(resolvedSessionId, req.userId || '', 'user', message)
+
+  try {
+    const result = await orchestrate(message, req.userId || '', req.aziendaId || '', {
+      format: format || 'web',
+      sessionId: resolvedSessionId,
+      history: chatHistory,
+      attachedImageBase64,
+      attachedAudioBase64,
+      permissions: req.permissions,
+      onProgress: (event) => {
+        // Forward all progress events as SSE
+        res.write(`data: ${JSON.stringify(event)}\n\n`)
+      },
+    })
+
+    // Save assistant response
+    saveMessage(resolvedSessionId, req.userId || '', 'assistant', result.text, result.agentDomain, result.agentName, result.toolCalls)
+
+    // Auto-title
+    try {
+      const session = db.prepare("SELECT titolo FROM chat_sessions WHERE id = ?").get(resolvedSessionId) as any
+      if (session?.titolo === 'Nuova conversazione' && message.length > 3) {
+        db.prepare("UPDATE chat_sessions SET titolo = ? WHERE id = ?").run(message.substring(0, 60) + (message.length > 60 ? '...' : ''), resolvedSessionId)
+      }
+    } catch {}
+
+    // Send final result (without the full text since it was already streamed)
+    res.write(`data: ${JSON.stringify({
+      type: 'done',
+      agentName: result.agentName,
+      agentDomain: result.agentDomain,
+      agentColor: result.agentColor,
+      toolCalls: result.toolCalls,
+      suggestions: result.suggestions,
+      sessionId: resolvedSessionId,
+      totalTokens: result.totalTokens,
+    })}\n\n`)
+
+  } catch (err) {
+    res.write(`data: ${JSON.stringify({ type: 'error', message: (err as Error).message })}\n\n`)
+  }
+
+  res.end()
 })
 
 // ── Agent Views API ───────────────────────────────────

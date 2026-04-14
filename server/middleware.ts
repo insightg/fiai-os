@@ -36,31 +36,24 @@ export function authMiddleware(required = true) {
       if (rel) {
         req.aziendaId = rel.to_id
       } else {
-        // Fallback: try azienda_id directly from names
+        // Fallback: try azienda_id directly from entity
         const nameRec = db.prepare("SELECT azienda_id FROM entity WHERE id = ?").get(decoded.userId) as any
         if (nameRec?.azienda_id) req.aziendaId = nameRec.azienda_id
       }
 
-      // Load user role + group permissions
+      // Load user permissions from groups (unified — no separate roles)
       try {
-        const user = db.prepare("SELECT metadata, tags FROM entity WHERE id = ?").get(decoded.userId) as any
-        if (user) {
-          const meta = typeof user.metadata === 'string' ? JSON.parse(user.metadata) : (user.metadata || {})
-          const tags = typeof user.tags === 'string' ? JSON.parse(user.tags) : (user.tags || [])
-          const role = meta.ruolo || (tags.includes('admin') ? 'admin' : 'collaboratore')
-
-          // Load group permissions
-          const groups = db.prepare(
-            "SELECT e.metadata FROM relations r JOIN entity e ON e.id = r.to_id WHERE r.from_id = ? AND r.tipo = 'membro_di_gruppo'"
-          ).all(decoded.userId) as any[]
-          const groupPerms = groups.map(g => {
-            const m = typeof g.metadata === 'string' ? JSON.parse(g.metadata) : (g.metadata || {})
-            return m.permissions || {}
-          })
-
-          req.permissions = new UserPermissions(role, groupPerms)
-        }
-      } catch {}
+        const groups = db.prepare(
+          "SELECT e.display_name, e.metadata FROM relations r JOIN entity e ON e.id = r.to_id WHERE r.from_id = ? AND r.tipo = 'membro_di_gruppo'"
+        ).all(decoded.userId) as any[]
+        const groupData = groups.map(g => {
+          const m = typeof g.metadata === 'string' ? JSON.parse(g.metadata) : (g.metadata || {})
+          return { name: g.display_name, permissions: m.permissions || {}, agentPermissions: m.agentPermissions || undefined }
+        })
+        req.permissions = new UserPermissions(groupData)
+      } catch {
+        req.permissions = new UserPermissions([])  // default: read only
+      }
 
       next()
     } catch {

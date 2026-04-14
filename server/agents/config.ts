@@ -15,12 +15,14 @@ import whatsapp from './domains/whatsapp/index.js'
 import it from './domains/it/index.js'
 import doctor from './domains/doctor/index.js'
 import tts from './domains/tts/index.js'
+import email from './domains/email/index.js'
+import pianificazione from './domains/pianificazione/index.js'
 import general from './domains/general/index.js'
 
 const DEFAULT_AGENTS: Record<string, AgentConfig> = {
   pulse, commerciale, produzione, marketing,
   amministrazione, hr, legal, documentale,
-  whatsapp, it, doctor, tts, general,
+  whatsapp, email, pianificazione, it, doctor, tts, general,
 }
 
 // ── Load skills from VFS (entity type='skill') ──────────
@@ -72,6 +74,8 @@ export const AGENT_COLORS: Record<string, string> = {
   documents: '#D32F2F',
   documentale: '#795548',
   whatsapp: '#25D366',
+  email: '#1565C0',
+  pianificazione: '#FF5722',
   it: '#455A64',
   doctor: '#00ACC1',
   image: '#E91E63',
