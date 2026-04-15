@@ -89,9 +89,9 @@ router.get('/templates', (_req, res: Response) => {
 
 function buildTypstSource(template: string, data: any, aziendaId: string): string {
   // Get company info
-  const azienda = db.prepare('SELECT * FROM aziende WHERE id = ?').get(aziendaId) as any
+  const azienda = db.prepare("SELECT * FROM entity WHERE id = ? AND type = 'organizzazione'").get(aziendaId) as any
 
-  const companyName = azienda?.nome || 'FIAI'
+  const companyName = azienda?.display_name || 'FIAI'
   const today = new Date().toLocaleDateString('it-IT', { day: '2-digit', month: 'long', year: 'numeric' })
 
   // Common header

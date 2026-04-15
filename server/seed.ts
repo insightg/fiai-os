@@ -13,8 +13,8 @@ async function seed() {
       db.exec(sql)
     }
 
-    // Check if admin user already exists
-    const existing = db.prepare("SELECT id FROM users WHERE email = 'admin@fiai.it'").get()
+    // Check if admin user already exists (VFS model)
+    const existing = db.prepare("SELECT id FROM entity WHERE email = 'admin@fiai.it' AND type = 'utente'").get()
     if (existing) {
       console.log('Seed data already exists, skipping.')
       return
@@ -23,41 +23,60 @@ async function seed() {
     const passwordHash = await bcrypt.hash('password123', 10)
 
     const seedTx = db.transaction(() => {
-      // Create default azienda
+      // Create default organization
       const aziendaId = crypto.randomUUID()
       db.prepare(
-        `INSERT INTO aziende (id, nome, piva, email)
-         VALUES (?, ?, ?, ?)`
-      ).run(aziendaId, 'FIAI - Fabbrica Italiana Agenti Intelligenti Srl', '12345678901', 'info@fiai.it')
-      console.log(`Created azienda: ${aziendaId}`)
+        `INSERT INTO entity (id, azienda_id, type, display_name, slug, piva, email, tags, metadata, path)
+         VALUES (?, ?, 'organizzazione', 'FIAI', 'fiai', ?, ?, '["organizzazione"]', '{}', '/entity/organizzazione/fiai')`
+      ).run(aziendaId, aziendaId, '12345678901', 'info@fiai.it')
+      console.log(`Created organization: ${aziendaId}`)
 
       // Create admin user
       const userId = crypto.randomUUID()
       db.prepare(
-        `INSERT INTO users (id, email, password_hash)
-         VALUES (?, ?, ?)`
-      ).run(userId, 'admin@fiai.it', passwordHash)
-      console.log(`Created user: admin@fiai.it (${userId})`)
+        `INSERT INTO entity (id, azienda_id, type, display_name, slug, email, tags, metadata, path)
+         VALUES (?, ?, 'utente', 'admin', 'admin', ?, '["utente","admin"]', ?, '/entity/utente/admin')`
+      ).run(userId, aziendaId, 'admin@fiai.it', JSON.stringify({
+        password_hash: passwordHash,
+        cognome: '',
+        ruolo: 'admin',
+        tts_voice: 'Vivian',
+      }))
+      console.log(`Created admin user: admin@fiai.it (${userId})`)
 
-      // Create user profile
+      // Create membro_di relation
       db.prepare(
-        `INSERT INTO user_profiles (id, azienda_id, email, nome, cognome, ruolo)
-         VALUES (?, ?, ?, ?, ?, ?)`
-      ).run(userId, aziendaId, 'admin@fiai.it', 'Admin', 'FIAI', 'admin')
-      console.log('Created user profile')
+        `INSERT INTO relations (id, azienda_id, from_id, to_id, tipo)
+         VALUES (?, ?, ?, ?, 'membro_di')`
+      ).run(crypto.randomUUID(), aziendaId, userId, aziendaId)
 
-      // Create a default conto
-      const contoId = crypto.randomUUID()
-      db.prepare(
-        `INSERT INTO conti (id, azienda_id, nome, tipo, saldo, iban, banca)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`
-      ).run(contoId, aziendaId, 'Conto Principale', 'banca', 10000, 'IT60X0542811101000000123456', 'Banca Esempio')
-      console.log('Created default conto')
+      // Create default permission groups
+      const groups = [
+        { name: 'Amministratori', slug: 'amministratori', permissions: { '*': ['read', 'create', 'update', 'delete', 'send'] } },
+        { name: 'Operatori', slug: 'operatori', permissions: { '*': ['read', 'create', 'update'] } },
+        { name: 'Lettori', slug: 'lettori', permissions: { '*': ['read'] } },
+      ]
+      for (const g of groups) {
+        const groupId = crypto.randomUUID()
+        db.prepare(
+          `INSERT INTO entity (id, azienda_id, type, display_name, slug, metadata, path)
+           VALUES (?, ?, 'gruppo', ?, ?, ?, ?)`
+        ).run(groupId, aziendaId, g.name, g.slug, JSON.stringify({ permissions: g.permissions }), `/entity/gruppo/${g.slug}`)
+
+        // Add admin to Amministratori group
+        if (g.slug === 'amministratori') {
+          db.prepare(
+            `INSERT INTO relations (id, azienda_id, from_id, to_id, tipo)
+             VALUES (?, ?, ?, ?, 'membro_di_gruppo')`
+          ).run(crypto.randomUUID(), aziendaId, userId, groupId)
+        }
+      }
+      console.log('Created default permission groups')
     })
 
     seedTx()
     console.log('\nSeed completed successfully!')
-    console.log('Login with: admin@fiai.it / password123')
+    console.log('Login with: admin / password123')
   } catch (err) {
     console.error('Seed failed:', err)
     process.exit(1)

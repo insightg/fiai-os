@@ -134,11 +134,12 @@ async function handleIncomingMessage(msg: WAMessage) {
       pendingLogins.delete(lidId)
 
       if (match) {
-        // Login OK — save LID mapping
+        // Login OK — save LID mapping + auth timestamp
         const userPhone = pending.telefono?.replace(/^\+/, '') || lidId
-        db.prepare("UPDATE entity SET metadata = json_set(metadata, '$.whatsapp_lid', ?, '$.whatsapp_active', 1) WHERE id = ?").run(lidId, pending.id)
+        db.prepare("UPDATE entity SET metadata = json_set(metadata, '$.whatsapp_lid', ?, '$.whatsapp_active', 1, '$.whatsapp_auth_at', ?) WHERE id = ?").run(lidId, new Date().toISOString(), pending.id)
         lidPhoneMap.set(lidId, userPhone)
-        await sock.sendMessage(sender, { text: `✅ Autenticato come *${pending.display_name}*!\n\nOra puoi usare FIAI da WhatsApp.` })
+        const { getSetting } = await import('./settings.js')
+        await sock.sendMessage(sender, { text: `✅ Autenticato come *${pending.display_name}*!\n\nOra puoi usare ${getSetting('company_short_name') || 'il sistema'} da WhatsApp. La sessione scade dopo 1 ora.` })
       } else {
         await sock.sendMessage(sender, { text: '❌ Password errata. Riprova scrivendo la tua email.' })
       }
@@ -160,7 +161,8 @@ async function handleIncomingMessage(msg: WAMessage) {
     }
 
     // First contact — ask for email
-    await sock.sendMessage(sender, { text: '👋 Benvenuto in *FIAI OS*!\n\nPer autenticarti, invia la tua *email* di accesso:' })
+    const { getSetting } = await import('./settings.js')
+    await sock.sendMessage(sender, { text: `👋 Benvenuto in *${getSetting('company_short_name') || 'il sistema'}*!\n\nPer autenticarti, invia la tua *email* di accesso:` })
     return
   }
 
@@ -188,7 +190,55 @@ async function handleIncomingMessage(msg: WAMessage) {
   // No fallback — VFS only
 
   if (!waUser) {
-    await sock.sendMessage(sender, { text: '⚠️ Numero non riconosciuto.\n\nChiedi al tuo amministratore di collegare questo numero al tuo profilo FIAI.' })
+    await sock.sendMessage(sender, { text: '⚠️ Numero non riconosciuto.\n\nChiedi al tuo amministratore di collegare questo numero al tuo profilo.' })
+    return
+  }
+
+  // Check if phone user has pending re-auth (BEFORE auth expiry check — otherwise expiry re-triggers every message)
+  const phonePending = pendingLogins.get(phone)
+  if (phonePending) {
+    if (phonePending._awaitingEmail) {
+      // Expecting email
+      const emailMatch = text.trim().match(/^[^\s@]+@[^\s@]+\.[^\s@]+$/)
+      if (emailMatch) {
+        // Verify email matches the user's email
+        const userEmail = (phonePending.email || '').toLowerCase()
+        if (!userEmail || emailMatch[0].toLowerCase() === userEmail) {
+          phonePending._awaitingEmail = false
+          pendingLogins.set(phone, phonePending)
+          await sock.sendMessage(sender, { text: `👤 *${phonePending.nome || phonePending.display_name}*\n\nInvia la tua *password*:` })
+        } else {
+          await sock.sendMessage(sender, { text: '❌ Email non corrisponde al tuo profilo. Riprova.' })
+        }
+      } else {
+        await sock.sendMessage(sender, { text: '📧 Invia la tua *email* di accesso per continuare:' })
+      }
+      return
+    } else {
+      // Expecting password
+      const bcryptMod = await import('bcryptjs')
+      const meta = typeof phonePending.metadata === 'string' ? JSON.parse(phonePending.metadata) : phonePending.metadata
+      const match = await bcryptMod.compare(text.trim(), meta?.password_hash || '')
+      pendingLogins.delete(phone)
+      if (match) {
+        db.prepare("UPDATE entity SET metadata = json_set(metadata, '$.whatsapp_auth_at', ?) WHERE id = ?").run(new Date().toISOString(), phonePending.user_id)
+        await sock.sendMessage(sender, { text: `✅ Riautenticato come *${phonePending.nome || phonePending.display_name}*! Sessione valida per 1 ora.` })
+      } else {
+        await sock.sendMessage(sender, { text: '❌ Password errata. Scrivi la tua email per riprovare.' })
+      }
+      return
+    }
+  }
+
+  // Check WhatsApp auth expiry (1 hour)
+  const waMeta = typeof waUser.metadata === 'string' ? JSON.parse(waUser.metadata) : (waUser.metadata || {})
+  const authAt = waMeta.whatsapp_auth_at ? new Date(waMeta.whatsapp_auth_at).getTime() : 0
+  const AUTH_TTL = 8640000000 // 100 days
+  if (Date.now() - authAt > AUTH_TTL) {
+    // Auth expired or never authenticated — start login flow
+    pendingLogins.set(phone, { ...waUser, _awaitingEmail: true })
+    const { getSetting } = await import('./settings.js')
+    await sock.sendMessage(sender, { text: `🔒 *Sessione scaduta*\n\nPer continuare a usare ${getSetting('company_short_name') || 'il sistema'}, invia la tua *email* di accesso:` })
     return
   }
 
@@ -262,6 +312,7 @@ const pendingArchive = new Map<string, {
   aziendaId: string
   userId: string
   timestamp: number
+  useOcr?: boolean
 }>()
 
 // ── Handle Document Upload via WhatsApp ──────────────────
@@ -322,7 +373,16 @@ async function handleDocumentUpload(msg: WAMessage, sender: string, waUser: any,
       aziendaId: waUser.azienda_id,
       userId: waUser.user_id,
       timestamp: Date.now(),
+      useOcr: isScanned,
     })
+
+    // Check if PDF needs OCR
+    const ext2 = path.extname(fileName).toLowerCase()
+    let isScanned = false
+    if (ext2 === '.pdf') {
+      const { needsOcr: checkOcr } = await import('./ocr.js')
+      isScanned = checkOcr(extractedText, buffer.length, 0)
+    }
 
     const tagsStr = tags.length > 0 ? tags.join(', ') : 'nessuno'
     await sock.sendMessage(sender, {
@@ -331,8 +391,9 @@ async function handleDocumentUpload(msg: WAMessage, sender: string, waUser: any,
         `*Tags:* ${tagsStr}\n` +
         `*Descrizione:* ${descrizione || '(nessuna)'}\n\n` +
         `${extractedText ? `_Testo estratto (anteprima):_ ${extractedText.substring(0, 200)}...\n\n` : ''}` +
+        `${isScanned ? '⚠️ *PDF scannerizzato rilevato* — il testo verra\' estratto con OCR (Riconoscitore AI)\n\n' : ''}` +
         `Vuoi archiviarlo? Rispondi:\n` +
-        `✅ *sì* — archivia con questi dati\n` +
+        `✅ *sì* — archivia con questi dati${isScanned ? ' + OCR' : ''}\n` +
         `✏️ *sì come [categoria]* — archivia con categoria diversa\n` +
         `❌ *no* — non archiviare`
     })
@@ -381,21 +442,43 @@ function checkPendingArchive(sender: string, text: string): boolean {
 
 async function archivePendingDocument(sender: string, pending: typeof pendingArchive extends Map<string, infer V> ? V : never) {
   try {
-    const id = crypto.randomUUID()
-    const tagsJson = JSON.stringify(pending.tags)
+    const entityId = crypto.randomUUID()
+    const slug = pending.fileName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').substring(0, 80)
 
-    db.prepare(
-      'INSERT INTO documenti (id, azienda_id, nome, tipo_file, categoria, descrizione, file_url, tags, contenuto_testo, uploaded_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-    ).run(
-      id, pending.aziendaId, pending.fileName,
-      path.extname(pending.fileName).replace('.', '') || 'pdf',
-      pending.categoria, pending.descrizione, pending.fileUrl,
-      tagsJson, pending.extractedText, pending.userId
+    // Save as entity (same as web upload)
+    db.prepare(`INSERT INTO entity (id, azienda_id, type, display_name, slug, stato, user_id, file_url, body, categoria, metadata, path)
+      VALUES (?, ?, 'documento', ?, ?, 'processing', ?, ?, ?, ?, ?, ?)`).run(
+      entityId, pending.aziendaId,
+      pending.fileName, slug,
+      pending.userId, pending.fileUrl,
+      pending.extractedText || null,
+      pending.categoria,
+      JSON.stringify({
+        tipo_file: path.extname(pending.fileName).replace('.', '') || 'pdf',
+        tags: pending.tags,
+        descrizione: pending.descrizione,
+        uploaded_via: 'whatsapp',
+      }),
+      `/entity/documento/${slug}`
+    )
+
+    // Create background job for chunking + tagging + embedding (+ OCR if needed)
+    const jobId = crypto.randomUUID()
+    db.prepare(`INSERT INTO entity (id, azienda_id, type, display_name, slug, stato, data, metadata, path)
+      VALUES (?, ?, 'job', ?, ?, 'queued', datetime('now'), ?, ?)`).run(
+      jobId, pending.aziendaId,
+      `Processa: ${pending.fileName}`, `process-doc-${entityId.substring(0, 8)}`,
+      JSON.stringify({
+        action: 'process_document',
+        params: { entityId, fileName: pending.fileName, use_ocr: pending.useOcr || false },
+      }),
+      `/entity/job/process-doc-${entityId.substring(0, 8)}`
     )
 
     pendingArchive.delete(sender)
+    const ocrNote = pending.useOcr ? '\n🔍 OCR in corso — il testo verra\' estratto dalle immagini.' : ''
     await sock.sendMessage(sender, {
-      text: `✅ *${pending.fileName}* archiviato come *${pending.categoria}*.\n\nOra è ricercabile nel sistema documentale.`
+      text: `✅ *${pending.fileName}* archiviato come *${pending.categoria}*.${ocrNote}\n\nOra è ricercabile nel sistema documentale.`
     })
   } catch (err: any) {
     await sock.sendMessage(sender, { text: `❌ Errore archiviazione: ${err.message}` })
@@ -403,32 +486,12 @@ async function archivePendingDocument(sender: string, pending: typeof pendingArc
   }
 }
 
-// ── Conversation History per sender (for multi-turn WhatsApp) ──
+// ── Session management (persistent in DB via handleChatMessage) ──
 
-const conversationHistory = new Map<string, { role: string; content: string }[]>()
-const senderSessions = new Map<string, string>()
-
-function getConversationHistory(sender: string): { role: string; content: string }[] {
-  if (!conversationHistory.has(sender)) {
-    conversationHistory.set(sender, [])
-  }
-  return conversationHistory.get(sender)!
-}
-
-function addToHistory(sender: string, role: string, content: string): void {
-  const history = getConversationHistory(sender)
-  history.push({ role, content })
-  // Keep last 10 messages
-  if (history.length > 10) {
-    history.splice(0, history.length - 10)
-  }
-}
-
-function getSessionId(sender: string): string {
-  if (!senderSessions.has(sender)) {
-    senderSessions.set(sender, `wa-${sender.replace(/\D/g, '')}-${Date.now()}`)
-  }
-  return senderSessions.get(sender)!
+function getWhatsAppSessionId(userId: string): string {
+  // One session per user per day (allows natural conversation continuity)
+  const today = new Date().toISOString().split('T')[0]
+  return `wa-${userId}-${today}`
 }
 
 // ── Use shared server-side orchestrator ──────────────────
@@ -440,20 +503,14 @@ async function callAgent(userMessage: string, userId: string, sender: string): P
   const rel = db.prepare("SELECT to_id FROM relations WHERE from_id = ? AND tipo = 'membro_di' LIMIT 1").get(userId) as any
   const aziendaId = rel?.to_id || (db.prepare("SELECT azienda_id FROM entity WHERE id = ?").get(userId) as any)?.azienda_id || ''
 
-  const history = getConversationHistory(sender)
-  const sessionId = getSessionId(sender)
+  const sessionId = getWhatsAppSessionId(userId)
 
-  // Add user message to history
-  addToHistory(sender, 'user', userMessage)
-
+  // handleChatMessage now handles history loading from DB + persistence
   const result = await handleChatMessage(userMessage, userId, aziendaId, {
     format: 'whatsapp',
     sessionId,
-    history: history.slice(0, -1), // exclude current message (already passed as `message`)
+    channel: 'whatsapp',
   })
-
-  // Add assistant response to history
-  addToHistory(sender, 'assistant', result.text)
 
   return result
 }
@@ -471,7 +528,7 @@ async function handleSpecialCommand(sender: string, text: string, waUser: any) {
 
   if (cmd === '!help') {
     await sock.sendMessage(sender, {
-      text: '*FIAI AI - Comandi WhatsApp*\n\n' +
+      text: '*FIAI OS AI - Comandi WhatsApp*\n\n' +
         '!help — Questo messaggio\n' +
         '!stato — Overview aziendale\n' +
         '!clienti — Lista clienti\n' +
@@ -513,7 +570,7 @@ async function handleVoiceMessage(sender: string, text: string, _waUser: any) {
   // Format: !voce <numero> <messaggio> OR !parla <numero> <messaggio>
   const match = text.match(/^!(?:voce|parla)\s+(\d+)\s+(.+)/i)
   if (!match) {
-    await sock.sendMessage(sender, { text: 'Formato: *!voce 3331234567 Benvenuto in FIAI*\nOppure: *!parla 3331234567 il tuo messaggio*' })
+    await sock.sendMessage(sender, { text: 'Formato: *!voce 3331234567 Benvenuto in FIAI OS*\nOppure: *!parla 3331234567 il tuo messaggio*' })
     return
   }
 
@@ -574,7 +631,7 @@ async function handleLinkCommand(sender: string, text: string) {
   const user = db.prepare("SELECT id, display_name FROM entity WHERE email = ? AND tags LIKE '%\"utente\"%'").get(email) as any
 
   if (!user) {
-    await sock.sendMessage(sender, { text: `❌ Email "${email}" non trovata nel sistema FIAI.` })
+    await sock.sendMessage(sender, { text: `❌ Email "${email}" non trovata nel sistema FIAI OS.` })
     return
   }
 
@@ -662,7 +719,7 @@ whatsappRouter.get('/qr', async (_req, res: Response) => {
 whatsappRouter.get('/qr-page', (_req, res: Response) => {
   res.setHeader('Content-Type', 'text/html')
   res.send(`<!DOCTYPE html>
-<html><head><title>FIAI WhatsApp QR</title>
+<html><head><title>FIAI OS WhatsApp QR</title>
 <meta http-equiv="refresh" content="5">
 <style>
   body { display:flex; flex-direction:column; align-items:center; justify-content:center; height:100vh; margin:0; font-family:sans-serif; background:#111; color:#fff; }
@@ -671,7 +728,7 @@ whatsappRouter.get('/qr-page', (_req, res: Response) => {
   p { color:#888; font-size:14px; }
 </style></head>
 <body>
-  <h2>FIAI — WhatsApp</h2>
+  <h2>FIAI OS — WhatsApp</h2>
   <p>Scansiona con WhatsApp → Dispositivi collegati</p>
   <img src="/api/whatsapp/qr" width="400" height="400" />
   <p style="margin-top:16px;font-size:12px;color:#555">Pagina si aggiorna ogni 5 secondi</p>
@@ -696,10 +753,10 @@ whatsappRouter.get('/status', authMiddleware(true), async (_req: AuthRequest, re
 
 whatsappRouter.get('/users', authMiddleware(true), (_req: AuthRequest, res: Response) => {
   const users = db.prepare(`
-    SELECT wu.*, up.nome, up.cognome, up.email
-    FROM whatsapp_users wu
-    LEFT JOIN user_profiles up ON up.id = wu.user_id
-    ORDER BY wu.created_at DESC
+    SELECT id, display_name, email, telefono, tags, metadata
+    FROM entity
+    WHERE tags LIKE '%"utente"%' AND telefono IS NOT NULL AND telefono != ''
+    ORDER BY display_name
   `).all()
   res.json({ users })
 })
@@ -708,13 +765,12 @@ whatsappRouter.post('/users', authMiddleware(true), (req: AuthRequest, res: Resp
   const { phone, userId } = req.body
   if (!phone || !userId) { res.status(400).json({ error: 'phone e userId richiesti' }); return }
 
-  const id = crypto.randomUUID()
-  db.prepare('INSERT OR REPLACE INTO whatsapp_users (id, phone, user_id, active) VALUES (?, ?, ?, 1)').run(id, phone, userId)
-  res.json({ success: true, id })
+  db.prepare("UPDATE entity SET telefono = ?, tags = json_insert(COALESCE(tags, '[]'), '$[#]', 'whatsapp_enabled'), metadata = json_set(COALESCE(metadata, '{}'), '$.whatsapp_enabled', 1) WHERE id = ?").run(phone, userId)
+  res.json({ success: true })
 })
 
 whatsappRouter.delete('/users/:phone', authMiddleware(true), (req: AuthRequest, res: Response) => {
-  db.prepare('DELETE FROM whatsapp_users WHERE phone = ?').run(req.params.phone)
+  db.prepare("UPDATE entity SET metadata = json_set(COALESCE(metadata, '{}'), '$.whatsapp_enabled', 0) WHERE telefono = ?").run(req.params.phone)
   res.json({ success: true })
 })
 

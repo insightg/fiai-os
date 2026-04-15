@@ -136,7 +136,7 @@ export async function sendEmail(options: {
   })
 
   const info = await transport.sendMail({
-    from: `"BERNARDINI OS" <${EMAIL_USER}>`,
+    from: `"FIAI OS" <${EMAIL_USER}>`,
     to: options.to,
     cc: options.cc || undefined,
     bcc: options.bcc || undefined,

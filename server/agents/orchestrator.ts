@@ -226,7 +226,11 @@ function getClassificationPrompt() {
   'IMPORTANTE: Le richieste di generazione immagini vanno SEMPRE a "marketing".\n' +
   'Le richieste di leggere, pronunciare o generare audio vanno SEMPRE a "tts".\n' +
   'Le richieste su contenuto di documenti caricati (di QUALSIASI tipo) vanno SEMPRE a "documentale".\n\n' +
-  'DISAMBIGUAZIONE: se il messaggio e\' ambiguo tra piu\' domini, imposta confidence=0.3 e domain="general". L\'agente chiedera\' chiarimenti all\'utente.\n\n' +
+  'DISAMBIGUAZIONE: se il messaggio e\' ambiguo tra piu\' domini, imposta confidence=0.3 e domain="general". L\'agente chiedera\' chiarimenti all\'utente.\n' +
+  'Esempi di ambiguita\':\n' +
+  '- "manda un messaggio a X" / "scrivi a X" / "contatta X" SENZA specificare il canale → ambiguo tra email e whatsapp → confidence=0.3, domain="general" (l\'agente chiedera\' se via email o WhatsApp)\n' +
+  '- "invia mail/email a X" → email (canale esplicito)\n' +
+  '- "manda un whatsapp a X" → whatsapp (canale esplicito)\n\n' +
   'MULTI-AGENT: Se la richiesta tocca PIU domini, imposta needsMultiAgent=true e secondaryDomains con i domini aggiuntivi.\n' +
   'Esempi multi-agent:\n' +
   '- "fatturato dei clienti con progetti attivi" → domain="amministrazione", needsMultiAgent=true, secondaryDomains=["commerciale","produzione"]\n' +
