@@ -682,7 +682,8 @@ export async function orchestrate(
 
   // If not already documentale, check if the query might relate to a loaded document
   // This prevents non-RAG agents from hallucinating document content
-  if (classification.domain !== 'documentale' && classification.domain !== 'legal') {
+  // BUT: don't override if keyword scoring already found a confident domain (e.g. pianificazione)
+  if (classification.domain !== 'documentale' && classification.domain !== 'legal' && classification.confidence < 0.8) {
     try {
       const msgLower = message.toLowerCase()
       // Quick check: does the query mention any document name in the system?

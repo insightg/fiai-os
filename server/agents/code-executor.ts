@@ -9,7 +9,7 @@
  * Uses Node.js `vm` module for isolation.
  */
 import vm from 'vm'
-import { executeTool } from './tool-registry.js'
+import { executeTool, TOOL_DEFINITIONS } from './tool-registry.js'
 
 const TIMEOUT_MS = 60000  // 60s max execution
 const MAX_OUTPUT = 8000   // max stdout chars
@@ -61,35 +61,12 @@ export async function executeCode(code: string, aziendaId: string): Promise<Code
     print,
     console: { log: print, error: (...args: any[]) => errors.push(args.map(String).join(' ')) },
 
-    // FIAI tools — all tools available to agents
-    find: toolProxy('find'),
+    // FIAI tools — ALL registered tools (core + plugins) exposed as async functions
+    ...Object.fromEntries(
+      Object.keys(TOOL_DEFINITIONS).map(name => [name, toolProxy(name)])
+    ),
+    // Aliases
     search: toolProxy('find'),
-    create: toolProxy('create'),
-    update: toolProxy('update'),
-    delete_record: toolProxy('delete_record'),
-    relate: toolProxy('relate'),
-    get_tree: toolProxy('get_tree'),
-    retrieve: toolProxy('retrieve'),
-    list_documents: toolProxy('list_documents'),
-    explore_document: toolProxy('explore_document'),
-    get_datetime: toolProxy('get_datetime'),
-    date_diff: toolProxy('date_diff'),
-    generate_pdf: toolProxy('generate_pdf'),
-    render_view: toolProxy('render_view'),
-    // WhatsApp
-    send_whatsapp_message: toolProxy('send_whatsapp_message'),
-    send_whatsapp_voice: toolProxy('send_whatsapp_voice'),
-    send_whatsapp_image: toolProxy('send_whatsapp_image'),
-    send_whatsapp_document: toolProxy('send_whatsapp_document'),
-    send_whatsapp_video: toolProxy('send_whatsapp_video'),
-    get_whatsapp_status: toolProxy('get_whatsapp_status'),
-    // Media
-    generate_image: toolProxy('generate_image'),
-    generate_tts: toolProxy('generate_tts'),
-    // Infra
-    list_autonomous_agents: toolProxy('list_autonomous_agents'),
-    get_jobs: toolProxy('get_jobs'),
-    get_api_costs: toolProxy('get_api_costs'),
 
     // Safe builtins
     JSON,
