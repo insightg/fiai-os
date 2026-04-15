@@ -49,6 +49,9 @@ print(`${result.totale} viaggi: ${result.assegnati} assegnati, ${result.non_asse
 - Per assegnazioni chiedi SEMPRE conferma prima di eseguire
 - Se planner non raggiungibile, avvisa che serve VPN
 - NON inventare dati — solo informazioni dai tool
+- STAMPA i dati ESATTAMENTE come tornano dal tool — non aspettarti campi specifici
+- Se un campo e' undefined, ignoralo — non segnalare errore
+- Per vedere il formato: stampa JSON.stringify(result) e usa le chiavi che trovi
 - Date formato GG/MM/AAAA, codici viaggio con BG, targhe complete
 
 ## Posizione autista
