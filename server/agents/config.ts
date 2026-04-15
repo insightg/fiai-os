@@ -1,32 +1,53 @@
 import type { AgentConfig } from './types.js'
 import db from '../db.js'
+import { loadInstanceConfig, buildAgentsFromConfig } from '../instance-config.js'
+import { TOOL_DEFINITIONS } from './tool-registry.js'
 export { GENERIC_TOOLS } from './tools.js'
 
-// ── Import domain configs ───────────────────────────────
-import pulse from './domains/pulse/index.js'
-import commerciale from './domains/commerciale/index.js'
-import produzione from './domains/produzione/index.js'
-import marketing from './domains/marketing/index.js'
-import amministrazione from './domains/amministrazione/index.js'
-import hr from './domains/hr/index.js'
-import legal from './domains/legal/index.js'
-import documentale from './domains/documentale/index.js'
-import whatsapp from './domains/whatsapp/index.js'
-import it from './domains/it/index.js'
-import doctor from './domains/doctor/index.js'
-import tts from './domains/tts/index.js'
-import email from './domains/email/index.js'
-import pianificazione from './domains/pianificazione/index.js'
-import general from './domains/general/index.js'
+// ── Try loading agents from instance config.yaml ────────
 
-const DEFAULT_AGENTS: Record<string, AgentConfig> = {
-  pulse, commerciale, produzione, marketing,
-  amministrazione, hr, legal, documentale,
-  whatsapp, email, pianificazione, it, doctor, tts, general,
+const instanceConfig = loadInstanceConfig()
+let configAgents: Record<string, AgentConfig> | null = null
+
+if (instanceConfig) {
+  // Available tool names = built-in + plugin (loaded before this)
+  const availableTools = Object.keys(TOOL_DEFINITIONS)
+  configAgents = buildAgentsFromConfig(availableTools)
+}
+
+// ── Fallback: hardcoded domain agents ───────────────────
+
+let DEFAULT_AGENTS: Record<string, AgentConfig>
+
+if (configAgents && Object.keys(configAgents).length > 0) {
+  DEFAULT_AGENTS = configAgents
+} else {
+  // Hardcoded agents (backward compat — used when no config.yaml exists)
+  const pulse = (await import('./domains/pulse/index.js')).default
+  const commerciale = (await import('./domains/commerciale/index.js')).default
+  const produzione = (await import('./domains/produzione/index.js')).default
+  const marketing = (await import('./domains/marketing/index.js')).default
+  const amministrazione = (await import('./domains/amministrazione/index.js')).default
+  const hr = (await import('./domains/hr/index.js')).default
+  const legal = (await import('./domains/legal/index.js')).default
+  const documentale = (await import('./domains/documentale/index.js')).default
+  const whatsapp = (await import('./domains/whatsapp/index.js')).default
+  const it = (await import('./domains/it/index.js')).default
+  const doctor = (await import('./domains/doctor/index.js')).default
+  const tts = (await import('./domains/tts/index.js')).default
+  const email = (await import('./domains/email/index.js')).default
+  const pianificazione = (await import('./domains/pianificazione/index.js')).default
+  const general = (await import('./domains/general/index.js')).default
+
+  DEFAULT_AGENTS = {
+    pulse, commerciale, produzione, marketing,
+    amministrazione, hr, legal, documentale,
+    whatsapp, email, pianificazione, it, doctor, tts, general,
+  }
 }
 
 // ── Load skills from VFS (entity type='skill') ──────────
-// Overrides default agent configs with DB-stored skill definitions
+// Overrides agent configs with DB-stored skill definitions
 
 function loadSkillsFromDB(): Record<string, AgentConfig> {
   const agents = { ...DEFAULT_AGENTS }
@@ -38,7 +59,6 @@ function loadSkillsFromDB(): Record<string, AgentConfig> {
       const domain = m.domain as string
       if (!domain || !agents[domain]) continue
 
-      // Merge: DB skill overrides hardcoded defaults
       const base = agents[domain]
       agents[domain] = {
         ...base,
@@ -46,39 +66,20 @@ function loadSkillsFromDB(): Record<string, AgentConfig> {
         systemPrompt: m.system_prompt || base.systemPrompt,
         model: m.model || base.model,
         color: m.color || base.color,
-        // Append rules to system prompt
         ...(m.rules?.length ? {
           systemPrompt: (m.system_prompt || base.systemPrompt) + '\n\nRegole specifiche:\n' + m.rules.map((r: string) => `- ${r}`).join('\n')
         } : {}),
-        // toolNames are NOT overridden from DB (security — tools stay hardcoded)
       }
       console.log(`[Skills] Loaded skill override for "${domain}" from DB`)
     }
-  } catch {
-    // DB might not be ready yet — use defaults
-  }
+  } catch {}
 
   return agents
 }
 
 export const AGENTS: Record<string, AgentConfig> = loadSkillsFromDB()
 
-export const AGENT_COLORS: Record<string, string> = {
-  pulse: '#C41E3A',
-  commerciale: '#1976D2',
-  produzione: '#E68A00',
-  marketing: '#9C27B0',
-  amministrazione: '#2D8B56',
-  hr: '#7B1FA2',
-  legal: '#D32F2F',
-  documents: '#D32F2F',
-  documentale: '#795548',
-  whatsapp: '#25D366',
-  email: '#1565C0',
-  pianificazione: '#FF5722',
-  it: '#455A64',
-  doctor: '#00ACC1',
-  image: '#E91E63',
-  tts: '#FF6F00',
-  general: '#607D8B',
-}
+// Build color map from loaded agents
+export const AGENT_COLORS: Record<string, string> = Object.fromEntries(
+  Object.entries(AGENTS).map(([domain, agent]) => [domain, agent.color])
+)

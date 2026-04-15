@@ -25,6 +25,8 @@ import { startJobWorker } from './jobs.js'
 import { initEmbeddings } from './embeddings.js'
 import { initAutonomousAgents } from './agents/autonomous.js'
 import { initWorkflows } from './agents/workflows.js'
+import { loadPlugins, mountPluginRoutes, startPlugins } from './plugins/loader.js'
+import { initPluginTools } from './agents/tool-registry.js'
 
 // Pre-migration: fix legacy foreign key constraints on chat tables
 // The old schema referenced aziende(id) and user_profiles(id) which don't exist in VFS model
@@ -154,6 +156,10 @@ try {
   console.warn('[Groups] Setup error:', (err as Error).message)
 }
 
+// ── Load plugins ────────────────────────────────────────
+await loadPlugins()
+initPluginTools()
+
 const app = express()
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001
 
@@ -186,6 +192,7 @@ app.use('/api/vpn', vpnRouter)
 app.use('/api/chat', chatRouter)
 app.use('/api/admin', adminRouter)
 app.use('/v1', openaiCompatRouter)
+mountPluginRoutes(app)
 
 // Health check
 app.get('/api/health', (_req, res) => {
@@ -203,6 +210,7 @@ app.listen(PORT, () => {
   startWhatsApp().catch(err => console.error('WhatsApp startup error:', err))
   startEmail().catch(err => console.error('Email startup error:', err))
   autoConnectVPN().catch(err => console.error('VPN auto-connect error:', err))
+  startPlugins().catch(err => console.error('Plugin startup error:', err))
   initAutonomousAgents()
   initWorkflows()
   initEmbeddings()

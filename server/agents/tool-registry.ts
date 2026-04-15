@@ -4,6 +4,7 @@ import db from '../db.js'
 import { sanitizeMetadata } from '../middleware.js'
 import { emit } from './events.js'
 import type { ToolDefinition } from './types.js'
+import { getPluginToolDefinitions, getPluginToolPermissions, executePluginTool } from '../plugins/loader.js'
 
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions'
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || ''
@@ -334,6 +335,29 @@ const TOOL_ACTIONS: Record<string, string> = {
   send_whatsapp_video: 'send',
 }
 
+/**
+ * Initialize plugin tools — call after plugins are loaded.
+ * Merges plugin tool definitions and permissions into the global registry.
+ */
+export function initPluginTools(): void {
+  const pluginDefs = getPluginToolDefinitions()
+  const pluginPerms = getPluginToolPermissions()
+
+  for (const [name, def] of Object.entries(pluginDefs)) {
+    if (!TOOL_DEFINITIONS[name]) {
+      TOOL_DEFINITIONS[name] = def
+    }
+  }
+  for (const [name, perm] of Object.entries(pluginPerms)) {
+    if (!TOOL_ACTIONS[name]) {
+      TOOL_ACTIONS[name] = perm
+    }
+  }
+
+  const count = Object.keys(pluginDefs).length
+  if (count > 0) console.log(`[ToolRegistry] Merged ${count} plugin tools`)
+}
+
 export async function executeTool(name: string, aziendaId: string, args?: Record<string, unknown>, permissions?: import('./types.js').UserPermissions): Promise<unknown> {
   const input = (args || {}) as any
 
@@ -342,6 +366,10 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
   if (requiredAction && permissions && !permissions.can(requiredAction as any, input.type || input.table)) {
     return { errore: `Permesso negato: non puoi eseguire "${name}" (richiede ${requiredAction})` }
   }
+
+  // Try plugin executor first
+  const pluginResult = await executePluginTool(name, aziendaId, input)
+  if (pluginResult.handled) return pluginResult.result
 
   switch (name) {
 

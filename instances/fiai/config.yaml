@@ -1,0 +1,157 @@
+# FIAI OS — Instance Configuration
+# Fabbrica Italiana Agenti Intelligenti
+
+company:
+  name: "FIAI"
+  short_name: "FIAI"
+  color: "#C41E3A"
+
+agents:
+  - domain: pulse
+    name: "Pulse"
+    color: "#C41E3A"
+    prompt: "agents/pulse.md"
+    tools: [generic]
+
+  - domain: commerciale
+    name: "Marco — Commerciale"
+    color: "#1976D2"
+    prompt: "agents/commerciale.md"
+    tools: [generic]
+
+  - domain: produzione
+    name: "Luca — Produzione"
+    color: "#E68A00"
+    prompt: "agents/produzione.md"
+    tools: [generic]
+
+  - domain: marketing
+    name: "Giulia — Marketing"
+    color: "#9C27B0"
+    prompt: "agents/marketing.md"
+    tools: [generic, generate_image]
+
+  - domain: amministrazione
+    name: "Sofia — Amministrazione"
+    color: "#2D8B56"
+    prompt: "agents/amministrazione.md"
+    tools: [generic]
+
+  - domain: hr
+    name: "Elena — HR"
+    color: "#7B1FA2"
+    prompt: "agents/hr.md"
+    tools: [generic]
+
+  - domain: legal
+    name: "Avv. Rossi — Legale"
+    color: "#D32F2F"
+    model: "mistralai/mistral-small-3.1-24b-instruct"
+    prompt: "agents/legal.md"
+    tools: [generic, retrieve]
+
+  - domain: documentale
+    name: "Archivista — Documentale"
+    color: "#795548"
+    prompt: "agents/documentale.md"
+    tools:
+      - generic
+      - retrieve
+      - list_documents
+      - explore_document
+      - rechunk_document
+      - reclassify_document
+      - generate_pdf
+      - fetch_document
+      - send_whatsapp_*
+      - send_email
+      - reply_email
+
+  - domain: email
+    name: "Email Agent"
+    color: "#D44638"
+    prompt: "agents/email.md"
+    tools:
+      - generic
+      - get_email_status
+      - send_email
+      - read_inbox
+      - read_email
+      - search_emails
+      - reply_email
+      - download_email_attachment
+
+  - domain: whatsapp
+    name: "WhatsApp Agent"
+    color: "#25D366"
+    prompt: "agents/whatsapp.md"
+    tools:
+      - generic
+      - send_whatsapp_*
+      - generate_image
+      - generate_tts
+
+  - domain: pianificazione
+    name: "Pianificazione Trasporti"
+    color: "#FF5722"
+    prompt: "agents/pianificazione.md"
+    tools:
+      - generic
+      - planning_*
+      - send_whatsapp_message
+      - send_whatsapp_document
+      - send_email
+      - reply_email
+
+  - domain: it
+    name: "Dev — IT"
+    color: "#455A64"
+    prompt: "agents/it.md"
+    tools:
+      - generic
+      - create_autonomous_agent
+      - list_autonomous_agents
+      - toggle_autonomous_agent
+      - delete_autonomous_agent
+      - get_agent_logs
+      - create_workflow
+      - run_workflow
+      - list_workflows
+      - update_skill
+      - list_skills
+      - add_agent_lesson
+
+  - domain: doctor
+    name: "Doctor"
+    color: "#00ACC1"
+    prompt: "agents/doctor.md"
+    tools:
+      - generic
+      - get_api_costs
+      - get_whatsapp_status
+      - list_autonomous_agents
+      - get_agent_logs
+      - list_workflows
+      - get_jobs
+
+  - domain: tts
+    name: "Voice Assistant"
+    color: "#FF6F00"
+    prompt: "agents/tts.md"
+    tools:
+      - generic
+      - list_voices
+      - set_voice
+      - get_current_voice
+      - clone_voice
+      - generate_tts
+
+  - domain: general
+    name: "Assistente FIAI"
+    color: "#607D8B"
+    prompt: "agents/general.md"
+    tools: [generic]
+
+plugins:
+  planning:
+    api_url: "http://192.168.0.14:8602"
