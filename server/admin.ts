@@ -419,6 +419,18 @@ router.delete('/response-profiles/:slug', (req: AuthRequest, res: Response) => {
   res.json({ successo: true })
 })
 
+// ── HOT RELOAD CONFIG ───────────────────────────────────
+
+router.post('/reload-config', async (_req: AuthRequest, res: Response) => {
+  try {
+    const { reloadAgents } = await import('./agents/config.js')
+    const result = await reloadAgents()
+    res.json({ successo: true, messaggio: `Config ricaricata: ${result.count} agenti`, domains: result.domains })
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message })
+  }
+})
+
 // ── SYSTEM STATS ─────────────────────────────────────────
 
 router.get('/system', (req: AuthRequest, res: Response) => {
