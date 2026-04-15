@@ -506,11 +506,16 @@ app.get('/api/tools', (_req, res) => {
 // Proxies any request to an instance's API, using the registry for auth.
 // Usage: /api/instances/:id/proxy/api/admin/users → {instance.url}/api/admin/users
 
-app.all('/api/instances/:id/proxy/*', async (req, res) => {
+// Express 5: use req.url parsing instead of wildcard params
+app.use('/api/instances/:id/proxy', async (req: any, res: any, next: any) => {
+  // Only handle if there's a path after /proxy
+  const proxyPrefix = `/api/instances/${req.params.id}/proxy`
+  const targetPath = req.originalUrl.replace(proxyPrefix, '')
+  if (!targetPath || targetPath === '/') { next(); return }
+
   const registry = loadRegistry()
-  const reg = registry.find(r => r.id === req.params.id)
+  const reg = registry.find((r: any) => r.id === req.params.id)
   const instanceUrl = reg?.url || `http://${req.params.id}-backend:3001`
-  const targetPath = '/' + (req.params as any)[0]
 
   try {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' }
@@ -562,6 +567,19 @@ app.get('/api/health', (_req, res) => {
     instanceCount: fs.existsSync(INSTANCES_DIR) ? fs.readdirSync(INSTANCES_DIR, { withFileTypes: true }).filter(e => e.isDirectory()).length : 0,
   })
 })
+
+// ── Serve Frontend (production build) ───────────────────
+
+const distPath = path.join(import.meta.dirname, '..', 'dist')
+if (fs.existsSync(distPath)) {
+  app.use(express.static(distPath))
+  // SPA fallback — serve index.html for any non-API route
+  app.use((req, res, next) => {
+    if (req.path.startsWith('/api')) return next()
+    res.sendFile(path.join(distPath, 'index.html'))
+  })
+  console.log(`[Admin] Serving frontend from ${distPath}`)
+}
 
 // ── Start ───────────────────────────────────────────────
 
