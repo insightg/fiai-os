@@ -9,13 +9,18 @@ import { executeAgent, directLLMResponse } from './base-agent.js'
 import { checkInput, checkOutput } from './safety.js'
 import db from '../db.js'
 import { getSetting } from '../settings.js'
+import { getInstanceClassifierKeywords, getInstanceDomains } from '../instance-config.js'
 
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions'
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || ''
 const CLASSIFIER_MODEL = 'anthropic/claude-haiku-4.5'
 const GEMINI_MODEL = 'google/gemini-3.1-flash-image-preview'
 
-const VALID_DOMAINS: AgentDomain[] = ['pulse', 'commerciale', 'produzione', 'marketing', 'amministrazione', 'hr', 'legal', 'documentale', 'whatsapp', 'email', 'pianificazione', 'it', 'doctor', 'tts', 'general']
+// VALID_DOMAINS: from instance config or hardcoded fallback
+const instanceDomains = getInstanceDomains()
+const VALID_DOMAINS: AgentDomain[] = instanceDomains.length > 0
+  ? instanceDomains as AgentDomain[]
+  : ['pulse', 'commerciale', 'produzione', 'marketing', 'amministrazione', 'hr', 'legal', 'documentale', 'whatsapp', 'email', 'pianificazione', 'it', 'doctor', 'tts', 'general']
 
 interface ConversationMessage {
   role: string
@@ -121,6 +126,15 @@ const DOMAIN_KEYWORDS: Record<string, { words: string[]; weight: number }[]> = {
     { words: ['diagnostica', 'salute dati', 'check-up', 'performance sistema'], weight: 3 },
     { words: ['job falliti', 'stato servizi', 'errori sistema'], weight: 3 },
   ],
+}
+
+// Merge instance-specific keywords (override/extend defaults)
+const instanceKeywords = getInstanceClassifierKeywords()
+if (instanceKeywords) {
+  for (const [domain, groups] of Object.entries(instanceKeywords)) {
+    DOMAIN_KEYWORDS[domain] = groups
+  }
+  console.log(`[Orchestrator] Merged ${Object.keys(instanceKeywords).length} custom keyword domains from instance config`)
 }
 
 const SCORE_THRESHOLD_CONFIDENT = 4   // >= 4: route directly (no LLM)

@@ -1,0 +1,208 @@
+# BERNARDINI S.R.L. — Instance Configuration
+# Verticalizzazione con 8 reparti aziendali + 8 agenti condivisi
+
+company:
+  name: "BERNARDINI S.R.L."
+  short_name: "BERNARDINI"
+  color: "#1565C0"
+
+agents:
+  # ── Reparti aziendali ──────────────────────────────────
+
+  - domain: direzione
+    name: "Direzione"
+    color: "#1a1a2e"
+    prompt: "agents/direzione.md"
+    tools: [generic, send_whatsapp_*, send_email, reply_email]
+
+  - domain: commerciale
+    name: "Commerciale"
+    color: "#1976D2"
+    prompt: "agents/commerciale-bernardini.md"
+    tools: [generic, send_whatsapp_*, send_email, reply_email]
+
+  - domain: amministrazione
+    name: "Amministrazione & HR"
+    color: "#2D8B56"
+    prompt: "agents/amministrazione-hr.md"
+    tools: [generic, send_whatsapp_*, send_email, reply_email]
+
+  - domain: contabilita
+    name: "Contabilita' Industriale"
+    color: "#6A1B9A"
+    prompt: "agents/contabilita-industriale.md"
+    tools: [generic, send_whatsapp_*, send_email, reply_email]
+
+  - domain: produzione
+    name: "Logistica & Produzione"
+    color: "#E68A00"
+    prompt: "agents/logistica-produzione.md"
+    tools: [generic, send_whatsapp_*, send_email, reply_email]
+
+  - domain: officina
+    name: "Officina Riparazioni"
+    color: "#795548"
+    prompt: "agents/officina.md"
+    tools: [generic, send_whatsapp_*, send_email, reply_email]
+
+  - domain: legal
+    name: "Legale & Assicurazioni"
+    color: "#D32F2F"
+    prompt: "agents/legale-assicurazioni.md"
+    tools: [generic, retrieve, list_documents, send_whatsapp_*, send_email, reply_email]
+
+  - domain: qualita
+    name: "Qualita' Sicurezza Ambiente"
+    color: "#00796B"
+    prompt: "agents/qualita-sicurezza.md"
+    tools: [generic, retrieve, list_documents, send_whatsapp_*, send_email, reply_email]
+
+  # ── Agenti operativi ───────────────────────────────────
+
+  - domain: pianificazione
+    name: "Pianificazione Trasporti"
+    color: "#FF5722"
+    prompt: "agents/pianificazione.md"
+    tools:
+      - generic
+      - planning_*
+      - send_whatsapp_message
+      - send_whatsapp_document
+      - send_email
+      - reply_email
+
+  - domain: documentale
+    name: "Archivista — Documentale"
+    color: "#795548"
+    prompt: "agents/documentale.md"
+    tools:
+      - generic
+      - retrieve
+      - list_documents
+      - explore_document
+      - rechunk_document
+      - reclassify_document
+      - generate_pdf
+      - fetch_document
+      - send_whatsapp_*
+      - send_email
+      - reply_email
+
+  - domain: email
+    name: "Email Agent"
+    color: "#D44638"
+    prompt: "agents/email.md"
+    tools:
+      - generic
+      - get_email_status
+      - send_email
+      - read_inbox
+      - read_email
+      - search_emails
+      - reply_email
+      - download_email_attachment
+
+  - domain: whatsapp
+    name: "WhatsApp Agent"
+    color: "#25D366"
+    prompt: "agents/whatsapp.md"
+    tools: [generic, send_whatsapp_*, generate_image, generate_tts]
+
+  # ── Agenti di sistema ──────────────────────────────────
+
+  - domain: it
+    name: "Dev — IT"
+    color: "#455A64"
+    prompt: "agents/it.md"
+    tools:
+      - generic
+      - get_api_costs
+      - get_whatsapp_status
+      - create_autonomous_agent
+      - list_autonomous_agents
+      - toggle_autonomous_agent
+      - delete_autonomous_agent
+      - get_agent_logs
+      - create_workflow
+      - run_workflow
+      - list_workflows
+      - update_skill
+      - list_skills
+      - add_agent_lesson
+
+  - domain: doctor
+    name: "Doctor"
+    color: "#00ACC1"
+    prompt: "agents/doctor.md"
+    tools:
+      - generic
+      - get_api_costs
+      - get_whatsapp_status
+      - list_autonomous_agents
+      - get_agent_logs
+      - list_workflows
+      - get_jobs
+
+  - domain: tts
+    name: "Voice Assistant"
+    color: "#FF6F00"
+    prompt: "agents/tts.md"
+    tools: [generic, list_voices, set_voice, get_current_voice, clone_voice, generate_tts]
+
+  - domain: general
+    name: "Assistente BERNARDINI"
+    color: "#607D8B"
+    prompt: "agents/general.md"
+    tools:
+      - generic
+      - generate_image
+      - generate_pdf
+      - send_whatsapp_*
+      - send_email
+      - read_inbox
+      - read_email
+
+plugins:
+  planning:
+    api_url: "http://192.168.0.14:8602"
+
+classifier:
+  keywords:
+    direzione:
+      - words: [overview, kpi, briefing, strategico, riepilogo, stato azienda, andamento, cruscotto, dashboard]
+        weight: 3
+      - words: [fatturato, margini, trend, crescita, cda, board]
+        weight: 2
+    commerciale:
+      - words: [cliente, clienti, lead, prospect, pipeline]
+        weight: 3
+      - words: [preventivo, preventivi, offerta, offerte, trattativa, vendita, vendite, ordine, ordini]
+        weight: 3
+    amministrazione:
+      - words: [stipendio, stipendi, busta paga, cedolino, tfr, f24, cu, "770", irpef, inps]
+        weight: 3
+      - words: [ferie, permessi, malattia, assunzione, contratto lavoro, recruiting]
+        weight: 3
+      - words: [fattura, fatture, pagamento, scadenza, incasso, dipendente, personale, hr]
+        weight: 2
+    contabilita:
+      - words: [costo, costi, margine, margini, centro di costo, budget, forecast, scostamento, consuntivo]
+        weight: 3
+    produzione:
+      - words: [magazzino, scorte, giacenze, spedizione, logistica, trasporto, produzione, materie prime]
+        weight: 3
+      - words: [fornitore, fornitori, approvvigionamento]
+        weight: 2
+    officina:
+      - words: [riparazione, manutenzione, officina, intervento, mezzo, attrezzatura, ricambio, ordine lavoro, guasto]
+        weight: 3
+    legal:
+      - words: [polizza, polizze, assicurazione, sinistro, contenzioso, causa, avvocato, tribunale]
+        weight: 3
+      - words: [revisione, bollo, immatricolazione, parco mezzi, contratto, compliance]
+        weight: 2
+    qualita:
+      - words: [iso, certificazione, audit, non conformita, azione correttiva, reclamo]
+        weight: 3
+      - words: [dvr, sicurezza lavoro, dpi, infortunio, ambiente, rifiuti, emissioni]
+        weight: 2

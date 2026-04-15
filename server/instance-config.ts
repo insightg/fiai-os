@@ -164,3 +164,12 @@ export function getCompanyColor(): string {
 export function getInstancePluginConfig(pluginName: string): Record<string, unknown> | null {
   return instanceConfig?.plugins?.[pluginName] || null
 }
+
+export function getInstanceClassifierKeywords(): Record<string, { words: string[]; weight: number }[]> | null {
+  return instanceConfig?.classifier?.keywords || null
+}
+
+export function getInstanceDomains(): string[] {
+  if (!instanceConfig?.agents) return []
+  return instanceConfig.agents.map(a => a.domain)
+}
