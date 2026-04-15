@@ -42,6 +42,8 @@ services:
     build:
       context: ../..
       dockerfile: Dockerfile.frontend
+    environment:
+      - BACKEND_HOST=fiai-backend
     restart: unless-stopped
     depends_on:
       - fiai-backend

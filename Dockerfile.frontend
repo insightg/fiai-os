@@ -19,12 +19,19 @@ RUN npx vite build
 # Stage 2: Serve with nginx
 FROM nginx:alpine
 
-COPY nginx.conf /etc/nginx/nginx.conf
+# Copy nginx template (uses ${BACKEND_HOST} variable)
+COPY nginx.conf /etc/nginx/templates/nginx.conf.template
 COPY --from=builder /app/dist /usr/share/nginx/html
+
+# Default backend host — overridden per instance via docker-compose
+ENV BACKEND_HOST=fiai-backend
 
 EXPOSE 3000
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD wget --no-verbose --tries=1 --spider http://localhost:3000/ || exit 1
 
-CMD ["nginx", "-g", "daemon off;"]
+# nginx:alpine has envsubst built-in via docker-entrypoint.d/20-envsubst-on-templates.sh
+# It reads /etc/nginx/templates/*.template and outputs to /etc/nginx/conf.d/
+# But we need it at /etc/nginx/nginx.conf, so we do it manually
+CMD ["/bin/sh", "-c", "envsubst '${BACKEND_HOST}' < /etc/nginx/templates/nginx.conf.template > /etc/nginx/nginx.conf && nginx -g 'daemon off;'"]
