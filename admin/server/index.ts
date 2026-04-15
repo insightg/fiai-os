@@ -502,6 +502,58 @@ app.get('/api/tools', (_req, res) => {
 
 // ── Health / Status ─────────────────────────────────────
 
+// ── Generic Proxy to Instance APIs ──────────────────────
+// Proxies any request to an instance's API, using the registry for auth.
+// Usage: /api/instances/:id/proxy/api/admin/users → {instance.url}/api/admin/users
+
+app.all('/api/instances/:id/proxy/*', async (req, res) => {
+  const registry = loadRegistry()
+  const reg = registry.find(r => r.id === req.params.id)
+  const instanceUrl = reg?.url || `http://${req.params.id}-backend:3001`
+  const targetPath = '/' + (req.params as any)[0]
+
+  try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+
+    // Auth: use API key from registry, or generate a temporary JWT
+    if (reg?.api_key) {
+      headers['Authorization'] = `Bearer ${reg.api_key}`
+    } else {
+      // For local instances without API key, use a JWT signed with the instance's secret
+      // We don't know the instance's JWT_SECRET, so we pass through the admin's token
+      // The instance must accept it (or we need to configure api_key in registry)
+      const adminToken = req.headers.authorization
+      if (adminToken) headers['Authorization'] = adminToken
+    }
+
+    const fetchOptions: RequestInit = {
+      method: req.method,
+      headers,
+      signal: AbortSignal.timeout(15000),
+    }
+
+    if (['POST', 'PUT', 'PATCH'].includes(req.method) && req.body) {
+      fetchOptions.body = JSON.stringify(req.body)
+    }
+
+    const proxyRes = await fetch(`${instanceUrl}${targetPath}`, fetchOptions)
+
+    // Forward response
+    const contentType = proxyRes.headers.get('content-type') || ''
+    if (contentType.includes('json')) {
+      const data = await proxyRes.json()
+      res.status(proxyRes.status).json(data)
+    } else {
+      const text = await proxyRes.text()
+      res.status(proxyRes.status).send(text)
+    }
+  } catch (err: any) {
+    res.status(502).json({ error: `Proxy error: ${err.message}`, instance: req.params.id, path: targetPath })
+  }
+})
+
+// ── Health / Status ─────────────────────────────────────
+
 app.get('/api/health', (_req, res) => {
   res.json({
     status: 'ok',

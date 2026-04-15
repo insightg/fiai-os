@@ -50,6 +50,12 @@ export const api = {
   // Reload instance config (hot reload — no restart needed)
   reloadInstance: (id: string) => request(`/instances/${id}/reload`, { method: 'POST' }),
 
+  // Proxy to instance APIs (transparent forwarding)
+  proxyGet: (instanceId: string, path: string) => request(`/instances/${instanceId}/proxy${path}`),
+  proxyPost: (instanceId: string, path: string, data?: any) => request(`/instances/${instanceId}/proxy${path}`, { method: 'POST', body: data ? JSON.stringify(data) : undefined }),
+  proxyPut: (instanceId: string, path: string, data?: any) => request(`/instances/${instanceId}/proxy${path}`, { method: 'PUT', body: data ? JSON.stringify(data) : undefined }),
+  proxyDelete: (instanceId: string, path: string) => request(`/instances/${instanceId}/proxy${path}`, { method: 'DELETE' }),
+
   // Health
   getHealth: () => request('/health'),
   getInstanceHealth: (id: string) => request(`/instances/${id}/health`),
