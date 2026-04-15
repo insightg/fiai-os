@@ -11,7 +11,7 @@ interface Instance {
   has_config: boolean
 }
 
-export function InstancesPage({ onSelect }: { onSelect: (id: string) => void }) {
+export function InstancesPage({ onSelect, onCreate }: { onSelect: (id: string) => void; onCreate?: () => void }) {
   const [instances, setInstances] = useState<Instance[]>([])
   const [loading, setLoading] = useState(true)
   const [showCreate, setShowCreate] = useState(false)
@@ -45,9 +45,9 @@ export function InstancesPage({ onSelect }: { onSelect: (id: string) => void }) 
           <h2 className="text-2xl font-bold">Istanze</h2>
           <p className="text-gray-500 text-sm mt-1">{instances.length} istanze configurate</p>
         </div>
-        <button onClick={() => setShowCreate(!showCreate)}
+        <button onClick={() => onCreate ? onCreate() : setShowCreate(!showCreate)}
           className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg text-sm font-medium">
-          + Nuova Istanza
+          + Nuovo Cliente
         </button>
       </div>
 
@@ -111,8 +111,8 @@ export function InstancesPage({ onSelect }: { onSelect: (id: string) => void }) 
               <div className="flex gap-4 text-xs text-gray-400">
                 <span>🤖 {inst.agent_count} agenti</span>
                 {inst.plugins.length > 0 && <span>🔌 {inst.plugins.join(', ')}</span>}
-                <span className={inst.has_config ? 'text-green-500' : 'text-yellow-500'}>
-                  {inst.has_config ? '✓ config' : '⚠ no config'}
+                <span className={(inst as any).location === 'remote' ? 'text-blue-400' : 'text-green-500'}>
+                  {(inst as any).location === 'remote' ? '🌐 remoto' : '💻 locale'}
                 </span>
               </div>
             </button>

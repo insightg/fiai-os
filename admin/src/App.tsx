@@ -3,12 +3,14 @@ import { useAdminStore } from './store'
 import { InstancesPage } from './pages/Instances'
 import { InstanceDetail } from './pages/InstanceDetail'
 import { AgentEditor } from './pages/AgentEditor'
+import { CreateWizard } from './pages/CreateWizard'
 import { LoginPage } from './pages/Login'
 
 type Page =
   | { type: 'instances' }
   | { type: 'instance'; id: string }
   | { type: 'agent'; instanceId: string; domain: string }
+  | { type: 'create' }
 
 export default function App() {
   const { user, loading, checkAuth, logout } = useAdminStore()
@@ -22,7 +24,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100 flex">
       {/* Sidebar */}
-      <aside className="w-64 bg-gray-900 border-r border-gray-800 flex flex-col">
+      <aside className="w-64 bg-gray-900 border-r border-gray-800 flex flex-col shrink-0">
         <div className="p-4 border-b border-gray-800">
           <h1 className="text-lg font-bold text-red-500">FIAI OS</h1>
           <p className="text-xs text-gray-500">Platform Admin</p>
@@ -30,16 +32,18 @@ export default function App() {
 
         <nav className="flex-1 p-3 space-y-1">
           <button onClick={() => setPage({ type: 'instances' })}
-            className={`w-full text-left px-3 py-2 rounded-lg text-sm ${page.type === 'instances' ? 'bg-gray-800 text-white' : 'text-gray-400 hover:bg-gray-800/50 hover:text-gray-200'}`}>
-            <span className="mr-2">🏢</span> Istanze
+            className={`w-full text-left px-3 py-2 rounded-lg text-sm ${page.type === 'instances' || page.type === 'instance' || page.type === 'agent' ? 'bg-gray-800 text-white' : 'text-gray-400 hover:bg-gray-800/50'}`}>
+            🏢 Istanze
+          </button>
+          <button onClick={() => setPage({ type: 'create' })}
+            className={`w-full text-left px-3 py-2 rounded-lg text-sm ${page.type === 'create' ? 'bg-gray-800 text-white' : 'text-gray-400 hover:bg-gray-800/50'}`}>
+            ➕ Nuovo Cliente
           </button>
         </nav>
 
         <div className="p-3 border-t border-gray-800">
           <div className="flex items-center justify-between">
-            <div>
-              <p className="text-xs font-medium text-gray-300">{user.email}</p>
-            </div>
+            <p className="text-xs font-medium text-gray-300 truncate">{user.email}</p>
             <button onClick={logout} className="text-xs text-gray-500 hover:text-red-400">Esci</button>
           </div>
         </div>
@@ -48,7 +52,10 @@ export default function App() {
       {/* Main Content */}
       <main className="flex-1 overflow-auto">
         {page.type === 'instances' && (
-          <InstancesPage onSelect={(id) => setPage({ type: 'instance', id })} />
+          <InstancesPage
+            onSelect={(id) => setPage({ type: 'instance', id })}
+            onCreate={() => setPage({ type: 'create' })}
+          />
         )}
         {page.type === 'instance' && (
           <InstanceDetail
@@ -62,6 +69,12 @@ export default function App() {
             instanceId={page.instanceId}
             domain={page.domain}
             onBack={() => setPage({ type: 'instance', id: page.instanceId })}
+          />
+        )}
+        {page.type === 'create' && (
+          <CreateWizard
+            onComplete={() => setPage({ type: 'instances' })}
+            onCancel={() => setPage({ type: 'instances' })}
           />
         )}
       </main>

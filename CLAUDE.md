@@ -1,18 +1,20 @@
 # FIAI OS — Documento Tecnico
 
-FIAI (Fabbrica Italiana Agenti Intelligenti) e' un gestionale aziendale AI-native. 13 agenti specializzati gestiscono l'intera operativita' aziendale tramite chat in linguaggio naturale.
+FIAI (Fabbrica Italiana Agenti Intelligenti) e' una piattaforma AI-native per gestionali aziendali. Agenti specializzati gestiscono l'operativita' tramite chat in linguaggio naturale. Architettura multi-istanza: un core condiviso, configurazione per cliente.
 
 ## Stack
 
 ```
 Frontend:  React 19 + Vite + Tailwind + Zustand + Inter font
 Backend:   Node.js + Express + TypeScript (ESM, tsx watch)
-Database:  SQLite (better-sqlite3, WAL) + FTS5 + Vector Embeddings
-AI:        OpenRouter multi-model (Claude Haiku 4.5, Mistral Small)
+Database:  SQLite (better-sqlite3, WAL) + FTS5 + Vector Embeddings (sqlite-vec)
+AI:        OpenRouter multi-model (Claude Haiku 4.5, Mistral Small, Gemini)
 Embedding: text-embedding-3-small (1536 dim) via OpenRouter
 TTS:       Qwen3-TTS 0.6B su RunPod (streaming PCM)
 WhatsApp:  Baileys WebSocket
-Deploy:    Docker Compose (nginx + node)
+Email:     IMAP (imapflow) + SMTP (nodemailer)
+Admin:     React 19 + Vite + Express (porta 3002)
+Deploy:    Docker Compose parametrico + deploy.sh per server remoti
 ```
 
 ## Comandi
@@ -21,302 +23,218 @@ Deploy:    Docker Compose (nginx + node)
 npm run dev          # Frontend Vite (porta 5173)
 npm run server       # Backend tsx watch (porta 3001)
 npm run dev:all      # Entrambi in parallelo
+
+# Build
 npm run build        # tsc -b && vite build
 
 # Type check
 npx tsc -p tsconfig.node.json --noEmit   # server
 npx tsc -p tsconfig.app.json --noEmit    # frontend
 
+# Docker
+FIAI_INSTANCE=fiai docker compose up --build -d         # istanza FIAI
+FIAI_INSTANCE=bernardini docker compose up --build -d   # istanza Bernardini
+docker compose -f docker-compose.admin.yml up -d        # admin dashboard
+
+# Deploy remoto
+./deploy.sh bernardini                  # usa registry
+./deploy.sh nuovo-cliente root@1.2.3.4  # SSH diretto
+
+# Admin dashboard (dev)
+cd admin && npm run dev:all             # porta 5174 + 3002
+
 # Env richieste
-OPENROUTER_API_KEY=...   # AI models
-JWT_SECRET=...           # Auth tokens
-DB_PATH=/app/data/fiai.db
-CONTEXT_DIR=/app/data/context
-UPLOADS_DIR=/app/data/uploads
+OPENROUTER_API_KEY=...
+JWT_SECRET=...
+FIAI_INSTANCE=fiai              # seleziona istanza (default: fiai)
+```
+
+## Struttura Progetto
+
+```
+fiai-os/
+├── server/                      Core backend (condiviso tra istanze)
+│   ├── index.ts                 Express app, routes, migrations, startup
+│   ├── instance-config.ts       Carica instances/{name}/config.yaml
+│   ├── settings.ts              Config dinamica DB + env + response profiles
+│   ├── agents/
+│   │   ├── orchestrator.ts      Classify → route → agent loop → safety
+│   │   ├── base-agent.ts        Tool loop (streaming, pruning, session stats)
+│   │   ├── config.ts            Carica agenti da YAML o fallback hardcoded
+│   │   ├── tool-registry.ts     40+ tool definitions + executors + plugin merge
+│   │   ├── index.ts             Chat router + SSE streaming + session persistence
+│   │   ├── code-executor.ts     VM sandbox per batch operations
+│   │   ├── context.ts           8 livelli contesto
+│   │   ├── safety.ts            Input/output check, PII masking
+│   │   ├── types.ts             AgentConfig, UserPermissions, AgentResult
+│   │   └── domains/             Agenti hardcoded (fallback se no config.yaml)
+│   ├── plugins/
+│   │   ├── types.ts             PluginDefinition interface
+│   │   ├── loader.ts            Scopre e carica plugin dinamicamente
+│   │   └── planning/            Plugin: 19 tool trasporti via VPN
+│   ├── auth.ts                  Login, sessions CRUD, API tokens
+│   ├── admin.ts                 Users, groups, settings, agents, response profiles
+│   ├── middleware.ts            JWT + group-based permissions
+│   ├── email.ts                 IMAP/SMTP + inbox monitoring
+│   ├── whatsapp.ts              Baileys + auth flow + document upload
+│   ├── openai-compat.ts         /v1/chat/completions (OpenAI standard)
+│   ├── vpn.ts                   OpenVPN client control
+│   ├── ocr.ts                   OCR via vision model
+│   ├── upload.ts, chunker.ts    Document pipeline
+│   ├── embeddings.ts            Embedding pipeline + semantic search
+│   └── planning-proxy.ts        Bridge HTTP a planner FastAPI
+│
+├── src/                         Frontend React (chat-first)
+│   ├── App.tsx                  2 route: login + chat
+│   ├── components/
+│   │   ├── layout/ChatLayout.tsx  Chat principale + sidebar + admin overlay
+│   │   ├── ChatToolRenderers.tsx  Card visive per risultati tool
+│   │   └── dynamic/              DynamicPanel, ListView, KanbanView, ChartView
+│   ├── lib/
+│   │   ├── anthropic.ts         SSE streaming client + session management
+│   │   ├── supabase.ts          QueryBuilder → /api/query
+│   │   └── upload.ts            Smart upload + fetch_document
+│   ├── store/                   3 store: authStore, uiStore, entityStore
+│   ├── pages/
+│   │   ├── auth/Login.tsx
+│   │   └── admin/Admin.tsx      Admin overlay (users, groups, settings, agents)
+│   └── types/index.ts           UserProfile, Entity, Relation, Layout*, Chat*
+│
+├── instances/                   Configurazione per cliente
+│   ├── fiai/
+│   │   ├── config.yaml          15 agenti, branding rosso #C41E3A
+│   │   └── agents/*.md          Prompt markdown per agente
+│   └── bernardini/
+│       ├── config.yaml          16 agenti, branding blu #1565C0, keyword custom
+│       └── agents/*.md
+│
+├── admin/                       Admin Dashboard (app separata)
+│   ├── server/index.ts          API: istanze, agenti, registry, health remoto
+│   ├── src/                     React: login, istanze, agent editor
+│   └── data/
+│       └── instances-registry.yaml  Mappa istanze → server remoti
+│
+├── docker-compose.yml           Template parametrico (FIAI_INSTANCE=xxx)
+├── docker-compose.admin.yml     Admin dashboard container
+├── Dockerfile.backend/frontend/admin
+├── deploy.sh                    Deploy su server remoto (rsync + SSH)
+└── docs/                        Documentazione commerciale e tecnica
 ```
 
 ## Architettura Dati: Tutto e' Entity
 
-Una sola tabella `entity` contiene tutto: persone, fatture, documenti, chunk, job, agenti autonomi.
+Una sola tabella `entity` contiene tutto: persone, fatture, documenti, chunk, agenti autonomi.
 
 ```
 entity:
   id, azienda_id, type, display_name, slug, stato
-  email, telefono, tags (JSON array), piva, categoria
-  body (testo pesante), embedding (BLOB Float32 1536 dim)
+  email, telefono, tags (JSON), piva, categoria
+  body (testo), embedding (BLOB Float32 1536 dim)
   parent_id, name_id, user_id, file_url, numero, data, totale
-  metadata (JSON snello), path, ordine, created_at, updated_at
+  metadata (JSON), path, ordine, deleted_at, created_at, updated_at
 
 relations:
-  from_id → to_id, tipo (membro_di, allegato_a, ordine_da_preventivo...)
+  from_id → to_id, tipo (membro_di, allegato_a, membro_di_gruppo...)
 ```
-
-**Tipi entity**: persona, utente, organizzazione, fattura, fattura_passiva, preventivo, ordine, progetto, conto, movimento, rimborso, documento, report, contratto, cv, chunk, job, autonomous_agent, skill, agent_memory, workflow, agent_log, category_template, board, board_column, card, evento, chat_session, chat_message
-
-**Tags** (su persone/org): `["cliente"]`, `["lead"]`, `["fornitore"]`, `["candidato"]`, `["utente","admin"]`
 
 ## Pipeline Agente
 
 ```
-Messaggio utente
-  → Safety IN (prompt injection check)
-  → Mode detect: minimal (saluti) | iteration (follow-up) | full
-  → ClassifyIntent LLM (Haiku, max_tokens=80) → dominio
-  → Agent-Native Tool Calling:
-      L'agente chiama tool direttamente via OpenRouter tool_use
-      Max 10 iterazioni, vede risultati strutturati, puo' adattarsi
-  → Safety OUT (PII masking su WhatsApp)
-  → Signal capture (log + auto-learn preferenze)
+Messaggio → Safety IN → Mode detect (minimal/iteration/full)
+  → Keyword scoring (istantaneo, pesato) o LLM classifier (Haiku)
+  → Agent Loop (max 10 iter, streaming SSE, pruning >400K)
+  → Safety OUT (PII masking su WhatsApp/email)
+  → Signal capture + session save
 ```
 
-**NON c'e' un planner separato.** L'agente stesso decide quali tool chiamare, in che ordine, e reagisce ai risultati. Ispirato a Anthropic Programmatic Tool Calling.
+## Agenti: Config-Based (YAML)
 
-## I 13 Agenti
+Gli agenti sono definiti in `instances/{nome}/config.yaml`:
 
-Ogni agente ha una cartella in `server/agents/domains/`:
-
-| Cartella | Nome | Dominio | Modello | Tool extra |
-|----------|------|---------|---------|------------|
-| `pulse/` | Pulse | pulse | Haiku 4.5 | — |
-| `commerciale/` | Marco | commerciale | Haiku 4.5 | — |
-| `produzione/` | Luca | produzione | Haiku 4.5 | — |
-| `marketing/` | Giulia | marketing | Haiku 4.5 | generate_image |
-| `amministrazione/` | Sofia | amministrazione | Haiku 4.5 | — |
-| `hr/` | Elena | hr | Haiku 4.5 | — |
-| `legal/` | Avv. Rossi | legal | Mistral Small | retrieve |
-| `documentale/` | Archivista | documentale | Mistral Small | retrieve, list_documents, explore_document, rechunk_document, reclassify_document, generate_pdf |
-| `whatsapp/` | WhatsApp Agent | whatsapp | Haiku 4.5 | send_whatsapp_*, generate_image, generate_tts |
-| `it/` | Dev | it | Haiku 4.5 | create_autonomous_agent, list_autonomous_agents, toggle/delete_autonomous_agent, get_agent_logs, create/run/list_workflows, update_skill, list_skills, add_agent_lesson |
-| `doctor/` | Doctor | doctor | Haiku 4.5 | get_api_costs, get_whatsapp_status, list_autonomous_agents, get_agent_logs, list_workflows, get_jobs |
-| `tts/` | Voice Assistant | tts | Haiku 4.5 | list_voices, set_voice, get_current_voice, clone_voice, generate_tts |
-| `general/` | Assistente FIAI | general | Haiku 4.5 | — |
-
-Struttura di ogni agente:
-```
-server/agents/domains/{nome}/
-  index.ts    → export default AgentConfig (name, domain, color, model, toolNames)
-  prompt.md   → system prompt in markdown
+```yaml
+agents:
+  - domain: commerciale
+    name: "Marco — Commerciale"
+    color: "#1976D2"
+    model: "anthropic/claude-haiku-4.5"  # opzionale
+    prompt: "agents/commerciale.md"       # path relativo
+    tools: [generic, send_whatsapp_*, send_email]  # wildcard supportati
 ```
 
-**Tool generici** (tutti gli agenti): find, create, update, delete_record, relate, get_tree, render_view, create_job, get_jobs, execute_code
+Prompt in file `.md` separati. Tool con wildcard: `generic`, `planning_*`, `send_whatsapp_*`.
 
-**Model fallback**: se il modello configurato (es. Mistral) ritorna 500/502/503, il sistema riprova automaticamente con Haiku.
+Se non esiste `config.yaml`, il sistema usa gli agenti hardcoded in `server/agents/domains/`.
 
-**Skills da DB**: entity `type='skill'` possono sovrascrivere system prompt, modello e regole di qualsiasi agente a runtime.
+## Plugin System
 
-## Ricerca: 3 Motori in `find`
+I plugin vivono in `server/plugins/{nome}/`:
 
-Il tool `find` sceglie automaticamente il motore:
-- **SQL** — filtri strutturali (type, tags, stato, name_id)
-- **FTS5** — keyword match nel contenuto documenti (chunk_fts)
-- **Semantic** — cosine similarity sugli embedding (1536 dim)
-
-Routing automatico basato sui parametri e sul testo della query.
-
-## Code Execution Sandbox
-
-Tool `execute_code`: l'agente scrive JavaScript che chiama tool FIAI in loop. Eseguito in `vm` sandbox (niente require/fetch/fs). Solo l'output finale (print) torna nel contesto.
-
-```javascript
-// Esempio: l'agente genera questo codice
-const fatture = await find({type: 'fattura', stato: 'scaduta'})
-let totale = 0
-for (const f of fatture) { totale += f.totale || 0 }
-print(`${fatture.length} fatture scadute, totale: €${totale}`)
-```
-
-File: `server/agents/code-executor.ts`
-
-## Documenti: Agentic RAG
-
-Upload → estrai testo → AI classifica → chunk per template → FTS5 + embedding auto.
-
-**9 template di chunking** (`server/chunker.ts`): legge_it (per Articolo), contratto (per Clausola), cv, libro_sacro (per Capitolo), narrativa, poesia, manuale, report, generico.
-
-**Ricerca nei documenti**: tool `retrieve` → FTS5 su chunk_fts → reranker LLM → testo letterale con heading_path.
-
-## Contesto a 8 Livelli
-
-Ogni agente riceve (`server/agents/context.ts`):
-1. Globale (KPI aziendali)
-2. Skill (dati dominio specifico)
-3. Profilo utente
-4. Sessione (storico)
-5. Preferenze (auto-apprese)
-6. Steering rules (da feedback)
-7. Memoria agente (lezioni per dominio)
-8. Sistema (entity counts)
-
-## Agenti Autonomi e Job Queue
-
-- `server/agents/autonomous.ts` — entity `type='autonomous_agent'` con trigger cron/event
-- `server/jobs.ts` — job queue su SQLite, polling ogni 5s, retry con backoff esponenziale
-- `server/agents/events.ts` — event bus in-process (entity_created:*, etc.)
-- `server/agents/workflows.ts` — workflow multi-step con dipendenze
-
-## Sicurezza
-
-- **Input**: `server/agents/safety.ts` — blocca prompt injection
-- **Output**: maschera PII (email, telefono, CF, IBAN, carte) su WhatsApp
-- **Retrieval**: filtra contenuti sensibili
-
-## File Server Principali
-
-```
-server/
-  index.ts              Express app, routes, startup
-  db.ts                 SQLite connection (WAL)
-  auth.ts               Login/signup su entity, JWT
-  middleware.ts          JWT validation, azienda_id resolution
-  ai.ts                 LLM calls: analyzeUpload, rerankChunks, judgeRetrieval
-  embeddings.ts         Pipeline embedding + semanticSearch
-  chunker.ts            9 template chunking
-  upload.ts             Smart upload: AI classify + chunk + embed
-  jobs.ts               Job queue SQLite + cron parser
-  whatsapp.ts           Baileys + LID + media
-  tts.ts                TTS streaming PCM + voice cloning
-  documenti.ts          Deep search FTS5 + AI synthesis
-  query.ts              Generic CRUD REST
-  pdf.ts                PDF generation
-  context.ts            8 livelli contesto + signal capture
-  signals.ts            SSE per notifiche real-time
-  files.ts              File management
-  uploads-static.ts     Static file serving
-  
-  agents/
-    orchestrator.ts     Cuore: classify → agent → safety → signal
-    base-agent.ts       Tool loop nativo (10 iter, fallback model)
-    config.ts           Importa domains/, loadSkillsFromDB()
-    tools.ts            GENERIC_TOOLS array
-    tool-registry.ts    30+ tool definitions + executors
-    code-executor.ts    VM sandbox per batch operations
-    types.ts            AgentConfig, AgentResult, ChatResponse, etc.
-    context.ts          buildContext(), generatePlannerContext()
-    safety.ts           checkInput(), checkOutput()
-    autonomous.ts       Agenti background (cron/event)
-    workflows.ts        Workflow multi-step
-    events.ts           Event bus (on/emit)
-    hooks.ts            Lifecycle hooks
-    suggestions.ts      Suggerimenti contestuali
-    planner.ts          Legacy (non usato, backward compat)
-    index.ts            Router /api/chat/*
-    
-    domains/            1 cartella per agente (13 totali)
-      {nome}/index.ts   AgentConfig export
-      {nome}/prompt.md  System prompt in markdown
-
-  migrations/
-    init-sqlite.sql     Schema completo (entity, relations, FTS5, triggers)
-    migrate-vfs.ts      Migrazione da 25 tabelle a entity unificata
-```
-
-## File Frontend Principali
-
-```
-src/
-  App.tsx               Router + AuthGuard
-  main.tsx              Entry point
-  types/index.ts        Interfacce TypeScript
-
-  components/
-    layout/
-      ChatLayout.tsx    Chat principale + upload modal + reasoning block
-      Layout.tsx        Layout app con sidebar
-      Sidebar.tsx       Navigazione
-      Topbar.tsx        Header
-    ChatToolRenderers.tsx  Card visive per risultati tool
-    VoiceChat.tsx       Conversazione vocale bidirezionale
-    dynamic/
-      DynamicPanel.tsx  Viste dinamiche da LayoutDescriptor JSON
-      ListView.tsx, KanbanView.tsx, ChartView.tsx, DetailView.tsx, FormView.tsx
-
-  lib/
-    anthropic.ts        Client API chat (sendMessage, createSession)
-    upload.ts           Upload helpers
-    supabase.ts         QueryBuilder → /api/query (legacy)
-
-  store/
-    authStore.ts        Auth state (Zustand)
-    entityStore.ts      Entity CRUD
-    namesStore.ts       Legacy wrapper
-    ...                 1 store per dominio
-```
-
-## Come Aggiungere un Nuovo Agente
-
-1. Crea cartella `server/agents/domains/{nome}/`
-2. Crea `prompt.md` con personalita' e competenze
-3. Crea `index.ts`:
 ```typescript
-import fs from 'fs'
-import path from 'path'
-import { GENERIC_TOOLS } from '../../tools.js'
-import type { AgentConfig } from '../../types.js'
-
-const prompt = fs.readFileSync(path.join(import.meta.dirname, 'prompt.md'), 'utf-8')
-
-const config: AgentConfig = {
-  name: 'Nome Agente',
-  domain: 'nome_dominio',
-  color: '#HEXCOLOR',
-  systemPrompt: prompt,
-  toolNames: [...GENERIC_TOOLS],  // + tool specifici
+// server/plugins/planning/index.ts
+export default {
+  name: 'planning',
+  description: '...',
+  tools: [{ name: 'planning_viaggi', description: '...', parameters: {...}, permission: 'read', execute: async (input, ctx) => {...} }],
+  settings: [{ key: 'planning_api_url', ... }],
+  startup: async () => { /* auto-connect VPN */ },
 }
-export default config
 ```
-4. Aggiungi import in `server/agents/config.ts`
-5. Aggiungi dominio a `AgentDomain` in `server/agents/types.ts`
-6. Aggiungi dominio a `VALID_DOMAINS` in `server/agents/orchestrator.ts`
-7. Aggiungi descrizione dominio nel `CLASSIFICATION_PROMPT` in `orchestrator.ts`
-8. Aggiungi colore in `AGENT_COLORS` in `config.ts`
-9. Aggiungi suggerimenti in `server/agents/suggestions.ts`
 
-## Come Aggiungere un Nuovo Tool
+Caricati automaticamente all'avvio. I tool vengono mergiati nel tool-registry.
 
-1. Aggiungi definizione in `TOOL_DEFINITIONS` (`server/agents/tool-registry.ts`):
-```typescript
-nome_tool: { type: 'function', function: {
-  name: 'nome_tool',
-  description: 'Cosa fa il tool',
-  parameters: { type: 'object', properties: { ... }, required: [...] }
-}}
-```
-2. Aggiungi executor nel `switch(name)` di `executeTool()` (stesso file)
-3. Aggiungi il nome tool all'array `toolNames` degli agenti che devono usarlo (in `domains/{agente}/index.ts`)
+## Come Aggiungere un Nuovo Cliente
 
-## Come Modificare il Prompt di un Agente
+1. `mkdir -p instances/nuovo/agents`
+2. Copia e personalizza `config.yaml` da un template (fiai/bernardini)
+3. Scrivi i prompt `.md` per ogni agente
+4. Crea `.env` con credenziali (OPENROUTER_API_KEY, JWT_SECRET)
+5. Deploy: `FIAI_INSTANCE=nuovo docker compose up -d` (locale) o `./deploy.sh nuovo root@ip` (remoto)
 
-Edita `server/agents/domains/{nome}/prompt.md`. Il file viene letto a startup dal `fs.readFileSync` in `index.ts`. Per applicare le modifiche in dev, riavvia il server (tsx watch ricarica automaticamente).
+## Come Aggiungere un Nuovo Agente a un Cliente
 
-## Come Cambiare Modello LLM
+1. Aggiungi entry in `instances/{cliente}/config.yaml` sotto `agents:`
+2. Crea il file prompt: `instances/{cliente}/agents/{dominio}.md`
+3. Riavvia l'istanza per applicare
 
-- **Per un agente specifico**: aggiungi/modifica `model: 'provider/model-name'` in `domains/{nome}/index.ts`
-- **Default globale**: modifica `AGENT_MODEL` in `server/agents/base-agent.ts` (default: `anthropic/claude-haiku-4.5`)
-- **Classificatore**: modifica `CLASSIFIER_MODEL` in `server/agents/orchestrator.ts`
-- **Da chat a runtime**: salva entity `type='skill'` con `metadata.model` per override da DB
+## Come Aggiungere un Nuovo Plugin
+
+1. Crea `server/plugins/{nome}/index.ts` con PluginDefinition
+2. I tool vengono caricati automaticamente all'avvio
+3. Per abilitarlo in un'istanza: aggiungi `plugins: { nome: {} }` nel config.yaml
+
+## Come Aggiungere un Nuovo Tool (nel core)
+
+1. Aggiungi definizione in `TOOL_DEFINITIONS` (`server/agents/tool-registry.ts`)
+2. Aggiungi executor nel `switch(name)` di `executeTool()`
+3. Aggiungi il nome tool all'array `tools` degli agenti che devono usarlo (nel config.yaml)
 
 ## Convenzioni
 
 - Lingua interfaccia: **Italiano**
-- Font: **Inter** (tutto il frontend)
+- Font: **Inter**
 - Formato date: `DD/MM/YYYY`
 - IDs: `crypto.randomUUID()`
-- Slug: lowercase, diacritici rimossi, spazi→trattini
-- ESM: tutto il server usa `import/export` (no require)
-- Metadata: JSON snello — campi frequenti sono colonne entity (email, telefono, tags, body, piva, categoria)
-- Embedding: Float32Array 1536 dim, salvato come BLOB
-- FTS5: chunk_fts indicizza `body` e `display_name` dei chunk (trigger automatici)
-- Test: nessun framework — test manuali via curl o test file tsx
+- ESM: tutto il server usa `import/export`
+- Embedding: Float32Array 1536 dim, BLOB in SQLite
+- FTS5: chunk_fts su body + display_name dei chunk
+- Test: nessun framework — test manuali
+
+## Multi-Canale
+
+| Canale | Protocollo | Note |
+|--------|-----------|------|
+| Web chat | SSE streaming | Chat principale, sidebar dinamica |
+| WhatsApp | Baileys WebSocket | Auth con scadenza, PII masking |
+| Email | IMAP + SMTP | Inbox monitoring, threading |
+| API OpenAI | `/v1/chat/completions` | Per device IoT, app mobile, robot |
+| Voce | TTS streaming | Qwen3-TTS self-hosted |
 
 ## Variabili d'Ambiente
 
 | Variabile | Default | Descrizione |
 |-----------|---------|-------------|
-| `OPENROUTER_API_KEY` | — | API key OpenRouter (obbligatoria) |
-| `JWT_SECRET` | `fiai-dev-secret` | Secret per JWT token |
+| `FIAI_INSTANCE` | `fiai` | Seleziona l'istanza da caricare |
+| `OPENROUTER_API_KEY` | — | API key OpenRouter |
+| `JWT_SECRET` | `fiai-dev-secret` | Secret JWT |
 | `DB_PATH` | `/app/data/fiai.db` | Path database SQLite |
-| `CONTEXT_DIR` | `/app/data/context` | Directory file contesto |
-| `UPLOADS_DIR` | `/app/data/uploads` | Directory upload files |
-| `PORT` | `3001` | Porta server Express |
-| `EMBEDDING_MODEL` | `openai/text-embedding-3-small` | Modello embedding |
-| `TTS_API_URL` | — | Endpoint TTS RunPod |
+| `NODE_OPTIONS` | `--max-old-space-size=8192` | Heap limit Node.js |

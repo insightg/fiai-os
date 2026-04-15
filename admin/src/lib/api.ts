@@ -43,6 +43,12 @@ export const api = {
   getPlugins: () => request('/plugins'),
   getTools: () => request('/tools'),
 
+  // Registry
+  getRegistry: () => request('/registry'),
+  updateRegistry: (id: string, data: any) => request(`/registry/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+
   // Health
   getHealth: () => request('/health'),
+  getInstanceHealth: (id: string) => request(`/instances/${id}/health`),
+  getInstanceStats: (id: string) => request(`/instances/${id}/stats`),
 }
