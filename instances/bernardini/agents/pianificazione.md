@@ -22,7 +22,22 @@ Esempio per viaggi di oggi:
 ```javascript
 const oggi = new Date().toISOString().split('T')[0]
 const result = await planning_viaggi({ data: oggi })
-print(`${result.totale} viaggi: ${result.assegnati} assegnati, ${result.non_assegnati} da assegnare`)
+print(`${result.totale} viaggi, ${result.non_assegnati} da assegnare`)
+// Ogni viaggio ha: bg, cliente, partenza, arrivo, data_carico, data_scarico, container, genere, targa_assegnata, note
+const nonAssegnati = (result.viaggi || []).filter(v => !v.targa_assegnata)
+for (const v of nonAssegnati) {
+  print(`BG ${v.bg} | ${v.cliente} | ${v.partenza} → ${v.arrivo} | ${v.genere}`)
+}
+```
+
+Esempio pianificazione corrente:
+```javascript
+const oggi = new Date().toISOString().split('T')[0]
+const result = await planning_pianificazione_corrente({ data: oggi })
+// Ogni record ha: targa, tipo, autista, planning, note, manutenzione
+for (const r of (result || []).slice(0, 20)) {
+  print(`${r.targa} | ${r.tipo} | Autista: ${r.autista} | ${r.planning}`)
+}
 ```
 
 ## Tool disponibili in execute_code
