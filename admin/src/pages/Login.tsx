@@ -24,8 +24,8 @@ export function LoginPage() {
         <form onSubmit={handleSubmit} className="bg-gray-900 border border-gray-800 rounded-xl p-6 space-y-4">
           {error && <div className="text-red-400 text-sm bg-red-900/20 border border-red-800/30 rounded-lg p-2">{error}</div>}
           <div>
-            <label className="text-xs text-gray-400 mb-1 block">Email</label>
-            <input type="email" value={email} onChange={e => setEmail(e.target.value)} required
+            <label className="text-xs text-gray-400 mb-1 block">Account</label>
+            <input type="text" value={email} onChange={e => setEmail(e.target.value)} required
               className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:border-red-500 focus:outline-none" />
           </div>
           <div>

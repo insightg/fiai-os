@@ -15,7 +15,10 @@ async function request(path: string, options?: RequestInit) {
   if (authToken) headers['Authorization'] = `Bearer ${authToken}`
 
   const res = await fetch(`${API_URL}${path}`, { ...options, headers })
-  if (res.status === 401) { setToken(null); window.location.href = '/login'; throw new Error('Unauthorized') }
+  if (res.status === 401 && !path.includes('/proxy')) {
+    // Only redirect to login for OUR auth failures, not proxy errors
+    setToken(null); window.location.href = '/login'; throw new Error('Unauthorized')
+  }
   const data = await res.json()
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
   return data

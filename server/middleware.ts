@@ -25,7 +25,18 @@ export function authMiddleware(required = true) {
     }
 
     try {
-      const decoded = jwt.verify(token, JWT_SECRET) as { userId: string; email: string }
+      const decoded = jwt.verify(token, JWT_SECRET) as { userId: string; email: string; platform?: boolean }
+
+      // Platform admin token — full access, resolve azienda from DB
+      if (decoded.platform) {
+        req.userId = 'platform-admin'
+        // Find the org that has utente entities (the active org, not legacy imports)
+        const org = db.prepare("SELECT azienda_id, COUNT(*) as c FROM entity WHERE type = 'utente' GROUP BY azienda_id ORDER BY c DESC LIMIT 1").get() as any
+        req.aziendaId = org?.azienda_id || (db.prepare("SELECT id FROM entity WHERE type = 'organizzazione' LIMIT 1").get() as any)?.id || ''
+        req.permissions = new UserPermissions([{ name: 'platform-admin', permissions: { '*': ['read', 'create', 'update', 'delete', 'send'] } }])
+        return next()
+      }
+
       req.userId = decoded.userId
 
       // Resolve azienda_id from names relation membro_di → organizzazione

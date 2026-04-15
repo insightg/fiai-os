@@ -159,11 +159,21 @@ app.post('/api/instances/:id/reload', async (req, res) => {
 
   try {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`
-    // Use a JWT for local instances
-    if (!apiKey) {
-      const token = jwt.sign({ userId: 'admin', email: 'admin' }, process.env.ADMIN_JWT_SECRET || 'fiai-admin-secret', { expiresIn: '1m' })
-      headers['Authorization'] = `Bearer ${token}`
+    if (apiKey) {
+      headers['Authorization'] = `Bearer ${apiKey}`
+    } else {
+      // Sign JWT with instance's secret
+      let instanceSecret = ''
+      try {
+        const envPath = path.join(INSTANCES_DIR, req.params.id, '.env')
+        if (fs.existsSync(envPath)) {
+          const envContent = fs.readFileSync(envPath, 'utf-8')
+          const match = envContent.match(/JWT_SECRET=(.+)/)
+          if (match) instanceSecret = match[1].trim()
+        }
+      } catch {}
+      const secret = instanceSecret || process.env.ADMIN_JWT_SECRET || 'fiai-admin-secret'
+      headers['Authorization'] = `Bearer ${jwt.sign({ userId: 'platform-admin', email: 'admin', platform: true }, secret, { expiresIn: '1m' })}`
     }
 
     const result = await fetch(`${url}/api/admin/reload-config`, { method: 'POST', headers, signal: AbortSignal.timeout(10000) })
@@ -520,15 +530,33 @@ app.use('/api/instances/:id/proxy', async (req: any, res: any, next: any) => {
   try {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' }
 
-    // Auth: use API key from registry, or generate a temporary JWT
+    // Auth: use API key from registry, or generate JWT with instance's secret
     if (reg?.api_key) {
       headers['Authorization'] = `Bearer ${reg.api_key}`
     } else {
-      // For local instances without API key, use a JWT signed with the instance's secret
-      // We don't know the instance's JWT_SECRET, so we pass through the admin's token
-      // The instance must accept it (or we need to configure api_key in registry)
-      const adminToken = req.headers.authorization
-      if (adminToken) headers['Authorization'] = adminToken
+      // Read JWT_SECRET from instance's .env file and sign a temporary admin JWT
+      let instanceSecret = ''
+      try {
+        const envPath = path.join(INSTANCES_DIR, req.params.id, '.env')
+        if (fs.existsSync(envPath)) {
+          const envContent = fs.readFileSync(envPath, 'utf-8')
+          const match = envContent.match(/JWT_SECRET=(.+)/)
+          if (match) instanceSecret = match[1].trim()
+        }
+      } catch {}
+
+      if (instanceSecret) {
+        // Sign a JWT that the instance will accept — use a generic admin identity
+        // The instance middleware resolves permissions from groups, so this user
+        // needs to exist in the instance DB. We use 'admin' as email which matches
+        // by display_name in most instances.
+        const instanceToken = jwt.sign({ userId: 'platform-admin', email: 'admin', platform: true }, instanceSecret, { expiresIn: '1m' })
+        headers['Authorization'] = `Bearer ${instanceToken}`
+      } else {
+        // Last resort: pass through admin's own token
+        const adminToken = req.headers.authorization
+        if (adminToken) headers['Authorization'] = adminToken
+      }
     }
 
     const fetchOptions: RequestInit = {
