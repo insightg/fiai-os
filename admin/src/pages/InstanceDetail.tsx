@@ -36,7 +36,9 @@ export function InstanceDetail({ instanceId, onBack, onEditAgent }: {
     setSaving(true)
     try {
       await api.updateInstanceYaml(instanceId, yamlContent)
-      alert('Config salvata. Riavvia l\'istanza per applicare.')
+      // Hot reload
+      try { await api.reloadInstance(instanceId) } catch {}
+      alert('Config salvata e applicata.')
     } catch (err: any) { alert('Errore: ' + err.message) }
     setSaving(false)
   }

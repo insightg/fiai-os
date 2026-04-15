@@ -47,6 +47,9 @@ export const api = {
   getRegistry: () => request('/registry'),
   updateRegistry: (id: string, data: any) => request(`/registry/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
 
+  // Reload instance config (hot reload — no restart needed)
+  reloadInstance: (id: string) => request(`/instances/${id}/reload`, { method: 'POST' }),
+
   // Health
   getHealth: () => request('/health'),
   getInstanceHealth: (id: string) => request(`/instances/${id}/health`),

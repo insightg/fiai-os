@@ -149,6 +149,31 @@ app.get('/api/instances', (_req, res) => {
   }
 })
 
+// ── Reload Instance Config (hot reload) ─────────────────
+
+app.post('/api/instances/:id/reload', async (req, res) => {
+  const registry = loadRegistry()
+  const reg = registry.find(r => r.id === req.params.id)
+  const url = reg?.url || `http://${req.params.id}-backend:3001`
+  const apiKey = reg?.api_key || ''
+
+  try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`
+    // Use a JWT for local instances
+    if (!apiKey) {
+      const token = jwt.sign({ userId: 'admin', email: 'admin' }, process.env.ADMIN_JWT_SECRET || 'fiai-admin-secret', { expiresIn: '1m' })
+      headers['Authorization'] = `Bearer ${token}`
+    }
+
+    const result = await fetch(`${url}/api/admin/reload-config`, { method: 'POST', headers, signal: AbortSignal.timeout(10000) })
+    const data = await result.json()
+    res.json(data)
+  } catch (err: any) {
+    res.status(500).json({ error: `Reload failed: ${err.message}` })
+  }
+})
+
 // ── Remote Instance Health Check ────────────────────────
 
 app.get('/api/instances/:id/health', async (req, res) => {

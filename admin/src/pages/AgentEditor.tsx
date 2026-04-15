@@ -44,7 +44,9 @@ export function AgentEditor({ instanceId, domain, onBack }: {
     setSaving(true)
     try {
       await api.updateAgent(instanceId, agentDomain, { name, color, model: model || undefined, tools, prompt })
-      alert('Agente salvato. Riavvia l\'istanza per applicare.')
+      // Hot reload — apply without restart
+      try { await api.reloadInstance(instanceId) } catch {}
+      alert('Agente salvato e applicato.')
       onBack()
     } catch (err: any) { alert('Errore: ' + err.message) }
     setSaving(false)
@@ -52,7 +54,11 @@ export function AgentEditor({ instanceId, domain, onBack }: {
 
   const deleteAgent = async () => {
     if (!confirm(`Eliminare l'agente "${name}" (${domain})?`)) return
-    try { await api.deleteAgent(instanceId, domain); onBack() } catch (err: any) { alert(err.message) }
+    try {
+      await api.deleteAgent(instanceId, domain)
+      try { await api.reloadInstance(instanceId) } catch {}
+      onBack()
+    } catch (err: any) { alert(err.message) }
   }
 
   if (loading) return <div className="p-8 text-gray-500">Caricamento...</div>
