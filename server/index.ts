@@ -194,6 +194,17 @@ app.use('/api/admin', adminRouter)
 app.use('/v1', openaiCompatRouter)
 mountPluginRoutes(app)
 
+// Branding (public — no auth needed)
+app.get('/api/branding', async (_req, res) => {
+  const { getInstanceConfig, getCompanyName, getCompanyColor } = await import('./instance-config.js')
+  const config = getInstanceConfig()
+  res.json({
+    name: getCompanyName(),
+    short_name: config?.company?.short_name || getCompanyName(),
+    color: getCompanyColor(),
+  })
+})
+
 // Health check
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() })

@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback, useMemo, type KeyboardEvent, type FormEvent, type JSX } from 'react'
 import { NavLink } from 'react-router-dom'
+import { getBranding } from '../../lib/branding'
 import {
   Bot,
   User,
@@ -564,7 +565,7 @@ function EmptyState({ onQuickCommand }: { onQuickCommand: (msg: string) => void 
         </div>
       )}
       <p className="text-text3 text-sm mb-8 max-w-md">
-        FIAI OS — 13 agenti specializzati per il tuo gestionale aziendale AI-native.
+        {getBranding().name} — Gestionale aziendale AI-native.
       </p>
       <div className="grid grid-cols-2 gap-3 max-w-lg w-full">
         {quickCommands.map((cmd) => (
@@ -1411,7 +1412,7 @@ export default function ChatLayout() {
           >
             {sidebarOpen ? <PanelLeftClose size={20} /> : <PanelLeft size={20} />}
           </button>
-          <span className="font-display text-gold font-bold text-lg tracking-wide">FIAI OS</span>
+          <span className="font-display text-gold font-bold text-lg tracking-wide">{getBranding().short_name} OS</span>
           <span className="text-text3 text-xs hidden sm:inline">Fabbrica Italiana Agenti Intelligenti</span>
         </div>
 
@@ -1775,7 +1776,7 @@ export default function ChatLayout() {
                 </div>
               </form>
               <p className="text-center text-[10px] text-text3 mt-2">
-                FIAI OS · Powered by FIAI &middot; Le risposte possono contenere errori
+                {getBranding().short_name} OS &middot; Powered by FIAI &middot; Le risposte possono contenere errori
               </p>
             </div>
           </div>

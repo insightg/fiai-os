@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../../store'
 import { Input } from '../../components/ui/Form'
 import Button from '../../components/ui/Button'
+import { getBranding } from '../../lib/branding'
 
 export default function Login() {
   const [account, setAccount] = useState('')
@@ -11,6 +12,7 @@ export default function Login() {
   const loading = useAuthStore((s) => s.loading)
   const error = useAuthStore((s) => s.error)
   const navigate = useNavigate()
+  const brand = getBranding()
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
@@ -25,8 +27,8 @@ export default function Login() {
     <div className="min-h-screen bg-bg flex items-center justify-center px-4">
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
-          <h1 className="font-display text-4xl font-bold text-gold mb-2">FIAI</h1>
-          <p className="text-text2 text-sm">Fabbrica Italiana Agenti Intelligenti</p>
+          <h1 className="font-display text-4xl font-bold text-gold mb-2">{brand.short_name}</h1>
+          <p className="text-text2 text-sm">{brand.name}</p>
         </div>
 
         <div className="bg-bg2 border border-border rounded-xl p-8">
@@ -68,7 +70,7 @@ export default function Login() {
         </div>
 
         <p className="text-center text-text3 text-xs mt-6">
-          FIAI OS &mdash; Powered by AI
+          {brand.short_name} OS &mdash; Powered by FIAI
         </p>
       </div>
     </div>
