@@ -220,7 +220,15 @@ app.listen(PORT, () => {
   console.log(`FIAI OS server running on http://localhost:${PORT}`)
   startWhatsApp().catch(err => console.error('WhatsApp startup error:', err))
   startEmail().catch(err => console.error('Email startup error:', err))
-  autoConnectVPN().catch(err => console.error('VPN auto-connect error:', err))
+  // Auto-connect VPN only if planning plugin is configured for this instance
+  import('./instance-config.js').then(({ getInstanceConfig }) => {
+    const cfg = getInstanceConfig()
+    if (cfg?.plugins?.planning) {
+      autoConnectVPN().catch(err => console.error('VPN auto-connect error:', err))
+    } else {
+      console.log('[VPN] Skipped — no planning plugin configured')
+    }
+  })
   startPlugins().catch(err => console.error('Plugin startup error:', err))
   initAutonomousAgents()
   initWorkflows()

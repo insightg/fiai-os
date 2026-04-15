@@ -91,17 +91,7 @@ agents:
       - generate_image
       - generate_tts
 
-  - domain: pianificazione
-    name: "Pianificazione Trasporti"
-    color: "#FF5722"
-    prompt: "agents/pianificazione.md"
-    tools:
-      - generic
-      - planning_*
-      - send_whatsapp_message
-      - send_whatsapp_document
-      - send_email
-      - reply_email
+  # pianificazione: disabilitato per FIAI (nessun planner trasporti)
 
   - domain: it
     name: "Dev — IT"
@@ -152,6 +142,6 @@ agents:
     prompt: "agents/general.md"
     tools: [generic, get_capabilities]
 
-plugins:
-  planning:
-    api_url: "http://192.168.0.14:8602"
+plugins: {}
+  # planning:                          # Abilitare solo per istanze con planner trasporti
+  #   api_url: "http://192.168.0.14:8602"
