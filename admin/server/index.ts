@@ -68,6 +68,30 @@ app.use('/api', (req, res, next) => {
   authMiddleware(req, res, next)
 })
 
+// ── Instance Registry (remote instances) ────────────────
+
+const REGISTRY_FILE = path.join(import.meta.dirname, '..', 'data', 'instances-registry.yaml')
+
+interface RegistryEntry {
+  id: string; name?: string; url: string; api_key?: string
+  location: 'local' | 'remote'; server_ip?: string; ssh_user?: string; notes?: string
+}
+
+function loadRegistry(): RegistryEntry[] {
+  try {
+    if (fs.existsSync(REGISTRY_FILE)) {
+      const data = yaml.load(fs.readFileSync(REGISTRY_FILE, 'utf-8')) as any
+      return data?.instances || []
+    }
+  } catch {}
+  return []
+}
+
+function saveRegistry(entries: RegistryEntry[]): void {
+  fs.mkdirSync(path.dirname(REGISTRY_FILE), { recursive: true })
+  fs.writeFileSync(REGISTRY_FILE, yaml.dump({ instances: entries }, { lineWidth: 120 }))
+}
+
 // ── Instances CRUD ──────────────────────────────────────
 
 app.get('/api/instances', (_req, res) => {
@@ -101,10 +125,97 @@ app.get('/api/instances', (_req, res) => {
       }
     })
 
-    res.json(instances)
+    // Merge registry info (url, location, server_ip)
+    const registry = loadRegistry()
+    const enriched = instances.map(inst => {
+      const reg = registry.find(r => r.id === inst.id)
+      return { ...inst, url: reg?.url || '', location: reg?.location || 'local', server_ip: reg?.server_ip || '', notes: reg?.notes || '' }
+    })
+
+    // Add remote-only instances (in registry but no local config)
+    for (const reg of registry) {
+      if (!enriched.find(i => i.id === reg.id)) {
+        enriched.push({
+          id: reg.id, name: reg.name || reg.id, short_name: reg.id.toUpperCase(),
+          color: '#607D8B', agent_count: 0, plugins: [], has_config: false,
+          url: reg.url, location: reg.location, server_ip: reg.server_ip || '', notes: reg.notes || '',
+        })
+      }
+    }
+
+    res.json(enriched)
   } catch (err) {
     res.status(500).json({ error: (err as Error).message })
   }
+})
+
+// ── Remote Instance Health Check ────────────────────────
+
+app.get('/api/instances/:id/health', async (req, res) => {
+  const registry = loadRegistry()
+  const reg = registry.find(r => r.id === req.params.id)
+
+  if (!reg?.url) {
+    // Local instance — check Docker container
+    try {
+      const result = await fetch(`http://${req.params.id}-backend:3001/api/health`, { signal: AbortSignal.timeout(5000) })
+      res.json(await result.json())
+    } catch {
+      res.json({ status: 'unreachable', error: 'Container not running or not accessible' })
+    }
+    return
+  }
+
+  // Remote instance — call via URL
+  try {
+    const headers: Record<string, string> = {}
+    if (reg.api_key) headers['Authorization'] = `Bearer ${reg.api_key}`
+    const result = await fetch(`${reg.url}/api/health`, { headers, signal: AbortSignal.timeout(10000) })
+    const data = await result.json()
+    res.json({ ...data, location: reg.location, url: reg.url })
+  } catch (err: any) {
+    res.json({ status: 'unreachable', error: err.message, location: reg.location, url: reg.url })
+  }
+})
+
+// ── Remote Instance Stats (proxy to instance admin API) ─
+
+app.get('/api/instances/:id/stats', async (req, res) => {
+  const registry = loadRegistry()
+  const reg = registry.find(r => r.id === req.params.id)
+  if (!reg?.url) { res.json({}); return }
+
+  try {
+    const headers: Record<string, string> = {}
+    if (reg.api_key) headers['Authorization'] = `Bearer ${reg.api_key}`
+    const result = await fetch(`${reg.url}/api/admin/system`, { headers, signal: AbortSignal.timeout(10000) })
+    res.json(await result.json())
+  } catch (err: any) {
+    res.json({ error: err.message })
+  }
+})
+
+// ── Registry CRUD ───────────────────────────────────────
+
+app.get('/api/registry', (_req, res) => { res.json(loadRegistry()) })
+
+app.put('/api/registry', (req, res) => {
+  const { instances } = req.body
+  if (!Array.isArray(instances)) { res.status(400).json({ error: 'instances array required' }); return }
+  saveRegistry(instances)
+  res.json({ successo: true })
+})
+
+app.put('/api/registry/:id', (req, res) => {
+  const registry = loadRegistry()
+  const idx = registry.findIndex(r => r.id === req.params.id)
+  if (idx === -1) {
+    registry.push({ id: req.params.id, ...req.body })
+  } else {
+    registry[idx] = { ...registry[idx], ...req.body }
+  }
+  saveRegistry(registry)
+  res.json({ successo: true })
 })
 
 app.get('/api/instances/:id', (req, res) => {

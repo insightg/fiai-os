@@ -1,0 +1,25 @@
+FROM node:20-slim
+
+WORKDIR /app/admin
+
+# Install admin dependencies
+COPY admin/package*.json ./
+RUN npm ci
+
+# Copy admin source
+COPY admin/ ./
+
+# Copy instances and plugins (for local management)
+COPY instances/ /app/instances/
+COPY server/plugins/ /app/plugins/
+
+ENV NODE_ENV=production
+ENV ADMIN_PORT=3002
+
+EXPOSE 3002
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD curl -sf http://localhost:3002/api/health || exit 1
+
+CMD ["npx", "tsx", "server/index.ts"]

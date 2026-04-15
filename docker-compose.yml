@@ -1,34 +1,35 @@
-services:
-  fiai-frontend:
-    container_name: fiai-frontend
-    build:
-      context: .
-      dockerfile: Dockerfile.frontend
-      args:
-        - VITE_OPENROUTER_API_KEY=${VITE_OPENROUTER_API_KEY:-}
-    restart: unless-stopped
-    depends_on:
-      - fiai-backend
-    networks:
-      - npm-network
-      - fiai-internal
+# FIAI OS — Instance Docker Compose (parametric)
+#
+# Usage:
+#   FIAI_INSTANCE=fiai docker compose up -d              # FIAI instance
+#   FIAI_INSTANCE=bernardini docker compose up -d        # Bernardini instance
+#   docker compose up -d                                  # Default: fiai
+#
+# Each instance gets its own containers, volumes, and network.
+# The instance config is loaded from instances/{FIAI_INSTANCE}/
 
-  fiai-backend:
-    container_name: fiai-backend
+services:
+  backend:
+    container_name: ${FIAI_INSTANCE:-fiai}-backend
     build:
       context: .
       dockerfile: Dockerfile.backend
     restart: unless-stopped
     environment:
       - TZ=Europe/Rome
-      - DB_PATH=/app/data/fiai.db
-      - JWT_SECRET=${JWT_SECRET:-fiai-os-dev-secret-key-2026}
+      - FIAI_INSTANCE=${FIAI_INSTANCE:-fiai}
+      - DB_PATH=/app/data/${FIAI_INSTANCE:-fiai}.db
+      - JWT_SECRET=${JWT_SECRET:-fiai-dev-secret-2026}
       - PORT=3001
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - UPLOADS_DIR=/app/data/uploads
       - CONTEXT_DIR=/app/data/context
       - TTS_API_URL=${TTS_API_URL:-http://host.docker.internal:7777/v1/audio/speech}
       - NODE_OPTIONS=--max-old-space-size=8192
+      - EMAIL_USER=${EMAIL_USER:-}
+      - EMAIL_PASSWORD=${EMAIL_PASSWORD:-}
+      - EMAIL_IMAP_HOST=${EMAIL_IMAP_HOST:-}
+      - EMAIL_SMTP_HOST=${EMAIL_SMTP_HOST:-}
     cap_add:
       - NET_ADMIN
     devices:
@@ -36,8 +37,10 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - fiai-data:/app/data
+      - ${FIAI_INSTANCE:-fiai}-data:/app/data
       - ./vpn:/app/vpn:ro
+    env_file:
+      - ./instances/${FIAI_INSTANCE:-fiai}/.env
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:3001/api/health"]
       interval: 10s
@@ -46,13 +49,25 @@ services:
       start_period: 10s
     networks:
       - npm-network
-      - fiai-internal
+      - ${FIAI_INSTANCE:-fiai}-internal
+
+  frontend:
+    container_name: ${FIAI_INSTANCE:-fiai}-frontend
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    networks:
+      - npm-network
+      - ${FIAI_INSTANCE:-fiai}-internal
 
 networks:
   npm-network:
     external: true
-  fiai-internal:
+  ${FIAI_INSTANCE:-fiai}-internal:
     driver: bridge
 
 volumes:
-  fiai-data:
+  ${FIAI_INSTANCE:-fiai}-data:

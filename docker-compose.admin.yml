@@ -1,0 +1,31 @@
+# FIAI OS — Admin Dashboard Docker Compose
+#
+# Usage: docker compose -f docker-compose.admin.yml up -d
+# Access: http://localhost:3002 (or via reverse proxy)
+# Login: admin@fiai.it / admin
+
+services:
+  fiai-admin:
+    container_name: fiai-admin
+    build:
+      context: .
+      dockerfile: Dockerfile.admin
+    restart: unless-stopped
+    environment:
+      - ADMIN_PORT=3002
+      - ADMIN_JWT_SECRET=${ADMIN_JWT_SECRET:-fiai-admin-secret-2026}
+      - INSTANCES_DIR=/app/instances
+      - PLUGINS_DIR=/app/plugins
+    volumes:
+      - ./instances:/app/instances
+      - ./server/plugins:/app/plugins:ro
+      - admin-data:/app/admin/data
+    networks:
+      - npm-network
+
+networks:
+  npm-network:
+    external: true
+
+volumes:
+  admin-data:

@@ -23,3 +23,12 @@ dist-ssr
 *.sln
 *.sw?
 .env
+
+# Instance secrets (credentials, VPN configs — never in repo)
+instances/*/.env
+instances/*/vpn/
+instances/*/data/
+*.db
+
+# Admin runtime data
+admin/data/
