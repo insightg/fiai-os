@@ -1,0 +1,61 @@
+# BERNARDINI S.R.L. — Docker Compose
+# Uses the shared FIAI OS core with bernardini instance config
+
+services:
+  bernardini-backend:
+    container_name: bernardini-backend
+    build:
+      context: ../..
+      dockerfile: Dockerfile.backend
+    restart: unless-stopped
+    environment:
+      - TZ=Europe/Rome
+      - FIAI_INSTANCE=bernardini
+      - DB_PATH=/app/data/bernardini.db
+      - PORT=3001
+      - UPLOADS_DIR=/app/data/uploads
+      - CONTEXT_DIR=/app/data/context
+      - NODE_OPTIONS=--max-old-space-size=8192
+    env_file:
+      - .env
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - bernardini-data:/app/data
+      - ../../vpn:/app/vpn:ro
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:3001/api/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    networks:
+      - npm-network
+      - bernardini-internal
+
+  bernardini-frontend:
+    container_name: bernardini-frontend
+    build:
+      context: ../..
+      dockerfile: Dockerfile.frontend
+    restart: unless-stopped
+    depends_on:
+      - bernardini-backend
+    networks:
+      - npm-network
+      - bernardini-internal
+
+networks:
+  npm-network:
+    external: true
+  bernardini-internal:
+    driver: bridge
+
+volumes:
+  bernardini-data:
+    external: true
+    name: bernardini_bernardini-data
