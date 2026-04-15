@@ -36,6 +36,11 @@ export const api = {
   updateInstanceYaml: (id: string, rawYaml: string) => request(`/instances/${id}/config`, { method: 'PUT', body: JSON.stringify({ rawYaml }) }),
   deleteInstance: (id: string) => request(`/instances/${id}`, { method: 'DELETE' }),
 
+  // VPN
+  getVpn: (id: string) => request(`/instances/${id}/vpn`),
+  uploadVpnFile: (id: string, filename: string, content: string) => request(`/instances/${id}/vpn/upload`, { method: 'POST', body: JSON.stringify({ filename, content }) }),
+  deleteVpnFile: (id: string, filename: string) => request(`/instances/${id}/vpn/${filename}`, { method: 'DELETE' }),
+
   // Agents
   getAgents: (instanceId: string) => request(`/instances/${instanceId}/agents`),
   getAgent: (instanceId: string, domain: string) => request(`/instances/${instanceId}/agents/${domain}`),

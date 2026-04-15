@@ -3,7 +3,7 @@ import { api } from '../lib/api'
 
 interface Agent { domain: string; name: string; color: string; model?: string; tools: string[]; prompt: string; promptPreview?: string }
 
-type Tab = 'agents' | 'users' | 'groups' | 'settings' | 'tokens' | 'config' | 'yaml'
+type Tab = 'agents' | 'users' | 'groups' | 'settings' | 'tokens' | 'vpn' | 'config' | 'yaml'
 
 export function InstanceDetail({ instanceId, onBack, onEditAgent }: {
   instanceId: string; onBack: () => void; onEditAgent: (domain: string) => void
@@ -22,6 +22,8 @@ export function InstanceDetail({ instanceId, onBack, onEditAgent }: {
   const [tokens, setTokens] = useState<any[]>([])
   const [health, setHealth] = useState<any>(null)
   const [stats, setStats] = useState<any>(null)
+  const [vpn, setVpn] = useState<any>(null)
+  const [vpnStatus, setVpnStatus] = useState<any>(null)
 
   useEffect(() => {
     api.getInstance(instanceId).then(data => { setInstance(data); setYamlContent(data.rawYaml || '') })
@@ -37,6 +39,10 @@ export function InstanceDetail({ instanceId, onBack, onEditAgent }: {
     if (tab === 'groups') api.proxyGet(instanceId, '/api/admin/groups').then(setGroups).catch(() => setGroups([]))
     if (tab === 'settings') api.proxyGet(instanceId, '/api/admin/settings').then(setSettings).catch(() => setSettings(null))
     if (tab === 'tokens') api.proxyGet(instanceId, '/api/auth/tokens').then(setTokens).catch(() => setTokens([]))
+    if (tab === 'vpn') {
+      api.getVpn(instanceId).then(setVpn).catch(() => setVpn(null))
+      api.proxyGet(instanceId, '/api/vpn/status').then(setVpnStatus).catch(() => setVpnStatus(null))
+    }
   }, [tab, instanceId])
 
   const saveYaml = async () => {
@@ -65,6 +71,7 @@ export function InstanceDetail({ instanceId, onBack, onEditAgent }: {
     { key: 'groups', label: '🔐 Gruppi' },
     { key: 'settings', label: '⚙️ Settings' },
     { key: 'tokens', label: '🔑 Token API' },
+    { key: 'vpn', label: '🔒 VPN' },
     { key: 'config', label: '📊 Sistema' },
     { key: 'yaml', label: '📄 YAML' },
   ]
@@ -248,6 +255,74 @@ export function InstanceDetail({ instanceId, onBack, onEditAgent }: {
               </table>
             </div>
           )}
+        </div>
+      )}
+
+      {/* ── VPN Tab ── */}
+      {tab === 'vpn' && (
+        <div className="space-y-4">
+          {/* VPN Status (from instance) */}
+          {vpnStatus && (
+            <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+              <h3 className="font-semibold mb-4">Stato Connessione</h3>
+              <div className="flex items-center gap-4">
+                <span className={`text-2xl ${vpnStatus.status === 'connected' ? 'text-green-400' : vpnStatus.status === 'connecting' ? 'text-yellow-400' : 'text-red-400'}`}>
+                  {vpnStatus.status === 'connected' ? '●' : vpnStatus.status === 'connecting' ? '◐' : '○'}
+                </span>
+                <div>
+                  <p className="font-medium text-white capitalize">{vpnStatus.status || 'sconosciuto'}</p>
+                  {vpnStatus.connectedAt && <p className="text-xs text-gray-500">Connesso da: {vpnStatus.connectedAt}</p>}
+                  {vpnStatus.error && <p className="text-xs text-red-400">{vpnStatus.error}</p>}
+                </div>
+                <div className="ml-auto flex gap-2">
+                  <button onClick={() => api.proxyPost(instanceId, '/api/vpn/connect').then(() => setTimeout(() => api.proxyGet(instanceId, '/api/vpn/status').then(setVpnStatus), 3000))}
+                    className="text-xs bg-green-900/40 text-green-300 px-3 py-1.5 rounded hover:bg-green-900/60">Connetti</button>
+                  <button onClick={() => api.proxyPost(instanceId, '/api/vpn/disconnect').then(() => api.proxyGet(instanceId, '/api/vpn/status').then(setVpnStatus))}
+                    className="text-xs bg-red-900/40 text-red-300 px-3 py-1.5 rounded hover:bg-red-900/60">Disconnetti</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* VPN Files */}
+          <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="font-semibold">Credenziali VPN</h3>
+              <label className="text-xs bg-blue-900/40 text-blue-300 px-3 py-1.5 rounded cursor-pointer hover:bg-blue-900/60">
+                + Carica file
+                <input type="file" className="hidden" onChange={async (e) => {
+                  const file = e.target.files?.[0]
+                  if (!file) return
+                  const reader = new FileReader()
+                  reader.onload = async () => {
+                    const base64 = (reader.result as string).split(',')[1] || btoa(reader.result as string)
+                    await api.uploadVpnFile(instanceId, file.name, base64)
+                    api.getVpn(instanceId).then(setVpn)
+                  }
+                  reader.readAsDataURL(file)
+                }} />
+              </label>
+            </div>
+            {!vpn?.configured ? (
+              <p className="text-gray-500 text-sm">Nessuna credenziale VPN configurata per questa istanza.</p>
+            ) : (
+              <div className="space-y-2">
+                {vpn.files.map((f: any) => (
+                  <div key={f.name} className="flex items-center justify-between bg-gray-800 rounded-lg px-4 py-3">
+                    <div className="flex items-center gap-3">
+                      <span className="text-lg">{f.isConfig ? '🔐' : '📄'}</span>
+                      <div>
+                        <span className="text-sm text-white font-mono">{f.name}</span>
+                        <span className="text-xs text-gray-500 ml-2">{(f.size / 1024).toFixed(1)} KB</span>
+                      </div>
+                    </div>
+                    <button onClick={async () => { await api.deleteVpnFile(instanceId, f.name); api.getVpn(instanceId).then(setVpn) }}
+                      className="text-xs text-red-400 hover:text-red-300">Elimina</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
 

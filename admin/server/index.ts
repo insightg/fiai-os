@@ -512,6 +512,41 @@ app.get('/api/tools', (_req, res) => {
 
 // ── Health / Status ─────────────────────────────────────
 
+// ── VPN Management per Instance ─────────────────────────
+
+app.get('/api/instances/:id/vpn', (req, res) => {
+  const vpnDir = path.join(INSTANCES_DIR, req.params.id, 'vpn')
+  if (!fs.existsSync(vpnDir)) {
+    res.json({ configured: false, files: [] })
+    return
+  }
+  const files = fs.readdirSync(vpnDir).map(f => ({
+    name: f,
+    size: fs.statSync(path.join(vpnDir, f)).size,
+    isConfig: f.endsWith('.ovpn'),
+  }))
+  res.json({ configured: true, files, directory: vpnDir })
+})
+
+app.post('/api/instances/:id/vpn/upload', async (req, res) => {
+  const vpnDir = path.join(INSTANCES_DIR, req.params.id, 'vpn')
+  fs.mkdirSync(vpnDir, { recursive: true })
+
+  const { filename, content } = req.body // base64 content
+  if (!filename || !content) { res.status(400).json({ error: 'filename e content obbligatori' }); return }
+
+  const buffer = Buffer.from(content, 'base64')
+  fs.writeFileSync(path.join(vpnDir, filename), buffer)
+  res.json({ successo: true, filename, size: buffer.length })
+})
+
+app.delete('/api/instances/:id/vpn/:filename', (req, res) => {
+  const filePath = path.join(INSTANCES_DIR, req.params.id, 'vpn', req.params.filename)
+  if (!fs.existsSync(filePath)) { res.status(404).json({ error: 'File non trovato' }); return }
+  fs.unlinkSync(filePath)
+  res.json({ successo: true })
+})
+
 // ── Generic Proxy to Instance APIs ──────────────────────
 // Proxies any request to an instance's API, using the registry for auth.
 // Usage: /api/instances/:id/proxy/api/admin/users → {instance.url}/api/admin/users

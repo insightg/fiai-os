@@ -20,11 +20,19 @@ import { AuthRequest, authMiddleware } from './middleware.js'
 
 const router = Router()
 
-// VPN config directory (relative to project root)
-const VPN_DIR = process.env.VPN_DIR || '/app/vpn'
-const VPN_CONFIG = path.join(VPN_DIR, 'GabrieleGiottoli.ovpn')
-const VPN_LOG = '/tmp/openvpn-fiai.log'
-const VPN_PID_FILE = '/tmp/openvpn-fiai.pid'
+// VPN config directory — per-instance: /app/instances/{instance}/vpn/ or fallback /app/vpn
+const INSTANCE_NAME = process.env.FIAI_INSTANCE || 'fiai'
+const INSTANCE_VPN_DIR = `/app/instances/${INSTANCE_NAME}/vpn`
+const VPN_DIR = fs.existsSync(INSTANCE_VPN_DIR) ? INSTANCE_VPN_DIR : (process.env.VPN_DIR || '/app/vpn')
+// Find the .ovpn config file dynamically (each client may have a different filename)
+const VPN_CONFIG = (() => {
+  try {
+    const ovpnFiles = fs.readdirSync(VPN_DIR).filter(f => f.endsWith('.ovpn'))
+    return ovpnFiles.length > 0 ? path.join(VPN_DIR, ovpnFiles[0]) : path.join(VPN_DIR, 'client.ovpn')
+  } catch { return path.join(VPN_DIR, 'client.ovpn') }
+})()
+const VPN_LOG = `/tmp/openvpn-${INSTANCE_NAME}.log`
+const VPN_PID_FILE = `/tmp/openvpn-${INSTANCE_NAME}.pid`
 
 let vpnProcess: ChildProcess | null = null
 let vpnStatus: 'disconnected' | 'connecting' | 'connected' | 'error' = 'disconnected'
