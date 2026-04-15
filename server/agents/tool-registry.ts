@@ -1672,9 +1672,18 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
       try { const waStat = db.prepare("SELECT 1 FROM entity WHERE type = 'utente' AND json_extract(metadata, '$.whatsapp_active') = 1 LIMIT 1").get(); if (waStat) channels.push('WhatsApp') } catch {}
       channels.push('API OpenAI-compatible (/v1)')
 
+      // Loaded plugins
+      const { getLoadedPlugins } = await import('../plugins/loader.js')
+      const plugins = getLoadedPlugins().map(p => ({
+        nome: p.name,
+        descrizione: p.description,
+        tool_forniti: p.toolCount,
+      }))
+
       return {
         azienda: companyName,
         agenti: agentList.filter(a => a.dominio !== 'general'),
+        plugin_attivi: plugins,
         canali_attivi: channels,
         nota: `Scrivi la tua richiesta in linguaggio naturale. Il sistema identifica automaticamente l'agente giusto. Puoi anche specificare il canale: "manda via WhatsApp", "invia email", ecc.`,
       }
