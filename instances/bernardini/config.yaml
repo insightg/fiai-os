@@ -155,6 +155,7 @@ agents:
     prompt: "agents/general.md"
     tools:
       - generic
+      - get_capabilities
       - generate_image
       - generate_pdf
       - send_whatsapp_*

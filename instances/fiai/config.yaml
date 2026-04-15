@@ -150,7 +150,7 @@ agents:
     name: "Assistente FIAI"
     color: "#607D8B"
     prompt: "agents/general.md"
-    tools: [generic]
+    tools: [generic, get_capabilities]
 
 plugins:
   planning:

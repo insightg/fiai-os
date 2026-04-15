@@ -266,6 +266,9 @@ export const TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     role: { type: 'string', enum: ['admin', 'collaboratore', 'viewer'], description: 'Nuovo ruolo' },
   }, required: ['user_id', 'role'] } } },
 
+  // ── Capabilities (dynamic agent listing) ──
+  get_capabilities: { type: 'function', function: { name: 'get_capabilities', description: 'Mostra cosa puo\' fare il sistema: lista degli agenti disponibili con le loro competenze, i tool che possono usare e i canali di comunicazione attivi. Usa quando l\'utente chiede "cosa puoi fare", "chi sei", "che agenti ci sono", "aiuto", "help", "come funziona".', parameters: { type: 'object', properties: {} } } },
+
   // ── Email tools ──
   get_email_status: { type: 'function', function: { name: 'get_email_status', description: 'Stato connessione email (IMAP/SMTP)', parameters: { type: 'object', properties: {} } } },
   send_email: { type: 'function', function: { name: 'send_email', description: 'Invia una email con supporto HTML e allegati', parameters: { type: 'object', properties: { to: { type: 'string', description: 'Destinatario email' }, subject: { type: 'string', description: 'Oggetto' }, html: { type: 'string', description: 'Corpo email (HTML supportato)' }, cc: { type: 'string', description: 'CC (virgola-separati)' }, bcc: { type: 'string', description: 'BCC (virgola-separati)' }, attachments: { type: 'array', items: { type: 'object', properties: { filename: { type: 'string' }, path: { type: 'string', description: 'file_url dal VFS (es. /api/uploads/...)' } } }, description: 'Allegati da VFS' } }, required: ['to', 'subject', 'html'] } } },
@@ -304,6 +307,7 @@ const TOOL_ACTIONS: Record<string, string> = {
   create_autonomous_agent: 'create', create_workflow: 'create',
   update: 'update', update_skill: 'update',
   delete_record: 'delete', delete_autonomous_agent: 'delete',
+  get_capabilities: 'read',
   // planning_* permissions loaded from plugin via initPluginTools()
   fetch_document: 'create',
   send_email: 'send', reply_email: 'send',
@@ -1624,6 +1628,58 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
     }
 
     // ── EMAIL tools ──
+    // ── CAPABILITIES (dynamic agent listing) ──
+    case 'get_capabilities': {
+      const { AGENTS } = await import('./config.js')
+      const { getCompanyName } = await import('../instance-config.js')
+      const companyName = getCompanyName()
+
+      const agentList = Object.entries(AGENTS).map(([domain, agent]: [string, any]) => {
+        // Extract first meaningful lines from prompt as description
+        const promptLines = (agent.systemPrompt || '').split('\n').filter((l: string) => l.trim() && !l.startsWith('#'))
+        const description = promptLines.slice(0, 2).join(' ').substring(0, 200)
+
+        // Categorize tools
+        const toolCount = agent.toolNames?.length || 0
+        const hasWhatsApp = agent.toolNames?.some((t: string) => t.startsWith('send_whatsapp'))
+        const hasEmail = agent.toolNames?.some((t: string) => t === 'send_email' || t === 'reply_email')
+        const hasDocuments = agent.toolNames?.some((t: string) => t === 'retrieve' || t === 'list_documents')
+        const hasPlanning = agent.toolNames?.some((t: string) => t.startsWith('planning_'))
+        const hasTTS = agent.toolNames?.some((t: string) => t === 'generate_tts')
+        const hasImage = agent.toolNames?.some((t: string) => t === 'generate_image')
+        const hasWebSearch = agent.toolNames?.some((t: string) => t === 'web_search')
+
+        const capabilities: string[] = []
+        if (hasWebSearch) capabilities.push('ricerca web')
+        if (hasDocuments) capabilities.push('ricerca documenti')
+        if (hasWhatsApp) capabilities.push('invio WhatsApp')
+        if (hasEmail) capabilities.push('email')
+        if (hasPlanning) capabilities.push('pianificazione trasporti')
+        if (hasTTS) capabilities.push('sintesi vocale')
+        if (hasImage) capabilities.push('generazione immagini')
+
+        return {
+          dominio: domain,
+          nome: agent.name,
+          descrizione: description,
+          tool_disponibili: toolCount,
+          canali: capabilities,
+        }
+      })
+
+      // Active channels
+      const channels: string[] = ['Chat web']
+      try { const waStat = db.prepare("SELECT 1 FROM entity WHERE type = 'utente' AND json_extract(metadata, '$.whatsapp_active') = 1 LIMIT 1").get(); if (waStat) channels.push('WhatsApp') } catch {}
+      channels.push('API OpenAI-compatible (/v1)')
+
+      return {
+        azienda: companyName,
+        agenti: agentList.filter(a => a.dominio !== 'general'),
+        canali_attivi: channels,
+        nota: `Scrivi la tua richiesta in linguaggio naturale. Il sistema identifica automaticamente l'agente giusto. Puoi anche specificare il canale: "manda via WhatsApp", "invia email", ecc.`,
+      }
+    }
+
     case 'get_email_status': {
       try {
         const { listEmails } = await import('../email.js')
