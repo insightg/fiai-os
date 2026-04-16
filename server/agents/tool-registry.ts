@@ -904,7 +904,7 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
 
     case 'rechunk_document': {
       console.log('[rechunk] doc_id:', input.doc_id, 'aziendaId:', aziendaId)
-      const doc = db.prepare("SELECT id, display_name, file_url, metadata FROM entity WHERE id = ? AND azienda_id = ?").get(input.doc_id, aziendaId) as any
+      const doc = db.prepare("SELECT id, display_name, file_url, body, metadata FROM entity WHERE id = ? AND azienda_id = ?").get(input.doc_id, aziendaId) as any
       if (!doc) {
         console.log('[rechunk] Doc not found for id:', input.doc_id)
         return { errore: 'Documento non trovato' }
@@ -916,9 +916,11 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
       console.log('[rechunk] filePath:', filePath, 'exists:', filePath ? fs.default.existsSync(filePath) : false)
       if (!filePath || !fs.default.existsSync(filePath)) return { errore: 'File non trovato su disco: ' + filePath }
 
-      // Extract text
+      // Use existing body if available (avoids re-parsing failures)
+      let text = doc.body || ''
+      if (!text) {
+      // Extract text from file
       const ext = filePath.split('.').pop()?.toLowerCase()
-      let text = ''
       if (ext === 'pdf') {
         try {
           const { PDFParse } = await import('pdf-parse')
@@ -950,8 +952,9 @@ export async function executeTool(name: string, aziendaId: string, args?: Record
       } else {
         return { errore: `Tipo file .${ext} non supportato per il chunking` }
       }
+      } // end if (!text)
 
-      if (text.length < 100) return { errore: 'Testo estratto troppo corto per il chunking' }
+      if (text.length < 50) return { errore: 'Testo estratto troppo corto per il chunking (' + text.length + ' chars)' }
 
       // Delete old chunks
       const deleted = db.prepare("DELETE FROM entity WHERE parent_id = ? AND type = 'chunk'").run(input.doc_id)
