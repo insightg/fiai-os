@@ -65,8 +65,7 @@ agents:
     prompt: "agents/pianificazione.md"
     tools:
       - generic
-      - berlink_query
-      - tir_query
+      - planning_*
       - send_whatsapp_message
       - send_whatsapp_document
       - send_email
@@ -210,10 +209,10 @@ agents:
       - read_email
 
 plugins:
-  # planning:                          # Disabilitato — usa light_planner
-  #   api_url: "http://192.168.0.14:8602"
-  light_planner:
-    proxy_url: "http://192.168.0.14:8603"
+  planning:
+    api_url: "http://192.168.0.14:8602"
+  # light_planner:                     # Sperimentale — accesso SQL diretto a BERLINK/TIR
+  #   proxy_url: "http://192.168.0.14:8603"
 
 classifier:
   keywords:
