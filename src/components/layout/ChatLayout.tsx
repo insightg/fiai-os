@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, useMemo, type KeyboardEvent, type FormEvent, type JSX } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo, lazy, Suspense, type KeyboardEvent, type FormEvent, type JSX } from 'react'
 import { NavLink } from 'react-router-dom'
 import { getBranding } from '../../lib/branding'
 import {
@@ -71,6 +71,8 @@ import type { ChatMessage } from '../../types'
 import { useAuthStore } from '../../store'
 // (() => Promise.resolve({})) removed — uploads go through smart upload
 import { getAuthToken } from '../../lib/supabase'
+
+const LazyDynamicPanel = lazy(() => import('../dynamic/DynamicPanel'))
 
 // Inline form field type (formerly from InlineCrudForm)
 interface FormField {
@@ -616,6 +618,26 @@ export default function ChatLayout() {
   const [lastToolCalls, setLastToolCalls] = useState<Record<string, unknown>[]>([])
   const [artifactView, setArtifactView] = useState<any>(null)
   const [showAdmin, setShowAdmin] = useState(false)
+  const [agentViews, setAgentViews] = useState<any[]>([])
+  const [activeAppView, setActiveAppView] = useState<any>(null)
+
+  // Load agent views when agent changes
+  useEffect(() => {
+    if (!currentAgentDomain) { setAgentViews([]); return }
+    const loadViews = async () => {
+      try {
+        const token = getAuthToken()
+        const res = await fetch(`/api/chat/agent-views/${currentAgentDomain}`, {
+          headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+        })
+        if (res.ok) {
+          const data = await res.json()
+          setAgentViews(data.views || [])
+        }
+      } catch {}
+    }
+    loadViews()
+  }, [currentAgentDomain])
 
   // Load autonomous agents for sidebar
   const [sidebarAgents, setSidebarAgents] = useState<any[]>([])
@@ -2091,6 +2113,39 @@ export default function ChatLayout() {
             </button>
           </div>
           <AdminPage />
+        </div>
+      )}
+
+      {/* App View Full-Screen Overlay */}
+      {activeAppView && (
+        <div className="fixed inset-0 bg-bg z-50 flex flex-col">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-bg2">
+            <div className="flex items-center gap-3">
+              <button onClick={() => setActiveAppView(null)} className="text-text3 hover:text-text text-sm">← Chat</button>
+              <h2 className="font-semibold text-text">{activeAppView.label || activeAppView.layout?.title}</h2>
+              {currentAgentName && <span className="text-xs text-text3">· {currentAgentName}</span>}
+            </div>
+            <button onClick={() => setActiveAppView(null)} className="p-1 rounded hover:bg-bg3 text-text3"><X size={18} /></button>
+          </div>
+          <div className="flex-1 overflow-auto">
+            <Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 className="w-6 h-6 animate-spin text-gold" /></div>}>
+              <LazyDynamicPanel layout={activeAppView.layout} onClose={() => setActiveAppView(null)} />
+            </Suspense>
+          </div>
+        </div>
+      )}
+
+      {/* Agent Views Floating Panel — shows when agent has views */}
+      {agentViews.length > 0 && !activeAppView && !showAdmin && (
+        <div className="fixed bottom-20 right-4 z-30 bg-bg2 border border-border rounded-xl shadow-lg p-2 space-y-1 max-w-48">
+          <div className="text-[10px] text-text3 px-2 font-medium uppercase tracking-wider">App Views</div>
+          {agentViews.map((v: any) => (
+            <button key={v.id} onClick={() => setActiveAppView(v)}
+              className="w-full text-left px-3 py-2 rounded-lg text-xs text-text2 hover:bg-bg3 hover:text-text flex items-center gap-2">
+              <span>{v.icon === 'map' ? '🗺️' : v.icon === 'truck' ? '🚚' : v.icon === 'users' ? '👥' : v.icon === 'chart' ? '📊' : '📋'}</span>
+              {v.label}
+            </button>
+          ))}
         </div>
       )}
     </div>
