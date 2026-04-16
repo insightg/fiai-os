@@ -51,6 +51,7 @@ const PLANNER_TOOLS: { name: string; desc: string; params: any; write?: boolean 
   { name: 'cerca_bg_da_targa', desc: 'Cerca BG associato a semirimorchio per data', params: { type: 'object', properties: { targa: { type: 'string' }, data: { type: 'string' } }, required: ['targa', 'data'] } },
   { name: 'get_eta_per_autista', desc: 'ETA di un autista cercando per nome — trova BG e targa automaticamente', params: { type: 'object', properties: { nome_autista: { type: 'string' }, data: { type: 'string' } }, required: ['nome_autista'] } },
   { name: 'calcola_eta_autista', desc: 'ETA dato BG e targa — cascata GPS, Mission API, DataS', params: { type: 'object', properties: { bg: { type: 'string' }, targa: { type: 'string' }, luogo_scarico: { type: 'string' }, data_scarico: { type: 'string' } }, required: ['bg', 'targa'] } },
+  { name: 'localizza_entita', desc: 'Localizza un\'entita\' (autista, semirimorchio, cliente) con posizione GPS reale, planning corrente e stato. Restituisce coordinate, indirizzo, fonte GPS, eta\' del dato, velocita\', warning su assegnazioni multiple.', params: { type: 'object', properties: { tipo: { type: 'string', description: 'Tipo entita\': autista, semirimorchio, cliente' }, identificativo: { type: 'string', description: 'Nome autista, targa semirimorchio, o nome cliente' } }, required: ['tipo', 'identificativo'] } },
 ]
 
 // ── Build tool list ─────────────────────────────────────

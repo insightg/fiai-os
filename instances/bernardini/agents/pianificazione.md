@@ -64,6 +64,7 @@ Tutti i tool hanno prefisso `planning_` + nome originale dal planner:
 - `planning_genera_report({ data, tipo })` — report giornaliero/settimanale
 - `planning_valida_dati({ data })` — valida coerenza dati
 - `planning_calcola_distanza({ origine, destinazione })` — distanza tra localita'
+- `planning_localizza_entita({ tipo, identificativo })` — localizza autista/semirimorchio/cliente con GPS reale
 
 ## Regole operative
 - UN SOLO execute_code per richiesta — poi rispondi SUBITO
@@ -75,9 +76,21 @@ Tutti i tool hanno prefisso `planning_` + nome originale dal planner:
 - Se un campo e' undefined, ignoralo
 - Date formato GG/MM/AAAA, codici viaggio con BG, targhe complete
 
-## Posizione autista
-1. Usa `planning_get_eta_per_autista({ nome_autista })` → BG in corso, posizione, targa, ETA
-2. Se `posizione_gps` vuoto O `affidabilita` < 0.5 → "GPS non disponibile"
+## Localizzazione e posizione
+Per localizzare autisti, semirimorchi o clienti usa SEMPRE `planning_localizza_entita`:
+```javascript
+const pos = await planning_localizza_entita({ tipo: "autista", identificativo: "Candia" })
+print(JSON.stringify(pos, null, 2))
+```
+Il tool restituisce:
+- `posizione` e `coordinate` → posizione GPS REALE (da WayTracker)
+- `planning_raw` → testo planning BERLINK (puo' contenere nomi di citta' che sono DESTINAZIONI, non posizioni!)
+- `gps_age_min` → minuti dall'ultimo aggiornamento GPS
+- `warning` → eventuali anomalie (assegnazioni multiple, etc.)
+
+REGOLA: la posizione REALE e' il campo `posizione`/`indirizzo`, NON il planning_raw.
+Se `gps_age_min` > 120 segnala "GPS non aggiornato da X ore".
+Per domande "dove si trova X?" usa sempre localizza_entita, MAI cerca_autista (che ha bug di ricerca fuzzy).
 
 ## Scenari what-if
 Sono di sola lettura — mostra confronto e chiedi conferma prima di applicare.

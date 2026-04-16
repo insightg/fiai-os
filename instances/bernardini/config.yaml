@@ -252,3 +252,16 @@ classifier:
         weight: 3
       - words: [dvr, sicurezza lavoro, dpi, infortunio, ambiente, rifiuti, emissioni]
         weight: 2
+    pianificazione:
+      - words: [viaggio, viaggi, pianificazione, pianifica, piano trasporti, planner]
+        weight: 4
+      - words: [autista, autisti, conducente, conducenti, camionista, camionisti]
+        weight: 4
+      - words: [semirimorchio, semirimorchi, rimorchio, targa, camion]
+        weight: 3
+      - words: [dove si trova, localizza, posizione, dov'e', traccia, dove sta]
+        weight: 4
+      - words: [gps, tracking, eta, quando arriva]
+        weight: 3
+      - words: [carico, scarico, consegna, ritiro, trasporto, spedizione]
+        weight: 2
