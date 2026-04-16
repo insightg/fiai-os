@@ -1,190 +1,100 @@
 /**
- * Planning Plugin — Transport planning tools via VPN proxy
+ * Planning Plugin — Dynamic tool discovery from remote planner
  *
- * Provides 19 tools for trip management, driver assignment,
- * GPS tracking, optimization, and EU 561 compliance.
+ * Registers all 24 planner tools with planning_ prefix.
+ * On first call, verifies connectivity via lazy discovery.
+ * The executor forwards every call to the remote planner's /execute endpoint.
  */
 
 import type { PluginDefinition, PluginToolDefinition } from '../types.js'
-import { planningCall, planningHealth } from './proxy.js'
+import { planningCall, planningHealth, fetchPlannerTools } from './proxy.js'
 
-// ── Endpoint mapping ────────────────────────────────────
+// ── Lazy discovery (verifies planner is reachable on first use) ──
 
-const ENDPOINT_MAP: Record<string, string> = {
-  planning_viaggi: 'viaggi', planning_suggerisci: 'suggerisci', planning_assegna: 'assegna',
-  planning_autisti: 'autisti', planning_semirimorchi: 'semirimorchi', planning_gps: 'gps',
-  planning_distanza: 'distanza', planning_statistiche: 'statistiche', planning_confronta: 'confronta',
-  planning_scenario: 'scenario', planning_eta: 'eta', planning_conflitti: 'conflitti',
-  planning_storico: 'storico', planning_dettaglio: 'dettaglio', planning_analizza: 'analizza',
-  planning_pianificazione_corrente: 'pianificazione_corrente', planning_cerca_autista: 'cerca_autista',
-}
+let discovered = false
 
-// ── Generic executor for most planning tools ────────────
-
-async function genericPlanningExecutor(name: string, input: Record<string, unknown>): Promise<unknown> {
-  // Safety: if LLM passed a string instead of object, wrap it
-  if (typeof input === 'string') {
-    const key = name === 'planning_eta' ? 'nome_autista' : name === 'planning_gps' ? 'targa' : name === 'planning_cerca_autista' ? 'nome' : 'data'
-    return planningCall(ENDPOINT_MAP[name] || name.replace('planning_', ''), { [key]: input })
+async function ensureDiscovery(): Promise<void> {
+  if (discovered) return
+  try {
+    const defs = await fetchPlannerTools()
+    console.log(`[Planning] Verified ${defs.length} tools on planner`)
+    discovered = true
+  } catch (err) {
+    console.warn(`[Planning] Planner not yet reachable: ${(err as Error).message}`)
   }
-  return planningCall(ENDPOINT_MAP[name] || name.replace('planning_', ''), input)
 }
 
-// ── Tool definitions ────────────────────────────────────
+// ── All 24 planner tools (names + descriptions from API docs) ──
+
+const PLANNER_TOOLS: { name: string; desc: string; params: any; write?: boolean }[] = [
+  { name: 'get_viaggi_da_pianificare', desc: 'Elenco viaggi/ordini da pianificare per una data', params: { type: 'object', properties: { data: { type: 'string', description: 'Data YYYY-MM-DD' }, solo_non_assegnati: { type: 'boolean', description: 'Solo non assegnati', default: false } }, required: ['data'] } },
+  { name: 'get_semirimorchi_disponibili', desc: 'Semirimorchi disponibili, filtrabile per tipo (SILOS, ROTOCELLA, etc.)', params: { type: 'object', properties: { data: { type: 'string' }, tipo: { type: 'string', description: 'SILOS, ROTOCELLA, RIBALTABILE_9M, PORTACTR_9M, PORTACTR_13_6M, CENTINATO' } }, required: ['data'] } },
+  { name: 'get_autisti_disponibili', desc: 'Autisti disponibili per data (esclude assenti/ferie)', params: { type: 'object', properties: { data: { type: 'string' } }, required: ['data'] } },
+  { name: 'get_tutti_autisti', desc: 'Lista COMPLETA autisti interni e trazionisti esterni', params: { type: 'object', properties: { solo_interni: { type: 'boolean', default: false } } } },
+  { name: 'get_pianificazione_corrente', desc: 'Pianificazione esistente per data con semirimorchi e autisti assegnati', params: { type: 'object', properties: { data: { type: 'string' } }, required: ['data'] } },
+  { name: 'assegna_viaggio', desc: 'Assegna viaggio a semirimorchio e opzionalmente autista', params: { type: 'object', properties: { data: { type: 'string' }, targa_semirimorchio: { type: 'string' }, codice_viaggio: { type: 'string' }, nome_autista: { type: 'string' }, note: { type: 'string' } }, required: ['data', 'targa_semirimorchio', 'codice_viaggio'] }, write: true },
+  { name: 'suggerisci_pianificazione', desc: 'Ottimizzazione automatica: assegna autisti e semirimorchi con scoring composito', params: { type: 'object', properties: { data: { type: 'string' } }, required: ['data'] }, write: true },
+  { name: 'get_dettaglio_viaggio', desc: 'Dettagli completi di un viaggio specifico', params: { type: 'object', properties: { codice_bg: { type: 'string' }, data: { type: 'string' } }, required: ['codice_bg', 'data'] } },
+  { name: 'get_dettaglio_semirimorchio', desc: 'Dettagli di un semirimorchio per targa', params: { type: 'object', properties: { targa: { type: 'string' } }, required: ['targa'] } },
+  { name: 'cerca_autista', desc: 'Cerca autista per nome — dati anagrafici e posizione corrente', params: { type: 'object', properties: { nome: { type: 'string' }, data: { type: 'string' } }, required: ['nome'] } },
+  { name: 'get_posizione_gps', desc: 'Posizione GPS tempo reale di un semirimorchio (WayTracker)', params: { type: 'object', properties: { targa: { type: 'string' } }, required: ['targa'] } },
+  { name: 'get_statistiche_viaggi', desc: 'Statistiche aggregate viaggi per periodo (per cliente, destinazione, autista)', params: { type: 'object', properties: { data_inizio: { type: 'string' }, data_fine: { type: 'string' }, gruppo_per: { type: 'string', description: 'cliente, destinazione, partenza, giorno' } }, required: ['data_inizio', 'data_fine'] } },
+  { name: 'calcola_distanza', desc: 'Distanza in km tra due localita\'', params: { type: 'object', properties: { origine: { type: 'string' }, destinazione: { type: 'string' } }, required: ['origine', 'destinazione'] } },
+  { name: 'confronta_pianificazione', desc: 'Confronta proposta ottimizzatore vs assegnazioni finali', params: { type: 'object', properties: { data: { type: 'string' } }, required: ['data'] } },
+  { name: 'spiega_assegnazione', desc: 'Spiega perche\' l\'ottimizzatore ha scelto questa coppia — candidati e motivi esclusione', params: { type: 'object', properties: { codice_bg: { type: 'string' }, data: { type: 'string' } }, required: ['codice_bg', 'data'] } },
+  { name: 'valida_dati', desc: 'Valida dati prima dell\'ottimizzazione — anomalie GPS, impiego, coerenza', params: { type: 'object', properties: { data: { type: 'string' } }, required: ['data'] } },
+  { name: 'genera_report', desc: 'Report aggregato pianificazione (giornaliero o settimanale)', params: { type: 'object', properties: { data: { type: 'string' }, tipo: { type: 'string', description: 'giornaliero o settimanale' } }, required: ['data'] } },
+  { name: 'analizza_viaggio_non_assegnato', desc: 'Diagnostica perche\' un viaggio non e\' stato assegnato — filtri, swap, risorse', params: { type: 'object', properties: { codice_bg: { type: 'string' }, data: { type: 'string' } }, required: ['codice_bg', 'data'] } },
+  { name: 'mostra_conflitti', desc: 'Conflitti di risorse: viaggi che competono per stessa coppia semi/autista', params: { type: 'object', properties: { data: { type: 'string' } }, required: ['data'] } },
+  { name: 'ricalcola_scenario', desc: 'Simulazione what-if con vincoli modificati', params: { type: 'object', properties: { data: { type: 'string' }, escludi_autisti: { type: 'array', items: { type: 'string' } }, escludi_targhe: { type: 'array', items: { type: 'string' } }, max_distanza_km: { type: 'number' }, bg_fissi: { type: 'object' } }, required: ['data'] } },
+  { name: 'get_contesto_storico', desc: 'Precedenti storici simili (RAG) per cliente/destinazione', params: { type: 'object', properties: { cliente: { type: 'string' }, destinazione: { type: 'string' }, genere: { type: 'string' } }, required: ['cliente'] } },
+  { name: 'cerca_bg_da_targa', desc: 'Cerca BG associato a semirimorchio per data', params: { type: 'object', properties: { targa: { type: 'string' }, data: { type: 'string' } }, required: ['targa', 'data'] } },
+  { name: 'get_eta_per_autista', desc: 'ETA di un autista cercando per nome — trova BG e targa automaticamente', params: { type: 'object', properties: { nome_autista: { type: 'string' }, data: { type: 'string' } }, required: ['nome_autista'] } },
+  { name: 'calcola_eta_autista', desc: 'ETA dato BG e targa — cascata GPS, Mission API, DataS', params: { type: 'object', properties: { bg: { type: 'string' }, targa: { type: 'string' }, luogo_scarico: { type: 'string' }, data_scarico: { type: 'string' } }, required: ['bg', 'targa'] } },
+]
+
+// ── Build tool list ─────────────────────────────────────
 
 const tools: PluginToolDefinition[] = [
   {
     name: 'planning_health',
-    description: 'Verifica connessione al planner trasporti (richiede VPN)',
+    description: 'Verifica connessione al planner trasporti e lista tool disponibili',
     parameters: { type: 'object', properties: {} },
     permission: 'read',
-    execute: async () => planningHealth(),
-  },
-  {
-    name: 'planning_viaggi',
-    description: 'Lista viaggi per una data. Ritorna {viaggi: [{bg, cliente, luogo_carico, luogo_scarico, data_carico, data_scarico, genere, targa, vettore, e_assegnato}], totale, assegnati, non_assegnati}',
-    parameters: { type: 'object', properties: { data: { type: 'string', description: 'Data YYYY-MM-DD' }, solo_non_assegnati: { type: 'boolean', description: 'Solo non assegnati' } }, required: ['data'] },
-    permission: 'read',
-    execute: async (input) => genericPlanningExecutor('planning_viaggi', input),
-  },
-  {
-    name: 'planning_suggerisci',
-    description: 'Esegui ottimizzazione automatica: assegna autisti e semirimorchi ai viaggi con scoring composito',
-    parameters: { type: 'object', properties: { data: { type: 'string', description: 'Data YYYY-MM-DD' }, template: { type: 'string', description: 'Template viaggi (opzionale)' } }, required: ['data'] },
-    permission: 'create',
-    execute: async (input) => genericPlanningExecutor('planning_suggerisci', input),
-  },
-  {
-    name: 'planning_assegna',
-    description: 'Assegna manualmente un viaggio a un autista/semirimorchio',
-    parameters: { type: 'object', properties: { data: { type: 'string', description: 'Data YYYY-MM-DD' }, codice_viaggio: { type: 'string', description: 'Codice BG del viaggio' }, targa_semirimorchio: { type: 'string', description: 'Targa semirimorchio' }, nome_autista: { type: 'string', description: 'Nome autista' }, note: { type: 'string' } }, required: ['data', 'targa_semirimorchio', 'codice_viaggio'] },
-    permission: 'create',
-    execute: async (input) => genericPlanningExecutor('planning_assegna', input),
-  },
-  {
-    name: 'planning_autisti',
-    description: 'Lista autisti disponibili per una data (esclude assenti/ferie)',
-    parameters: { type: 'object', properties: { data: { type: 'string', description: 'Data YYYY-MM-DD' } }, required: ['data'] },
-    permission: 'read',
-    execute: async (input) => genericPlanningExecutor('planning_autisti', input),
-  },
-  {
-    name: 'planning_semirimorchi',
-    description: 'Lista semirimorchi disponibili, filtrabili per tipo (SILOS, ROTOCELLA, CENTINATO, etc.)',
-    parameters: { type: 'object', properties: { data: { type: 'string', description: 'Data YYYY-MM-DD' }, tipo: { type: 'string', description: 'Tipo: SILOS, ROTOCELLA, RIBALTABILE_9M, PORTACTR_9M, PORTACTR_13_6M, CENTINATO' } }, required: ['data'] },
-    permission: 'read',
-    execute: async (input) => genericPlanningExecutor('planning_semirimorchi', input),
-  },
-  {
-    name: 'planning_gps',
-    description: 'Posizione GPS in tempo reale di un semirimorchio',
-    parameters: { type: 'object', properties: { targa: { type: 'string', description: 'Targa semirimorchio' } }, required: ['targa'] },
-    permission: 'read',
-    execute: async (input) => genericPlanningExecutor('planning_gps', input),
-  },
-  {
-    name: 'planning_distanza',
-    description: 'Calcola distanza stradale tra due localita',
-    parameters: { type: 'object', properties: { origine: { type: 'string', description: 'Localita partenza' }, destinazione: { type: 'string', description: 'Localita arrivo' } }, required: ['origine', 'destinazione'] },
-    permission: 'read',
-    execute: async (input) => genericPlanningExecutor('planning_distanza', input),
-  },
-  {
-    name: 'planning_statistiche',
-    description: 'Statistiche viaggi per periodo (per cliente, destinazione, autista)',
-    parameters: { type: 'object', properties: { data_inizio: { type: 'string' }, data_fine: { type: 'string' }, gruppo_per: { type: 'string', description: 'cliente, destinazione, autista, vettore' } }, required: ['data_inizio', 'data_fine'] },
-    permission: 'read',
-    execute: async (input) => genericPlanningExecutor('planning_statistiche', input),
-  },
-  {
-    name: 'planning_confronta',
-    description: 'Confronta piano proposto vs assegnazioni effettive per una data',
-    parameters: { type: 'object', properties: { data: { type: 'string' } }, required: ['data'] },
-    permission: 'read',
-    execute: async (input) => genericPlanningExecutor('planning_confronta', input),
-  },
-  {
-    name: 'planning_scenario',
-    description: 'Simulazione what-if: ricalcola con vincoli diversi',
-    parameters: { type: 'object', properties: { data: { type: 'string' }, escludi_autisti: { type: 'array', items: { type: 'string' }, description: 'Nomi autisti da escludere' }, escludi_targhe: { type: 'array', items: { type: 'string' } }, max_distanza_km: { type: 'number' }, bg_fissi: { type: 'array', items: { type: 'string' }, description: 'BG da mantenere assegnati' } }, required: ['data'] },
-    permission: 'read',
-    execute: async (input) => genericPlanningExecutor('planning_scenario', input),
-  },
-  {
-    name: 'planning_eta',
-    description: 'Calcola ETA di un autista in viaggio — cerca per nome, trova BG e targa automaticamente',
-    parameters: { type: 'object', properties: { nome_autista: { type: 'string', description: 'Nome autista (anche parziale)' }, data: { type: 'string', description: 'Data YYYY-MM-DD (default oggi)' } }, required: ['nome_autista'] },
-    permission: 'read',
-    execute: async (input) => genericPlanningExecutor('planning_eta', input),
-  },
-  {
-    name: 'planning_conflitti',
-    description: 'Mostra conflitti di risorse (autisti/semirimorchi doppiamente assegnati)',
-    parameters: { type: 'object', properties: { data: { type: 'string' } }, required: ['data'] },
-    permission: 'read',
-    execute: async (input) => genericPlanningExecutor('planning_conflitti', input),
-  },
-  {
-    name: 'planning_storico',
-    description: 'Cerca precedenti storici simili (RAG) per cliente/destinazione',
-    parameters: { type: 'object', properties: { cliente: { type: 'string', description: 'Nome cliente' }, destinazione: { type: 'string', description: 'Localita destinazione' }, genere: { type: 'string', description: 'Genere merce' } }, required: ['cliente'] },
-    permission: 'read',
-    execute: async (input) => genericPlanningExecutor('planning_storico', input),
-  },
-  {
-    name: 'planning_dettaglio',
-    description: 'Dettaglio completo di un viaggio',
-    parameters: { type: 'object', properties: { codice_bg: { type: 'string', description: 'Codice BG del viaggio' }, data: { type: 'string', description: 'Data YYYY-MM-DD' } }, required: ['codice_bg', 'data'] },
-    permission: 'read',
-    execute: async (input) => genericPlanningExecutor('planning_dettaglio', input),
-  },
-  {
-    name: 'planning_analizza',
-    description: 'Diagnostica perche un viaggio non e stato assegnato',
-    parameters: { type: 'object', properties: { codice_bg: { type: 'string', description: 'Codice BG' }, data: { type: 'string', description: 'Data YYYY-MM-DD' } }, required: ['codice_bg', 'data'] },
-    permission: 'read',
-    execute: async (input) => genericPlanningExecutor('planning_analizza', input),
-  },
-  {
-    name: 'planning_pianificazione_corrente',
-    description: 'Assegnazioni correnti per una data',
-    parameters: { type: 'object', properties: { data: { type: 'string' } }, required: ['data'] },
-    permission: 'read',
-    execute: async (input) => genericPlanningExecutor('planning_pianificazione_corrente', input),
-  },
-  {
-    name: 'planning_cerca_autista',
-    description: 'Cerca autista per nome — restituisce posizione, impegni, skill',
-    parameters: { type: 'object', properties: { nome: { type: 'string' } }, required: ['nome'] },
-    permission: 'read',
-    execute: async (input) => genericPlanningExecutor('planning_cerca_autista', input),
-  },
-  {
-    name: 'planning_tutti_autisti',
-    description: 'Lista COMPLETA autisti interni e trazionisti',
-    parameters: { type: 'object', properties: {} },
-    permission: 'read',
-    execute: async () => planningCall('execute', { tool: 'get_tutti_autisti', args: {} }),
+    execute: async () => {
+      const health = await planningHealth()
+      await ensureDiscovery()
+      return { ...health, discovered }
+    },
   },
 ]
 
-// ── Plugin export ───────────────────────────────────────
+for (const t of PLANNER_TOOLS) {
+  tools.push({
+    name: `planning_${t.name}`,
+    description: t.desc,
+    parameters: t.params,
+    permission: t.write ? 'create' : 'read',
+    execute: async (input) => {
+      await ensureDiscovery()
+      return planningCall('execute', { tool: t.name, args: input })
+    },
+  })
+}
 
 const plugin: PluginDefinition = {
   name: 'planning',
-  description: 'Pianificazione trasporti — gestione viaggi, autisti, semirimorchi, GPS, ottimizzazione',
+  description: `Pianificazione trasporti — ${PLANNER_TOOLS.length} tool + health check, discovery lazy dal planner remoto`,
   tools,
-  settings: [
-    {
-      key: 'planning_api_url',
-      category: 'planning',
-      envVar: 'PLANNING_API_URL',
-      description: 'URL API planner trasporti (via VPN)',
-      sensitive: false,
-      defaultValue: 'http://192.168.0.14:8602',
-      requiresRestart: false,
-    },
-  ],
+  settings: [{
+    key: 'planning_api_url',
+    category: 'planning',
+    envVar: 'PLANNING_API_URL',
+    description: 'URL API planner trasporti (via VPN)',
+    sensitive: false,
+    defaultValue: 'http://192.168.0.14:8602',
+    requiresRestart: false,
+  }],
 }
 
 export default plugin

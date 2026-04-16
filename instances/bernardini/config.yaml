@@ -79,7 +79,7 @@ agents:
           view: map
           title: "Mappa Viaggi Oggi"
           source:
-            tool: planning_viaggi
+            tool: planning_get_viaggi_da_pianificare
             toolParams:
               data: today
           map:
@@ -97,7 +97,7 @@ agents:
           view: list
           title: "Viaggi Oggi"
           source:
-            tool: planning_viaggi
+            tool: planning_get_viaggi_da_pianificare
             toolParams:
               data: today
           columns:

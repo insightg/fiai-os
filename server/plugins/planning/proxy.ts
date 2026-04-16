@@ -44,6 +44,17 @@ export async function planningCall(endpoint: string, body?: Record<string, unkno
   }
 }
 
+/**
+ * Fetch tool definitions from the planner's /api/planning/tools endpoint.
+ * Returns OpenAI-format tool definitions [{type:'function', function:{name, description, parameters}}]
+ */
+export async function fetchPlannerTools(): Promise<any[]> {
+  const res = await fetch(`${getBaseUrl()}/api/planning/tools`, { signal: AbortSignal.timeout(10000) })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  const data = await res.json()
+  return Array.isArray(data) ? data : []
+}
+
 export async function planningHealth(): Promise<{ ok: boolean; tools?: number; error?: string }> {
   try {
     const res = await fetch(`${getBaseUrl()}/api/planning/health`, { signal: AbortSignal.timeout(5000) })
