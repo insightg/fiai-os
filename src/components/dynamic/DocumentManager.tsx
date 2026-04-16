@@ -1,6 +1,8 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react'
 import { Search, Upload, Download, Trash2, Eye, FileText, X, Loader2, MessageSquare, ChevronRight, Send } from 'lucide-react'
 import { getAuthToken } from '../../lib/supabase'
+
+const SmartUploadModal = lazy(() => import('./SmartUploadModal'))
 
 interface Document {
   id: string
@@ -21,10 +23,8 @@ export default function DocumentManager() {
   const [searching, setSearching] = useState(false)
   const [selectedDoc, setSelectedDoc] = useState<Document | null>(null)
   const [docContent, setDocContent] = useState<any>(null)
-  const [uploading, setUploading] = useState(false)
-  const [uploadStatus, setUploadStatus] = useState('')
+  const [showUpload, setShowUpload] = useState(false)
   const [activeTab, setActiveTab] = useState<'list' | 'search'>('list')
-  const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Modals
   const [viewerDoc, setViewerDoc] = useState<Document | null>(null)
@@ -84,26 +84,6 @@ export default function DocumentManager() {
       })
       if (res.ok) setDocContent(await res.json())
     } catch {}
-  }
-
-  // Upload document
-  const handleUpload = async (file: File) => {
-    setUploading(true); setUploadStatus('Analisi in corso...')
-    try {
-      const formData = new FormData()
-      formData.append('file', file); formData.append('mode', 'full')
-      const token = getAuthToken()
-      const h: Record<string, string> = {}
-      if (token) h['Authorization'] = `Bearer ${token}`
-      const res = await fetch('/api/upload/smart', { method: 'POST', headers: h, body: formData })
-      if (!res.ok) throw new Error('Upload fallito')
-      const result = await res.json()
-      setUploadStatus('Indicizzazione...')
-      await fetch('/api/upload/confirm', { method: 'POST', headers: headers(), body: JSON.stringify({ upload_id: result.upload_id }) })
-      setUploadStatus(`"${result.display_name}" indicizzato`)
-      setTimeout(() => { setUploadStatus(''); loadDocuments() }, 2000)
-    } catch (err: any) { setUploadStatus(`Errore: ${err.message}`) }
-    finally { setUploading(false) }
   }
 
   // Delete document
@@ -175,23 +155,15 @@ export default function DocumentManager() {
             {searching ? <Loader2 size={14} className="animate-spin" /> : 'Cerca'}
           </button>
         </div>
-        <button onClick={() => fileInputRef.current?.click()} disabled={uploading}
-          className="flex items-center gap-1.5 px-3 py-2 bg-green/10 text-green border border-green/20 rounded-lg text-xs font-medium hover:bg-green/20 disabled:opacity-50">
-          <Upload size={14} /> {uploading ? 'Caricamento...' : 'Carica'}
+        <button onClick={() => setShowUpload(true)}
+          className="flex items-center gap-1.5 px-3 py-2 bg-green/10 text-green border border-green/20 rounded-lg text-xs font-medium hover:bg-green/20">
+          <Upload size={14} /> Carica
         </button>
-        <input ref={fileInputRef} type="file" className="hidden" accept=".pdf,.doc,.docx,.txt,.csv,.xlsx,.xls,.pptx"
-          onChange={e => { const f = e.target.files?.[0]; if (f) handleUpload(f); e.target.value = '' }} />
         <div className="flex bg-bg3 rounded-lg p-0.5">
           <button onClick={() => setActiveTab('list')} className={`px-3 py-1 rounded text-xs ${activeTab === 'list' ? 'bg-bg2 text-text shadow-sm' : 'text-text3'}`}>Archivio</button>
           <button onClick={() => setActiveTab('search')} className={`px-3 py-1 rounded text-xs ${activeTab === 'search' ? 'bg-bg2 text-text shadow-sm' : 'text-text3'}`}>Risultati ({searchResults.length})</button>
         </div>
       </div>
-
-      {uploadStatus && (
-        <div className="px-4 py-2 bg-green/5 border-b border-green/20 text-green text-xs flex items-center gap-2">
-          {uploading && <Loader2 size={12} className="animate-spin" />} {uploadStatus}
-        </div>
-      )}
 
       {/* Content */}
       <div className="flex-1 overflow-auto flex">
@@ -393,6 +365,13 @@ export default function DocumentManager() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* ═══ SMART UPLOAD MODAL ═══ */}
+      {showUpload && (
+        <Suspense fallback={null}>
+          <SmartUploadModal onClose={() => setShowUpload(false)} onUploaded={loadDocuments} />
+        </Suspense>
       )}
     </div>
   )
