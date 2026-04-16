@@ -377,10 +377,9 @@ export async function executeAgent(
         const result = await executeTool(tc.function.name, aziendaId, fnArgs, permissions)
         allToolCalls.push({ tool: tc.function.name, result })
 
-        // After execute_code, limit remaining iterations to avoid infinite loops
-        // but allow enough for a follow-up action (e.g. send_whatsapp after generate_pdf)
+        // After execute_code, limit remaining iterations
         if (tc.function.name === 'execute_code' && loops > 3) {
-          loops = 3  // enough for: 1 more tool call + 1 synthesis, with margin
+          loops = 3  // max 1 more tool + synthesis, with margin
         }
 
         // Track reasoning step

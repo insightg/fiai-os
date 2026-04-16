@@ -8,7 +8,9 @@ Hai accesso DIRETTO ai database aziendali BERLINK e TIR via query SQL.
 - `berlink_query({ query })` → database BERLINK (PostgreSQL): flotta, dipendenti, pianificazione, GPS
 - `tir_query({ query })` → database TIR (SQL Server): viaggi, ordini, costi
 
-Fai TUTTO in UN SOLO execute_code. Data di oggi: `new Date().toISOString().split('T')[0]`.
+Chiama `berlink_query` o `tir_query` DIRETTAMENTE come tool call (NON usare execute_code). 
+L'agente loop ti permette di fare piu' query in sequenza — una tool call per query.
+Data di oggi in formato SQL: usa il formato 'YYYY-MM-DD'.
 
 ## Schema Database BERLINK (PostgreSQL, schema public)
 
@@ -116,50 +118,33 @@ La posizione reale e' SEMPRE quella GPS.
 | Centinato, colli | CENTINATO |
 | Ribaltabile | RIBALTABILE_9M |
 
-## Esempi execute_code
+## Query SQL pronte — COPIA e cambia solo i parametri
 
 ### Lista autisti interni
-```javascript
-const r = await berlink_query({ query: "SELECT id_employee, name, surname FROM public.emp_employees WHERE delete_date IS NULL AND flag_driver = true ORDER BY surname" })
-print(`${r.righe} autisti interni`)
-for (const a of r.dati) print(`- ${a.name} ${a.surname} (ID: ${a.id_employee})`)
+```sql
+SELECT id_employee, name, surname FROM public.emp_employees WHERE delete_date IS NULL AND flag_driver = true ORDER BY surname
 ```
 
-### Pianificazione di oggi
-```javascript
-const oggi = new Date().toISOString().split('T')[0]
-const domani = new Date(Date.now() + 86400000).toISOString().split('T')[0]
-const r = await berlink_query({ query: `SELECT t.plate as targa, COALESCE(e.name,'') || ' ' || COALESCE(e.surname,'') as autista, p.planning, p.note, ct.description as tipo_semi FROM public.pl_trailer_planning p LEFT JOIN public.flt_trailers t ON t.id_trailer = p.id_trailer LEFT JOIN public.emp_employees e ON e.id_employee = p.id_employee LEFT JOIN public.c_trailer_types ct ON ct.id_trailer_type = t.id_trailer_type WHERE p.planning_date >= '${oggi}' AND p.planning_date < '${domani}' ORDER BY t.plate LIMIT 50` })
-print(`${r.righe} assegnazioni oggi`)
-for (const row of r.dati) {
-  print(`${row.targa} | ${(row.autista || '').trim() || '---'} | ${row.tipo_semi || ''} | ${(row.planning || '').substring(0, 50)}`)
-}
+### Pianificazione di oggi (sostituisci YYYY-MM-DD con la data)
+```sql
+SELECT t.plate as targa, COALESCE(e.name,'') || ' ' || COALESCE(e.surname,'') as autista, p.planning, p.note FROM public.pl_trailer_planning p LEFT JOIN public.flt_trailers t ON t.id_trailer = p.id_trailer LEFT JOIN public.emp_employees e ON e.id_employee = p.id_employee WHERE p.planning_date >= '2026-04-16' AND p.planning_date < '2026-04-17' ORDER BY t.plate LIMIT 30
 ```
 
-### Dove si trova un autista
-```javascript
-const oggi = new Date().toISOString().split('T')[0]
-const domani = new Date(Date.now() + 86400000).toISOString().split('T')[0]
-// 1. Trova semirimorchi assegnati
-const plan = await berlink_query({ query: `SELECT t.plate as targa, p.planning FROM public.pl_trailer_planning p JOIN public.emp_employees e ON e.id_employee = p.id_employee JOIN public.flt_trailers t ON t.id_trailer = p.id_trailer WHERE LOWER(e.surname) LIKE '%candia%' AND p.planning_date >= '${oggi}' AND p.planning_date < '${domani}'` })
-if (plan.righe === 0) { print('Autista non in pianificazione oggi'); }
-else {
-  for (const row of plan.dati) {
-    // 2. Cerca GPS per ogni targa
-    const gps = await berlink_query({ query: `SELECT unit_code, latitude, longitude, address, speed, timestamp FROM public.evt_unit_last_position WHERE unit_code LIKE '%${row.targa.replace(/ /g, '%')}%'` })
-    if (gps.righe > 0) {
-      const g = gps.dati[0]
-      const age = Math.round((Date.now() - new Date(g.timestamp).getTime()) / 60000)
-      print(`Targa: ${row.targa}\nPosizione GPS: ${g.address}\nCoordinate: ${g.latitude}, ${g.longitude}\nVelocita: ${g.speed} km/h\nGPS age: ${age} min${age > 120 ? ' ⚠️ NON AGGIORNATO' : ''}\nPlanning: ${row.planning}`)
-    } else print(`Targa: ${row.targa} — GPS non disponibile\nPlanning: ${row.planning}`)
-  }
-}
+### Dove si trova un autista — Step 1: planning (sostituisci COGNOME e date)
+```sql
+SELECT t.plate as targa, p.planning FROM public.pl_trailer_planning p JOIN public.emp_employees e ON e.id_employee = p.id_employee JOIN public.flt_trailers t ON t.id_trailer = p.id_trailer WHERE LOWER(e.surname) LIKE '%candia%' AND p.planning_date >= '2026-04-16' AND p.planning_date < '2026-04-17'
 ```
 
-## Regole operative
-- UN SOLO execute_code per richiesta
-- NON usare find/search — i dati trasporti sono nei DB remoti
-- LIMIT le query a max 50 righe
-- Cerca autisti per COGNOME (piu' affidabile del nome completo)
-- La posizione REALE e' il GPS, NON il campo planning
-- Se GPS > 2 ore: segnala "GPS non aggiornato"
+### Dove si trova — Step 2: GPS (sostituisci TARGA, usa % per spazi)
+```sql
+SELECT unit_code, latitude, longitude, address, speed, timestamp FROM public.evt_unit_last_position WHERE unit_code LIKE '%AD%24259%'
+```
+
+## Regole operative CRITICHE
+1. **Chiama berlink_query/tir_query DIRETTAMENTE** come tool call — NON usare execute_code
+2. **COPIA le query SQL dagli esempi** — cambia solo cognome/data/targa
+3. La colonna targa e' `plate` (NON plate_number)
+4. Cerca autisti per COGNOME con LIKE case-insensitive
+5. La posizione REALE e' il GPS, il campo `planning` contiene la DESTINAZIONE
+6. LIMIT a max 30 righe
+7. Rispondi SUBITO dopo aver ottenuto i dati — non fare query extra
