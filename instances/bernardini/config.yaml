@@ -65,7 +65,8 @@ agents:
     prompt: "agents/pianificazione.md"
     tools:
       - generic
-      - planning_*
+      - berlink_query
+      - tir_query
       - send_whatsapp_message
       - send_whatsapp_document
       - send_email
@@ -209,8 +210,10 @@ agents:
       - read_email
 
 plugins:
-  planning:
-    api_url: "http://192.168.0.14:8602"
+  # planning:                          # Disabilitato — usa light_planner
+  #   api_url: "http://192.168.0.14:8602"
+  light_planner:
+    proxy_url: "http://192.168.0.14:8603"
 
 classifier:
   keywords:

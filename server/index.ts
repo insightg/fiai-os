@@ -223,10 +223,10 @@ app.listen(PORT, () => {
   // Auto-connect VPN only if planning plugin is configured for this instance
   import('./instance-config.js').then(({ getInstanceConfig }) => {
     const cfg = getInstanceConfig()
-    if (cfg?.plugins?.planning) {
+    if (cfg?.plugins?.planning || cfg?.plugins?.light_planner) {
       autoConnectVPN().catch(err => console.error('VPN auto-connect error:', err))
     } else {
-      console.log('[VPN] Skipped — no planning plugin configured')
+      console.log('[VPN] Skipped — no planning/light_planner plugin configured')
     }
   })
   startPlugins().catch(err => console.error('Plugin startup error:', err))
