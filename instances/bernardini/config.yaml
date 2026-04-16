@@ -124,6 +124,49 @@ agents:
       - send_whatsapp_*
       - send_email
       - reply_email
+    views:
+      - id: archivio
+        label: "Archivio Documenti"
+        icon: "files"
+        trigger: "manual"
+        layout:
+          view: list
+          title: "Archivio Documenti"
+          source:
+            table: entity
+            type: documento
+          columns:
+            - { key: display_name, label: Nome, type: text }
+            - { key: categoria, label: Categoria, type: badge }
+            - { key: stato, label: Stato, type: badge }
+            - { key: created_at, label: Caricato, type: date }
+          actions: [delete]
+      - id: dashboard-docs
+        label: "Dashboard"
+        icon: "chart"
+        trigger: "manual"
+        layout:
+          view: dashboard
+          title: "Dashboard Documentale"
+          panelColumns: 2
+          panels:
+            - view: chart
+              title: "Documenti per Categoria"
+              source:
+                tool: list_documents
+              chart:
+                type: donut
+                data: []
+            - view: list
+              title: "Ultimi Documenti"
+              source:
+                table: entity
+                type: documento
+                limit: 5
+              columns:
+                - { key: display_name, label: Nome, type: text }
+                - { key: categoria, label: Categoria, type: badge }
+                - { key: created_at, label: Data, type: date }
 
   - domain: email
     name: "Email Agent"
