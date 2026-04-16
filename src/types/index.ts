@@ -127,15 +127,18 @@ export interface LayoutField {
 }
 
 export interface LayoutDescriptor {
-  view: 'list' | 'kanban' | 'detail' | 'form' | 'chart' | 'calendar' | 'grid' | 'tree'
+  view: 'list' | 'kanban' | 'detail' | 'form' | 'chart' | 'calendar' | 'grid' | 'tree' | 'map' | 'dashboard'
   title: string
   source?: {
-    table: 'names' | 'entity'
+    table?: 'names' | 'entity'
     type?: string
     tags?: string[]
     filters?: Record<string, unknown>
     sort?: string
     limit?: number
+    // Plugin data source (alternative to table)
+    tool?: string              // tool name to call (e.g. 'planning_viaggi')
+    toolParams?: Record<string, unknown>  // params to pass to tool
   }
   columns?: LayoutColumn[]
   kanban?: {
@@ -153,6 +156,21 @@ export interface LayoutDescriptor {
     data: { label: string; value: number; color?: string }[]
   }
   calendar?: { dateField: string; endDateField?: string; titleField: string; colorField?: string }
+  // Map view config
+  map?: {
+    startField: string         // field for origin location name
+    endField: string           // field for destination location name
+    latField?: string          // direct lat field (if available)
+    lngField?: string          // direct lng field
+    colorField?: string        // field to determine marker color
+    colorEmpty?: string        // color when colorField is empty (default: red)
+    colorFilled?: string       // color when colorField has value (default: green)
+    popupFields?: string[]     // fields to show in popup
+    labelField?: string        // field for marker label
+  }
+  // Dashboard view config (multi-panel layout)
+  panels?: LayoutDescriptor[]  // sub-panels for dashboard view
+  panelColumns?: number        // grid columns (default: 2)
   actions?: ('create' | 'edit' | 'delete' | 'export' | 'convert' | 'relate')[]
   createForm?: { fields: LayoutField[] }
   editForm?: { fields: LayoutField[] }

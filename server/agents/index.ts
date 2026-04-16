@@ -201,6 +201,20 @@ router.get('/agent-views/:domain', authMiddleware(true), (req: AuthRequest, res:
   res.json({ views: agent.views || [], color: agent.color, name: agent.name })
 })
 
+// ── Tool Data API (for dynamic views) ────────────────
+
+router.post('/tool-data', authMiddleware(true), async (req: AuthRequest, res: Response) => {
+  const { tool, params } = req.body
+  if (!tool) { res.status(400).json({ error: 'tool richiesto' }); return }
+  try {
+    const { executeTool } = await import('./tool-registry.js')
+    const result = await executeTool(tool, req.aziendaId || '', params || {}, req.permissions)
+    res.json(result)
+  } catch (err: any) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 // ── Active Jobs API ───────────────────────────────────
 
 router.get('/jobs/active', authMiddleware(true), (req: AuthRequest, res: Response) => {
