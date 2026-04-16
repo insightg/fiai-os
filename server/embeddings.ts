@@ -378,7 +378,22 @@ export function initEmbeddings(): void {
     if (!extractedText) return { error: 'No text available' }
 
     // 1. Chunk the document
-    const chunks = chunkDocument(extractedText, entity.type, fileName, chunk_strategy)
+    let chunks = chunkDocument(extractedText, entity.type, fileName, chunk_strategy)
+
+    // Fallback: if no chunks produced but text exists, create single chunk
+    if (chunks.length === 0 && extractedText.length >= 50) {
+      chunks = [{
+        display_name: entity.display_name,
+        content: extractedText,
+        chunk_index: 0,
+        chunk_total: 1,
+        heading_path: '',
+        char_offset_start: 0,
+        char_offset_end: extractedText.length,
+      }]
+      console.log(`[ProcessDoc] Fallback: created 1 single chunk (${extractedText.length} chars)`)
+    }
+
     const isChunked = chunks.length > 0
 
     if (isChunked) {
