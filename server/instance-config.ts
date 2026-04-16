@@ -22,6 +22,7 @@ export interface InstanceAgentConfig {
   model?: string
   prompt: string  // path to .md file (relative to instance dir) or inline text
   tools: string[] // tool names or wildcards: 'generic', 'planning_*', 'send_whatsapp_*'
+  views?: any[]   // AgentView[] — app views for this agent
 }
 
 export interface InstanceConfig {
@@ -136,6 +137,7 @@ export function buildAgentsFromConfig(availableToolNames: string[]): Record<stri
       model: agentDef.model,
       systemPrompt: prompt,
       toolNames,
+      views: agentDef.views,
     }
   }
 
