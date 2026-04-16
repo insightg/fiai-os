@@ -14,6 +14,7 @@ import CalendarView from './CalendarView'
 // Lazy load heavy components
 const MapView = lazy(() => import('./MapView'))
 const DashboardView = lazy(() => import('./DashboardView'))
+const DocumentManager = lazy(() => import('./DocumentManager'))
 
 interface DynamicPanelProps {
   layout: LayoutDescriptor
@@ -128,6 +129,11 @@ export default function DynamicPanel({ layout, onClose, onAction }: DynamicPanel
         {layout.view === 'dashboard' && layout.panels && (
           <Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 className="w-6 h-6 animate-spin text-gold" /></div>}>
             <DashboardView panels={layout.panels} columns={layout.panelColumns} />
+          </Suspense>
+        )}
+        {layout.view === 'documents' && (
+          <Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 className="w-6 h-6 animate-spin text-gold" /></div>}>
+            <DocumentManager />
           </Suspense>
         )}
       </div>

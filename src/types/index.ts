@@ -127,7 +127,7 @@ export interface LayoutField {
 }
 
 export interface LayoutDescriptor {
-  view: 'list' | 'kanban' | 'detail' | 'form' | 'chart' | 'calendar' | 'grid' | 'tree' | 'map' | 'dashboard'
+  view: 'list' | 'kanban' | 'detail' | 'form' | 'chart' | 'calendar' | 'grid' | 'tree' | 'map' | 'dashboard' | 'documents'
   title: string
   source?: {
     table?: 'names' | 'entity'

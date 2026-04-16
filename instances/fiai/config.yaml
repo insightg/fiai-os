@@ -67,21 +67,13 @@ agents:
       - send_email
       - reply_email
     views:
-      - id: archivio
-        label: "Archivio Documenti"
+      - id: gestione-documenti
+        label: "Gestione Documenti"
         icon: "files"
         trigger: "manual"
         layout:
-          view: list
-          title: "Archivio Documenti"
-          source:
-            table: entity
-            type: documento
-          columns:
-            - { key: display_name, label: Nome, type: text }
-            - { key: categoria, label: Categoria, type: badge }
-            - { key: created_at, label: Caricato, type: date }
-          actions: [delete]
+          view: documents
+          title: "Gestione Documenti"
 
   - domain: email
     name: "Email Agent"
