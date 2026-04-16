@@ -24,13 +24,15 @@ interface DynamicPanelProps {
 
 export default function DynamicPanel({ layout, onClose, onAction }: DynamicPanelProps) {
   const [data, setData] = useState<any[]>(layout.data as any[] || [])
-  const [loading, setLoading] = useState(!layout.data)
+  const [loading, setLoading] = useState(!layout.data && layout.view !== 'documents')
   const { profile } = useAuthStore()
   const entityStore = useEntityStore()
 
   const loadData = useCallback(async () => {
     if (layout.data) return
     if (!layout.source) return
+    // Self-managing views don't need external data loading
+    if (layout.view === 'documents') return
     setLoading(true)
     try {
       // Plugin tool data source
