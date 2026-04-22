@@ -43,6 +43,12 @@ agents:
     prompt: "agents/hr.md"
     tools: [generic]
 
+  - domain: prima_nota
+    name: "Prima Nota"
+    color: "#FF8F00"
+    prompt: "agents/prima-nota.md"
+    tools: [generic, get_capabilities]
+
   - domain: legal
     name: "Avv. Rossi — Legale"
     color: "#D32F2F"

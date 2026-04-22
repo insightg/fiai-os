@@ -85,7 +85,7 @@ export class UserPermissions {
 
 // ── Agent Types ─────────────────────────────────────────
 
-export type AgentDomain = 'pulse' | 'commerciale' | 'produzione' | 'marketing' | 'amministrazione' | 'hr' | 'legal' | 'documentale' | 'documents' | 'it' | 'doctor' | 'whatsapp' | 'email' | 'pianificazione' | 'image' | 'tts' | 'general'
+export type AgentDomain = 'pulse' | 'commerciale' | 'produzione' | 'marketing' | 'amministrazione' | 'hr' | 'legal' | 'prima_nota' | 'documentale' | 'documents' | 'it' | 'doctor' | 'whatsapp' | 'email' | 'pianificazione' | 'image' | 'tts' | 'general'
 
 export interface AgentView {
   id: string

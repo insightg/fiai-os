@@ -57,6 +57,12 @@ agents:
     prompt: "agents/qualita-sicurezza.md"
     tools: [generic, retrieve, list_documents, send_whatsapp_*, send_email, reply_email]
 
+  - domain: prima_nota
+    name: "Prima Nota"
+    color: "#FF8F00"
+    prompt: "agents/prima-nota.md"
+    tools: [generic, send_email, reply_email]
+
   # ── Agenti operativi ───────────────────────────────────
 
   - domain: pianificazione
@@ -267,3 +273,12 @@ classifier:
         weight: 3
       - words: [carico, scarico, consegna, ritiro, trasporto, spedizione]
         weight: 2
+    prima_nota:
+      - words: [prima nota, registrazione contabile, registra movimento]
+        weight: 4
+      - words: [rimborso spese, rimborso, nota spese]
+        weight: 3
+      - words: [fattura passiva, fattura fornitore, fattura attiva, fattura cliente]
+        weight: 3
+      - words: [nota credito, nota debito, giroconto, incasso]
+        weight: 3

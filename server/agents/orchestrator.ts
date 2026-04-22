@@ -126,6 +126,14 @@ const DOMAIN_KEYWORDS: Record<string, { words: string[]; weight: number }[]> = {
     { words: ['diagnostica', 'salute dati', 'check-up', 'performance sistema'], weight: 3 },
     { words: ['job falliti', 'stato servizi', 'errori sistema'], weight: 3 },
   ],
+  prima_nota: [
+    { words: ['prima nota', 'registrazione contabile', 'registra movimento'], weight: 4 },
+    { words: ['rimborso spese', 'rimborso', 'nota spese'], weight: 3 },
+    { words: ['fattura passiva', 'fattura fornitore'], weight: 3 },
+    { words: ['fattura attiva', 'fattura cliente'], weight: 3 },
+    { words: ['nota credito', 'nota debito', 'giroconto'], weight: 3 },
+    { words: ['incasso', 'pagamento fornitore', 'scadenza pagamento'], weight: 2 },
+  ],
 }
 
 // Merge instance-specific keywords (override/extend defaults)
@@ -228,6 +236,7 @@ function getClassificationPrompt() {
   '- produzione: progetti, ordini, milestone, avanzamento, delivery, deadline, rischi progetto, stato progetto\n' +
   '- marketing: contenuti, campagne, lead scoring, brand, social, immagini, grafiche, genera immagine, crea logo, illustra, post, newsletter\n' +
   '- amministrazione: fatture, conti, liquidita, scadenze fiscali, rimborsi, budget, fornitori, cash flow, pagamenti, fatturato\n' +
+  '- prima_nota: registrazioni contabili quotidiane, rimborsi spese, fatture passive (fornitori), fatture attive, pagamenti, incassi, note credito/debito, movimenti di cassa, giroconto\n' +
   '- hr: candidati, annunci lavoro, recruiting, onboarding, costo aziendale, curriculum, selezione\n' +
   '- legal: analisi giuridica, compliance, interpretazione normativa, GDPR, privacy\n' +
   '- documentale: QUALSIASI richiesta su documenti caricati nel sistema — cerca dentro documenti, riassumi, confronta, analizza contenuto, articoli, clausole, capitoli, versetti. Se l\'utente menziona un documento specifico → documentale.\n' +
