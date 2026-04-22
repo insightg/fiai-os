@@ -44,6 +44,8 @@ services:
     environment:
       - BACKEND_HOST=fiai-backend
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:3100:3000"
     depends_on:
       - fiai-backend
     networks:
